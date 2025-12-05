@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Web Replica Builder</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 10px;
+      min-width: 300px;
+    }
+    h1 {
+      font-size: 16px;
+      margin: 0 0 8px;
+    }
+    h2 {
+      font-size: 13px;
+      margin: 12px 0 6px;
+      color: #333;
+      border-top: 1px solid #ddd;
+      padding-top: 10px;
+    }
+    button {
+      padding: 6px 10px;
+      margin: 4px 4px 4px 0;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover {
+      background: #f0f0f0;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    #status {
+      margin-top: 8px;
+      font-size: 12px;
+    }
+    #hint {
+      margin-top: 4px;
+      font-size: 11px;
+      color: #555;
+    }
+    .shortcut-row {
+      display: flex;
+      align-items: center;
+      margin: 6px 0;
+      font-size: 12px;
+    }
+    .shortcut-row label {
+      flex: 1;
+      min-width: 80px;
+    }
+    .shortcut-input {
+      flex: 2;
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+    .shortcut-input input[type="text"] {
+      width: 60px;
+      padding: 4px 6px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      font-size: 11px;
+      text-align: center;
+    }
+    .shortcut-input input[type="text"]:focus {
+      outline: 2px solid #4a90d9;
+      border-color: #4a90d9;
+    }
+    .mod-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      font-size: 10px;
+    }
+    .mod-checkbox input {
+      margin: 0;
+    }
+    #save-shortcuts {
+      margin-top: 8px;
+      background: #4a90d9;
+      color: white;
+      border: none;
+    }
+    #save-shortcuts:hover {
+      background: #357abd;
+    }
+    #reset-shortcuts {
+      font-size: 11px;
+      padding: 4px 8px;
+    }
+    .settings-toggle {
+      font-size: 11px;
+      color: #666;
+      cursor: pointer;
+      margin-top: 8px;
+      display: inline-block;
+    }
+    .settings-toggle:hover {
+      color: #333;
+    }
+    #settings-panel {
+      display: none;
+    }
+    #settings-panel.visible {
+      display: block;
+    }
+    .shortcut-display {
+      font-size: 10px;
+      color: #666;
+      margin-top: 2px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Web Replica Builder</h1>
+
+  <button id="start">Start Selecting</button>
+  <button id="clear">Clear Selection</button>
+  <button id="export">Export HTML</button>
+
+  <div id="status">Idle.</div>
+  <div id="hint">
+    Tip: Hover to highlight, click to select, Shift+Click for multi-select.
+  </div>
+  <div class="shortcut-display" id="current-shortcuts"></div>
+
+  <span class="settings-toggle" id="toggle-settings">Customize Shortcuts</span>
+
+  <div id="settings-panel">
+    <h2>Keyboard Shortcuts</h2>
+
+    <div class="shortcut-row">
+      <label>Start Select:</label>
+      <div class="shortcut-input">
+        <span class="mod-checkbox"><input type="checkbox" id="start-ctrl"><span>Ctrl</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="start-shift"><span>Shift</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="start-alt"><span>Alt</span></span>
+        <input type="text" id="start-key" placeholder="Key" maxlength="20">
+      </div>
+    </div>
+
+    <div class="shortcut-row">
+      <label>Clear/ESC:</label>
+      <div class="shortcut-input">
+        <span class="mod-checkbox"><input type="checkbox" id="clear-ctrl"><span>Ctrl</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="clear-shift"><span>Shift</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="clear-alt"><span>Alt</span></span>
+        <input type="text" id="clear-key" placeholder="Key" maxlength="20">
+      </div>
+    </div>
+
+    <div class="shortcut-row">
+      <label>Export:</label>
+      <div class="shortcut-input">
+        <span class="mod-checkbox"><input type="checkbox" id="export-ctrl"><span>Ctrl</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="export-shift"><span>Shift</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="export-alt"><span>Alt</span></span>
+        <input type="text" id="export-key" placeholder="Key" maxlength="20">
+      </div>
+    </div>
+
+    <button id="save-shortcuts">Save Shortcuts</button>
+    <button id="reset-shortcuts">Reset to Defaults</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
