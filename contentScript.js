@@ -15,6 +15,7 @@ function resetStyleRegistry() {
   styleRegistry.clear();
   hoverStyleRegistry.clear();
   styleCounter = 0;
+  resetDetectedFonts();
 }
 
 function getOrCreateStyleName(styleObj) {
@@ -464,6 +465,17 @@ const DEFAULT_SKIP = {
   'user-select': ['auto'],
   'transform': ['none'],
   'object-fit': ['fill'],
+  // Visual effects
+  'backdrop-filter': ['none'],
+  '-webkit-backdrop-filter': ['none'],
+  'filter': ['none'],
+  // Font rendering - skip defaults
+  '-webkit-font-smoothing': ['auto'],
+  '-moz-osx-font-smoothing': ['auto'],
+  'text-rendering': ['auto'],
+  'font-optical-sizing': ['auto'],
+  'font-variant': ['normal'],
+  'font-variant-ligatures': ['normal'],
 };
 
 // --- Properties for SHARED styles ---
@@ -498,6 +510,11 @@ const SHARED_PROPS = [
   'overflow', 'overflow-x', 'overflow-y',
   'cursor', 'pointer-events', 'user-select',
   'transform', 'object-fit',
+  // Visual effects - backdrop blur, filters, etc.
+  'backdrop-filter', '-webkit-backdrop-filter', 'filter',
+  // Font rendering
+  '-webkit-font-smoothing', '-moz-osx-font-smoothing', 'text-rendering',
+  'font-optical-sizing', 'font-variant', 'font-variant-ligatures',
   // Scrollbar styling (standard properties that can be captured)
   'scrollbar-width', 'scrollbar-color'
 ];
@@ -519,39 +536,107 @@ function isDefaultValue(prop, value) {
   return false;
 }
 
-// --- Convert RGB to shorter hex ---
+// --- Convert RGB to shorter hex, preserve alpha for rgba ---
 function rgbToHex(rgb) {
   if (!rgb || rgb === 'transparent') return null;
-  const match = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+
+  // Check for rgba with alpha
+  const rgbaMatch = rgb.match(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+  if (rgbaMatch) {
+    const r = parseInt(rgbaMatch[1]);
+    const g = parseInt(rgbaMatch[2]);
+    const b = parseInt(rgbaMatch[3]);
+    const a = parseFloat(rgbaMatch[4]);
+
+    // Skip fully transparent
+    if (a === 0) return null;
+
+    // Keep rgba format for semi-transparent colors (this is crucial for backdrop effects)
+    if (a < 1) {
+      return `rgba(${r}, ${g}, ${b}, ${a})`;
+    }
+
+    // Fully opaque - convert to hex
+    return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+  }
+
+  // Regular rgb
+  const match = rgb.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
   if (!match) return rgb;
   const r = parseInt(match[1]);
   const g = parseInt(match[2]);
   const b = parseInt(match[3]);
-  // Check for alpha
-  if (rgb.includes('rgba') && rgb.match(/,\s*0\s*\)/)) return null; // transparent
   return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
 }
 
 // --- Check if color is neutral (gray/black/white) - borders with neutral colors are intentional ---
-function isNeutralColor(hex) {
-  if (!hex || !hex.startsWith('#')) return false;
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
+function isNeutralColor(color) {
+  if (!color) return false;
+
+  let r, g, b;
+
+  if (color.startsWith('#')) {
+    r = parseInt(color.slice(1, 3), 16);
+    g = parseInt(color.slice(3, 5), 16);
+    b = parseInt(color.slice(5, 7), 16);
+  } else if (color.startsWith('rgba')) {
+    const match = color.match(/rgba\((\d+),\s*(\d+),\s*(\d+)/);
+    if (!match) return false;
+    r = parseInt(match[1]);
+    g = parseInt(match[2]);
+    b = parseInt(match[3]);
+  } else if (color.startsWith('rgb')) {
+    const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
+    if (!match) return false;
+    r = parseInt(match[1]);
+    g = parseInt(match[2]);
+    b = parseInt(match[3]);
+  } else {
+    return false;
+  }
+
   // Check if RGB values are close to each other (grayscale)
   const maxDiff = Math.max(Math.abs(r - g), Math.abs(g - b), Math.abs(r - b));
   return maxDiff < 30; // Within 30 is considered neutral/gray
 }
 
 // --- Shorten font-family ---
+// Track unique font families for loading
+let detectedFonts = new Set();
+
 function shortenFontFamily(value) {
   if (!value) return null;
-  // Get first font in stack
-  const first = value.split(',')[0].trim().replace(/["']/g, '');
-  if (first.toLowerCase().includes('system-ui') || first.toLowerCase().includes('segoe')) {
-    return 'system-ui';
+
+  // Parse the font stack
+  const fonts = value.split(',').map(f => f.trim().replace(/["']/g, ''));
+  const first = fonts[0].toLowerCase();
+
+  // Detect web fonts that need to be loaded
+  const webFonts = ['mona sans', 'inter', 'roboto', 'open sans', 'lato', 'montserrat', 'poppins', 'nunito', 'raleway', 'source sans', 'ubuntu', 'fira sans'];
+  for (const font of fonts) {
+    const fontLower = font.toLowerCase();
+    for (const webFont of webFonts) {
+      if (fontLower.includes(webFont)) {
+        detectedFonts.add(font);
+      }
+    }
   }
-  return first;
+
+  // If it's a system font stack, use a comprehensive cross-platform stack
+  if (first.includes('system-ui') || first.includes('segoe') || first.includes('-apple-system') || first.includes('blinkmacsystemfont')) {
+    return '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"';
+  }
+
+  // Keep the full font stack for better fallback
+  return value;
+}
+
+function resetDetectedFonts() {
+  detectedFonts = new Set();
+}
+
+function getDetectedFonts() {
+  return detectedFonts;
 }
 
 // --- Check visibility ---
@@ -667,6 +752,20 @@ function getCompactStyles(el, isRoot = false) {
     if (prop.startsWith('border-') && prop !== 'border-radius' && !hasMeaningfulBorder) continue;
 
     let value = computed.getPropertyValue(prop);
+
+    // Debug: Log backdrop-filter and filter values
+    if (prop.includes('backdrop') || prop === 'filter') {
+      console.log('[VibeExtract Debug]', prop, '=', JSON.stringify(value));
+    }
+
+    // Fallback: If backdrop-filter is empty, try webkit prefix
+    if (prop === 'backdrop-filter' && (!value || value === 'none')) {
+      const webkitValue = computed.getPropertyValue('-webkit-backdrop-filter');
+      if (webkitValue && webkitValue !== 'none') {
+        value = webkitValue;
+        console.log('[VibeExtract Debug] Using -webkit-backdrop-filter fallback:', value);
+      }
+    }
 
     if (isDefaultValue(prop, value)) continue;
 
@@ -1265,7 +1364,7 @@ function buildExport() {
   // Build HTML preview - sanitize problematic CSS values
   function sanitizeCss(cssString) {
     // Remove large negative margins that cause overflow
-    return cssString
+    let result = cssString
       .replace(/margin-right:\s*-\d{2,}(\.\d+)?px/g, 'margin-right: 0')
       .replace(/margin-left:\s*-\d{2,}(\.\d+)?px/g, 'margin-left: 0')
       .replace(/padding-right:\s*\d{3,}(\.\d+)?px/g, 'padding-right: 0')
@@ -1277,6 +1376,20 @@ function buildExport() {
       // Change overflow: auto to overflow-y: auto only (prevent horizontal scroll)
       .replace(/overflow:\s*auto;/g, 'overflow-y: auto; overflow-x: hidden;')
       .replace(/overflow-x:\s*auto/g, 'overflow-x: hidden');
+
+    // Add webkit prefix for backdrop-filter (cross-browser support)
+    // If we have backdrop-filter but no -webkit-backdrop-filter, add it
+    if (result.includes('backdrop-filter:') && !result.includes('-webkit-backdrop-filter:')) {
+      const backdropMatch = result.match(/backdrop-filter:\s*([^;]+)/);
+      if (backdropMatch) {
+        result = result.replace(
+          /backdrop-filter:\s*([^;]+)/,
+          `backdrop-filter: ${backdropMatch[1]}; -webkit-backdrop-filter: ${backdropMatch[1]}`
+        );
+      }
+    }
+
+    return result;
   }
 
   let css = '';
@@ -1308,37 +1421,53 @@ function buildExport() {
     findIconFonts(structure);
   }
 
-  // Build icon font links - always include Material Icons/Symbols if any icons detected
-  let iconFontLinks = '';
+  // Build font links - icons and web fonts
+  let fontLinks = '';
+
+  // Add icon fonts if detected
   if (usedIconFonts.size > 0) {
-    // Include both Material Icons and Material Symbols to cover all cases
-    iconFontLinks += '  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">\n';
-    iconFontLinks += '  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">\n';
+    fontLinks += '  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">\n';
+    fontLinks += '  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">\n';
 
     for (const font of usedIconFonts) {
       if (font.includes('fontawesome') || font.includes('fa')) {
-        iconFontLinks += '  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">\n';
+        fontLinks += '  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">\n';
       }
     }
   }
+
+  // Add detected web fonts from Google Fonts
+  const webFonts = getDetectedFonts();
+  if (webFonts.size > 0) {
+    const fontFamilies = Array.from(webFonts).map(f => {
+      // Convert font name to Google Fonts URL format
+      const formatted = f.replace(/\s+/g, '+');
+      return `family=${formatted}:wght@400;500;600;700`;
+    }).join('&');
+    fontLinks += `  <link href="https://fonts.googleapis.com/css2?${fontFamilies}&display=swap" rel="stylesheet">\n`;
+  }
+
+  // Check if any styles use backdrop-filter (need background to show effect)
+  const hasBackdropFilter = css.includes('backdrop-filter');
 
   const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <title>Component Preview</title>
-${iconFontLinks}  <style>
+${fontLinks}  <style>
 /* Reset base styles */
-html, body { margin: 0; padding: 0; background: transparent; overflow-x: hidden; }
-body { padding: 16px; font-family: system-ui, sans-serif; box-sizing: border-box; overflow: hidden; }
+html, body { margin: 0; padding: 0; overflow-x: hidden; }
+${hasBackdropFilter ? `html { background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%); min-height: 100vh; }` : ''}
+body { padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; box-sizing: border-box; overflow: hidden; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 14px; line-height: 1.5; }
 /* Reset list styles - inherit colors from parent */
 ul, ol { list-style: none; margin: 0; padding: 0; background: inherit; color: inherit; }
 li { list-style: none; background: inherit; color: inherit; }
 /* Ensure all elements inherit box-sizing */
 *, *::before, *::after { box-sizing: border-box; }
 /* Fix button/input/link resets - inherit colors from parent */
-button { background: transparent; border: none; cursor: pointer; color: inherit; font: inherit; }
-input { background: transparent; border: none; outline: none; color: inherit; font: inherit; width: 100%; }
+button { background: transparent; border: none; cursor: pointer; color: inherit; }
+input { background: transparent; border: none; outline: none; color: inherit; width: 100%; }
 input::placeholder { color: inherit; opacity: 0.5; }
 a { color: inherit; text-decoration: inherit; }
 /* Ensure spans display text properly */
