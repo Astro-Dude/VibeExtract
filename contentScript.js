@@ -2,6 +2,8 @@
 let pickMode = false;
 let hoverElement = null;
 let selectedElements = new Set();
+// Store clones at selection time to freeze dynamic content (like rotating ProTips)
+let selectionClones = new Map(); // original element -> clone (captured at selection time)
 
 // Debug: Log when script loads
 console.log('[VibeClone] Content script loaded in frame:', window.location.href.substring(0, 100));
@@ -174,11 +176,16 @@ function toggleElement(el, shouldSelect) {
   if (shouldSelect) {
     el.classList.add("web-replica-selected");
     selectedElements.add(el);
+    // IMPORTANT: Clone immediately at selection time to freeze dynamic content
+    // This captures the exact DOM state the user sees when they click
+    const clone = el.cloneNode(true);
+    selectionClones.set(el, clone);
     const inShadow = getContainingShadowRoot(el) ? 'YES' : 'NO';
     console.log('[VibeClone] Selected element:', el.tagName, 'In Shadow DOM:', inShadow, 'Total:', selectedElements.size);
   } else {
     el.classList.remove("web-replica-selected");
     selectedElements.delete(el);
+    selectionClones.delete(el);
     console.log('[VibeClone] Deselected element, remaining:', selectedElements.size);
   }
 }
@@ -206,6 +213,7 @@ document.addEventListener(
         sel.classList.remove("web-replica-selected")
       );
       selectedElements.clear();
+      selectionClones.clear();
     }
 
     if (selectedElements.has(el)) {
@@ -382,6 +390,7 @@ document.addEventListener("keydown", (e) => {
       e.stopImmediatePropagation();
       selectedElements.forEach((el) => el.classList.remove("web-replica-selected"));
       selectedElements.clear();
+      selectionClones.clear();
       pickMode = false;
       showModeIndicator('Selection cleared');
       console.log("[VibeClone] Selection cleared");
@@ -672,18 +681,21 @@ function isElementVisible(computed) {
 }
 
 // --- Get hover styles by comparing normal vs hover state ---
+// NOTE: Disabled event dispatch as it causes side effects on sites like GitHub
+// (e.g., ProTip tooltips cycling, dynamic content changing)
 function getHoverStyles(el, normalStyles) {
-  // Properties that commonly change on hover
+  // Disabled for now - dispatching mouse events causes too many side effects
+  // on dynamic sites like GitHub where tooltips and other elements respond to hover
+  return null;
+
+  /* Original implementation (disabled due to side effects):
   const HOVER_PROPS = [
     'background-color', 'color', 'opacity', 'transform', 'box-shadow',
     'border-color', 'text-decoration', 'cursor', 'outline'
   ];
 
-  // Trigger hover state
   el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-  el.classList.add(':hover'); // Some CSS frameworks use this
-
-  // Force reflow to ensure styles are computed
+  el.classList.add(':hover');
   el.offsetHeight;
 
   const hoverComputed = window.getComputedStyle(el);
@@ -692,8 +704,6 @@ function getHoverStyles(el, normalStyles) {
   for (const prop of HOVER_PROPS) {
     let hoverValue = hoverComputed.getPropertyValue(prop);
     const normalValue = normalStyles[prop] || '';
-
-    // Only capture if different from normal state
     if (hoverValue && hoverValue !== normalValue) {
       if (prop.includes('color') || prop === 'background-color') {
         hoverValue = rgbToHex(hoverValue);
@@ -703,11 +713,11 @@ function getHoverStyles(el, normalStyles) {
     }
   }
 
-  // Restore normal state
   el.classList.remove(':hover');
   el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
 
   return Object.keys(hoverStyles).length > 0 ? hoverStyles : null;
+  */
 }
 
 // --- Get non-default styles as compact object ---
@@ -785,9 +795,24 @@ function getCompactStyles(el, isRoot = false) {
   }
 
   // Process INLINE properties (unique per element - width/height)
+  // Be selective about capturing dimensions - computed values often don't translate well
   for (const prop of INLINE_PROPS) {
     let value = computed.getPropertyValue(prop);
     if (value && value !== 'auto' && value !== '0px') {
+      // Skip height capture for most elements - let content define height
+      // Only keep height for specific elements that need it (images, explicit sizing)
+      if (prop === 'height') {
+        const tagName = el.tagName.toLowerCase();
+        // Only capture height for images, videos, canvas, and elements with aspect ratios
+        if (!['img', 'video', 'canvas', 'svg', 'iframe'].includes(tagName)) {
+          continue; // Skip height for regular elements
+        }
+      }
+      // Skip very small widths that are likely flex-calculated
+      if (prop === 'width') {
+        const widthPx = parseFloat(value);
+        if (widthPx < 10) continue; // Skip tiny calculated widths
+      }
       inline[prop] = value;
     }
   }
@@ -821,6 +846,10 @@ function getCompactStyles(el, isRoot = false) {
 function buildStructure(el, isRoot = false) {
   const tagName = el.tagName.toLowerCase();
 
+  // Get the ORIGINAL element for computed styles (clones aren't in DOM)
+  // Must be done early - needed for visibility check and SVG handling
+  const originalEl = cloneToOriginal.get(el) || el;
+
   // Special handling for SVG - preserve entire element with all attributes
   if (tagName === 'svg') {
     // Skip decorative SVGs that are just transparent circle outlines (Google avatar rings)
@@ -846,7 +875,8 @@ function buildStructure(el, isRoot = false) {
     });
 
     // Get computed dimensions and add inline styles to ensure SVG is visible
-    const computed = window.getComputedStyle(el);
+    // Use originalEl for computed styles since clones aren't in the DOM
+    const computed = window.getComputedStyle(originalEl);
     const width = computed.width;
     const height = computed.height;
     const fill = computed.fill;
@@ -872,29 +902,56 @@ function buildStructure(el, isRoot = false) {
     };
   }
 
-  const hadHover = el.classList.contains("web-replica-hover");
-  const hadSelected = el.classList.contains("web-replica-selected");
-  el.classList.remove("web-replica-hover", "web-replica-selected");
+  // Use originalEl for class manipulation and computed styles (clones aren't in DOM)
+  const hadHover = originalEl.classList.contains("web-replica-hover");
+  const hadSelected = originalEl.classList.contains("web-replica-selected");
+  originalEl.classList.remove("web-replica-hover", "web-replica-selected");
 
-  const computed = window.getComputedStyle(el);
+  const computed = window.getComputedStyle(originalEl);
 
   // Skip hidden elements
   if (!isElementVisible(computed)) {
-    if (hadHover) el.classList.add("web-replica-hover");
-    if (hadSelected) el.classList.add("web-replica-selected");
+    if (hadHover) originalEl.classList.add("web-replica-hover");
+    if (hadSelected) originalEl.classList.add("web-replica-selected");
     return null;
   }
 
   // Restore for style computation
-  if (hadHover) el.classList.add("web-replica-hover");
-  if (hadSelected) el.classList.add("web-replica-selected");
+  if (hadHover) originalEl.classList.add("web-replica-hover");
+  if (hadSelected) originalEl.classList.add("web-replica-selected");
 
   const node = {
     tag: tagName
   };
 
+  // el is a CLONE - text is frozen at clone time, safe to read directly
+  // Build ordered child nodes list (text nodes and elements interleaved)
+  // This preserves the correct order: "Hello <span>World</span>!"
+  const childNodesOrdered = [];
+  for (const childNode of el.childNodes) {
+    if (childNode.nodeType === Node.TEXT_NODE) {
+      const text = childNode.textContent.trim();
+      if (text.length > 0) {
+        childNodesOrdered.push({ type: 'text', content: text });
+      }
+    } else if (childNode.nodeType === Node.ELEMENT_NODE) {
+      childNodesOrdered.push({ type: 'element', el: childNode });
+    }
+  }
+
+  // Capture simple text for elements with no child elements
+  const textContent = childNodesOrdered
+    .filter(n => n.type === 'text')
+    .map(n => n.content)
+    .join(' ');
+
+  if (textContent && !Array.from(el.children).length) {
+    node.text = textContent;
+  }
+
   // Get compact styles (returns { shared, inline })
-  const styleResult = getCompactStyles(el, isRoot);
+  // Note: originalEl was declared at function start for visibility check
+  const styleResult = getCompactStyles(originalEl, isRoot);
   if (styleResult) {
     // Shared styles go into deduplicated CSS class
     if (styleResult.shared) {
@@ -902,6 +959,7 @@ function buildStructure(el, isRoot = false) {
       node.style = styleName;
 
       // Capture hover styles for interactive elements
+      // This dispatches mouse events, so must be done AFTER text capture
       const interactiveTags = ['a', 'button', 'input', 'select', 'textarea'];
       if (interactiveTags.includes(tagName)) {
         const hoverStyles = getHoverStyles(el, styleResult.shared);
@@ -919,20 +977,10 @@ function buildStructure(el, isRoot = false) {
     }
   }
 
-  // Check for direct text content
-  const textContent = Array.from(el.childNodes)
-    .filter(n => n.nodeType === Node.TEXT_NODE)
-    .map(n => n.textContent.trim())
-    .filter(t => t.length > 0)
-    .join(' ');
-
-  if (textContent) {
-    node.text = textContent;
-  }
-
   // Capture ::before and ::after pseudo-element content AND styling (for letter avatars, icons, etc.)
-  const beforeStyle = window.getComputedStyle(el, '::before');
-  const afterStyle = window.getComputedStyle(el, '::after');
+  // Use originalEl for computed styles since clones aren't in the DOM
+  const beforeStyle = window.getComputedStyle(originalEl, '::before');
+  const afterStyle = window.getComputedStyle(originalEl, '::after');
   const beforeContent = beforeStyle.getPropertyValue('content');
   const afterContent = afterStyle.getPropertyValue('content');
 
@@ -994,28 +1042,40 @@ function buildStructure(el, isRoot = false) {
     }
   }
 
-  // Process children (including Shadow DOM children)
+  // Process children using the ordered list (preserves text/element interleaving)
   const shadowRoot = getShadowRoot(el);
-  let childElements = [];
 
-  // If element has Shadow DOM, include shadow children first
+  // Build ordered content array with both text and processed child elements
+  const orderedContent = [];
+
+  // If element has Shadow DOM, process shadow children first
   if (shadowRoot) {
-    childElements = [...Array.from(shadowRoot.children)];
-  }
-  // Then add light DOM children
-  childElements = [...childElements, ...Array.from(el.children)];
-
-  if (childElements.length > 0) {
-    const children = [];
-    for (const child of childElements) {
-      const childNode = buildStructure(child, false);
+    for (const shadowChild of shadowRoot.children) {
+      const childNode = buildStructure(shadowChild, false);
       if (childNode) {
-        children.push(childNode);
+        orderedContent.push({ type: 'element', node: childNode });
       }
     }
-    if (children.length > 0) {
-      node.children = children;
+  }
+
+  // Process light DOM children in order (using our captured order)
+  for (const item of childNodesOrdered) {
+    if (item.type === 'text') {
+      orderedContent.push({ type: 'text', content: item.content });
+    } else if (item.type === 'element') {
+      const childNode = buildStructure(item.el, false);
+      if (childNode) {
+        orderedContent.push({ type: 'element', node: childNode });
+      }
     }
+  }
+
+  if (orderedContent.length > 0) {
+    node.orderedContent = orderedContent;
+    // Also keep children array for backward compat
+    node.children = orderedContent
+      .filter(c => c.type === 'element')
+      .map(c => c.node);
   }
 
   // Add useful attributes
@@ -1239,38 +1299,76 @@ function structureToHtml(node, indent = 0) {
     return `${pad}<${tag}${attrs}>${node.text}</${tag}>`;
   }
 
-  // Has children
+  // Has children - use orderedContent to preserve text/element interleaving
   let html = `${pad}<${tag}${attrs}>`;
-  if (node.text) {
-    html += `\n${pad}  ${node.text}`;
-  }
-  if (node.children) {
+
+  if (node.orderedContent && node.orderedContent.length > 0) {
+    html += '\n';
+    for (const item of node.orderedContent) {
+      if (item.type === 'text') {
+        html += `${pad}  ${item.content}\n`;
+      } else if (item.type === 'element') {
+        html += structureToHtml(item.node, indent + 1) + '\n';
+      }
+    }
+    html += pad;
+  } else if (node.text) {
+    // Fallback for simple text nodes
+    html += node.text;
+  } else if (node.children) {
+    // Fallback for old-style children array
     html += '\n';
     for (const child of node.children) {
       html += structureToHtml(child, indent + 1) + '\n';
     }
     html += pad;
   }
+
   html += `</${tag}>`;
   return html;
+}
+
+// Global map to link clones back to originals (for style computation)
+let cloneToOriginal = new Map();
+
+// Build a mapping from cloned nodes to original nodes (for getComputedStyle)
+function buildCloneMapping(original, clone, map) {
+  map.set(clone, original);
+  const origChildren = Array.from(original.children);
+  const cloneChildren = Array.from(clone.children);
+  for (let i = 0; i < origChildren.length && i < cloneChildren.length; i++) {
+    buildCloneMapping(origChildren[i], cloneChildren[i], map);
+  }
 }
 
 // --- Build compact JSON export ---
 function buildExport() {
   console.log('[VibeClone] buildExport called, selectedElements.size:', selectedElements.size);
-  // Debug: log each selected element
   selectedElements.forEach((el, idx) => {
     console.log('[VibeClone] Selected element', idx, ':', el.tagName, el);
   });
   if (!selectedElements.size) return null;
 
   resetStyleRegistry();
+  cloneToOriginal = new Map();
 
   const topLevel = getTopLevelSelections();
+
+  // USE SELECTION-TIME CLONES: These were captured when user clicked, freezing dynamic content
+  // This ensures rotating content (like GitHub ProTips) shows what user saw at selection time
+  const clones = topLevel.map(el => {
+    // Use the clone captured at selection time, or fall back to cloning now
+    const clone = selectionClones.get(el) || el.cloneNode(true);
+    // Build mapping from clone nodes to original nodes for style computation
+    buildCloneMapping(el, clone, cloneToOriginal);
+    return clone;
+  });
+
   const structures = [];
 
-  for (const el of topLevel) {
-    const structure = buildStructure(el, true);
+  // Process CLONES (text is frozen from selection time), but use originals for computed styles
+  for (const clone of clones) {
+    const structure = buildStructure(clone, true);
     if (structure) {
       structures.push(structure);
     }
@@ -1363,19 +1461,11 @@ function buildExport() {
 
   // Build HTML preview - sanitize problematic CSS values
   function sanitizeCss(cssString) {
-    // Remove large negative margins that cause overflow
     let result = cssString
-      .replace(/margin-right:\s*-\d{2,}(\.\d+)?px/g, 'margin-right: 0')
-      .replace(/margin-left:\s*-\d{2,}(\.\d+)?px/g, 'margin-left: 0')
-      .replace(/padding-right:\s*\d{3,}(\.\d+)?px/g, 'padding-right: 0')
-      .replace(/padding-left:\s*\d{3,}(\.\d+)?px/g, 'padding-left: 0')
       // Fix overflow: clip which may not be supported everywhere
       .replace(/overflow:\s*clip/g, 'overflow: hidden')
       .replace(/overflow-x:\s*clip/g, 'overflow-x: hidden')
-      .replace(/overflow-y:\s*clip/g, 'overflow-y: hidden')
-      // Change overflow: auto to overflow-y: auto only (prevent horizontal scroll)
-      .replace(/overflow:\s*auto;/g, 'overflow-y: auto; overflow-x: hidden;')
-      .replace(/overflow-x:\s*auto/g, 'overflow-x: hidden');
+      .replace(/overflow-y:\s*clip/g, 'overflow-y: hidden');
 
     // Add webkit prefix for backdrop-filter (cross-browser support)
     // If we have backdrop-filter but no -webkit-backdrop-filter, add it
@@ -1457,21 +1547,23 @@ function buildExport() {
   <title>Component Preview</title>
 ${fontLinks}  <style>
 /* Reset base styles */
-html, body { margin: 0; padding: 0; overflow-x: hidden; }
+html, body { margin: 0; padding: 0; }
 ${hasBackdropFilter ? `html { background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%); min-height: 100vh; }` : ''}
-body { padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; box-sizing: border-box; overflow: hidden; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 14px; line-height: 1.5; }
+body { padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; box-sizing: border-box; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 14px; line-height: 1.5; }
 /* Reset list styles - inherit colors from parent */
 ul, ol { list-style: none; margin: 0; padding: 0; background: inherit; color: inherit; }
 li { list-style: none; background: inherit; color: inherit; }
-/* Ensure all elements inherit box-sizing */
-*, *::before, *::after { box-sizing: border-box; }
+/* Ensure all elements inherit box-sizing and prevent overflow issues */
+*, *::before, *::after { box-sizing: border-box; max-width: 100%; }
 /* Fix button/input/link resets - inherit colors from parent */
-button { background: transparent; border: none; cursor: pointer; color: inherit; }
-input { background: transparent; border: none; outline: none; color: inherit; width: 100%; }
+button { background: transparent; border: none; cursor: pointer; color: inherit; padding: 0; }
+input { background: transparent; border: none; outline: none; color: inherit; min-width: 0; }
 input::placeholder { color: inherit; opacity: 0.5; }
 a { color: inherit; text-decoration: inherit; }
-/* Ensure spans display text properly */
+/* Ensure proper inline display */
 span { display: inline; }
+/* Flex container fixes */
+[style*="display: flex"], [style*="display:flex"] { min-width: 0; }
 /* Icon font styles - using !important to override captured styles */
 .material-icons {
   font-family: 'Material Icons', 'Google Material Icons' !important;
@@ -1565,6 +1657,7 @@ window.addEventListener('message', async (event) => {
   } else if (msg.type === "CLEAR_SELECTION") {
     selectedElements.forEach((el) => el.classList.remove("web-replica-selected"));
     selectedElements.clear();
+    selectionClones.clear();
     pickMode = false;
     result = { ok: true };
   } else if (msg.type === "EXPORT_SELECTION") {
@@ -1596,6 +1689,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       el.classList.remove("web-replica-selected")
     );
     selectedElements.clear();
+    selectionClones.clear();
 
     // Show visual feedback
     showModeIndicator('Selection mode ON');
@@ -1612,6 +1706,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       el.classList.remove("web-replica-selected")
     );
     selectedElements.clear();
+    selectionClones.clear();
     pickMode = false;
     if (hoverElement) {
       hoverElement.classList.remove("web-replica-hover");
