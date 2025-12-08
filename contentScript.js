@@ -275,6 +275,7 @@ try {
 
 // Check if a keyboard event matches a shortcut
 function matchesShortcut(e, shortcut) {
+  if (!e || !e.key || !shortcut || !shortcut.key) return false;
   const keyMatch = e.key.toLowerCase() === shortcut.key.toLowerCase() ||
                    e.key === shortcut.key;
   return keyMatch &&
@@ -422,7 +423,9 @@ document.addEventListener("keydown", (e) => {
 // --- Default values to SKIP (only truly useless defaults) ---
 const DEFAULT_SKIP = {
   'position': ['static'],
-  'box-sizing': ['content-box'],
+  'position': ['static'],
+  // 'box-sizing': ['content-box'], // REMOVED - We force border-box now
+  // Individual margin/padding sides - only skip exact 0
   // Individual margin/padding sides - only skip exact 0
   'margin-top': ['0px'],
   'margin-right': ['0px'],
@@ -491,7 +494,7 @@ const DEFAULT_SKIP = {
 // Capture all important properties, use longhand for margin/padding to preserve individual sides
 const SHARED_PROPS = [
   // Layout
-  'display', 'position', 'box-sizing',
+  'display', 'position', // 'box-sizing', // REMOVED - forcing border-box manually
   // Spacing - use longhand to capture individual sides correctly
   'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
   'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
@@ -514,6 +517,7 @@ const SHARED_PROPS = [
   // Text
   'font-family', 'font-size', 'font-weight', 'line-height', 'text-align',
   'text-decoration', 'text-transform', 'white-space', 'text-overflow',
+  'word-break', 'overflow-wrap', 'hyphens', 'tab-size', 'text-indent',
   'letter-spacing', 'vertical-align',
   // Other
   'overflow', 'overflow-x', 'overflow-y',
@@ -529,7 +533,7 @@ const SHARED_PROPS = [
 ];
 
 // --- Properties for INLINE styles (unique per element) ---
-const INLINE_PROPS = ['width', 'height'];
+const INLINE_PROPS = []; // Dimensions handled manually now
 
 // --- Check if value is a default (should skip) ---
 function isDefaultValue(prop, value) {
@@ -794,27 +798,50 @@ function getCompactStyles(el, isRoot = false) {
     shared[prop] = value;
   }
 
-  // Process INLINE properties (unique per element - width/height)
-  // Be selective about capturing dimensions - computed values often don't translate well
-  for (const prop of INLINE_PROPS) {
-    let value = computed.getPropertyValue(prop);
-    if (value && value !== 'auto' && value !== '0px') {
-      // Skip height capture for most elements - let content define height
-      // Only keep height for specific elements that need it (images, explicit sizing)
-      if (prop === 'height') {
-        const tagName = el.tagName.toLowerCase();
-        // Only capture height for images, videos, canvas, and elements with aspect ratios
-        if (!['img', 'video', 'canvas', 'svg', 'iframe'].includes(tagName)) {
-          continue; // Skip height for regular elements
-        }
+  // Process INLINE properties (Dimensions - Manual Layout Logic)
+  // We use offsetWidth/offsetHeight (Border-Box) instead of computed width (Content-Box)
+  // This solves the shrinking issue where padding was subtracted twice.
+  
+  const display = computed.getPropertyValue('display');
+  const isInline = display === 'inline'; // Inline elements (span, a) ignore width/height
+  
+  if (!isInline && display !== 'none') {
+      const width = el.offsetWidth;
+      const height = el.offsetHeight;
+      const isMedia = ['img', 'video', 'canvas', 'svg', 'iframe', 'input', 'textarea', 'select'].includes(tagName);
+      // Tags that should be allowed to expand to fit text (Fluid Strategy)
+      const FLUID_TAGS = ['a', 'button', 'span', 'label', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'summary', 'cite', 'li', 'td', 'th', 'strong', 'em', 'b', 'i', 'mark', 'q', 'small', 'sub', 'sup'];
+      const isFluid = FLUID_TAGS.includes(tagName);
+
+      // Width Handling
+      if (width > 0) {
+          if (isMedia || !isFluid) {
+              // STRICT STRATEGY: For media and structure (divs), lock the width.
+              // This preserves the page layout grid.
+              inline['width'] = `${width}px`;
+              // We also capture min-width to prevent shrinking below this point in flex contexts
+              inline['min-width'] = `${width}px`;
+          } else {
+              // FLUID STRATEGY: For text elements, use min-width + auto.
+              // This fixes the text overflow issue.
+              inline['min-width'] = `${width}px`;
+              inline['flex-basis'] = 'auto'; 
+              inline['width'] = 'auto';
+          }
       }
-      // Skip very small widths that are likely flex-calculated
-      if (prop === 'width') {
-        const widthPx = parseFloat(value);
-        if (widthPx < 10) continue; // Skip tiny calculated widths
+      
+      // Height Handling
+      if (height > 0) {
+          if (isMedia || !isFluid) {
+              // STRICT STRATEGY
+              inline['height'] = `${height}px`;
+              inline['min-height'] = `${height}px`;
+          } else {
+             // FLUID STRATEGY
+             inline['min-height'] = `${height}px`;
+             inline['height'] = 'auto'; 
+          }
       }
-      inline[prop] = value;
-    }
   }
 
   // For root, get inherited background
@@ -1065,6 +1092,21 @@ function buildStructure(el, isRoot = false) {
     } else if (item.type === 'element') {
       const childNode = buildStructure(item.el, false);
       if (childNode) {
+        // Check if this child has any meaningful content to export
+        const hasText = childNode.text;
+        const hasChildren = childNode.orderedContent?.length > 0 || childNode.children?.length > 0;
+        const hasSvg = childNode.svg;
+        const hasImage = childNode.src;
+        const hasPseudoBg = childNode.pseudoBg;
+
+        // Skip empty <span> elements with no content - these are typically overlays
+        // But preserve divs, inputs, buttons, and elements with backgrounds
+        const isEmptySpan = childNode.tag === 'span' && !hasText && !hasChildren && !hasSvg && !hasImage && !hasPseudoBg;
+
+        if (isEmptySpan) {
+          continue; // Skip empty decorative spans
+        }
+
         orderedContent.push({ type: 'element', node: childNode });
       }
     }
@@ -1212,8 +1254,7 @@ function structureToHtml(node, indent = 0) {
   // Also add pseudo-element styles for elements with pseudo backgrounds
   let inlineStyleParts = [];
   if (node.inlineStyle) {
-    const flexibleStyle = node.inlineStyle.replace(/\bheight:/g, 'min-height:');
-    inlineStyleParts.push(flexibleStyle);
+    inlineStyleParts.push(node.inlineStyle);
   }
   // Add pseudo-element styles (for avatar backgrounds etc.)
   if (node.pseudoBg) inlineStyleParts.push(`background-color: ${node.pseudoBg}`);
@@ -1260,13 +1301,9 @@ function structureToHtml(node, indent = 0) {
     // Build inline styles for text elements
     let stylesParts = [];
 
-    // Filter out width/height from inline styles
+    // Use inline styles as-is, trusting getCompactStyles logic
     if (node.inlineStyle) {
-      const filtered = node.inlineStyle
-        .split(';')
-        .map(s => s.trim())
-        .filter(s => s && !s.startsWith('width:') && !s.startsWith('height:') && !s.startsWith('min-height:'));
-      stylesParts.push(...filtered);
+      stylesParts.push(node.inlineStyle);
     }
 
     // Add pseudo-element styles for avatar circles
@@ -1554,7 +1591,8 @@ body { padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI"
 ul, ol { list-style: none; margin: 0; padding: 0; background: inherit; color: inherit; }
 li { list-style: none; background: inherit; color: inherit; }
 /* Ensure all elements inherit box-sizing and prevent overflow issues */
-*, *::before, *::after { box-sizing: border-box; max-width: 100%; }
+*, *::before, *::after { box-sizing: border-box; }
+img, video, svg, canvas { max-width: 100%; }
 /* Fix button/input/link resets - inherit colors from parent */
 button { background: transparent; border: none; cursor: pointer; color: inherit; padding: 0; }
 input { background: transparent; border: none; outline: none; color: inherit; min-width: 0; }
@@ -1563,7 +1601,7 @@ a { color: inherit; text-decoration: inherit; }
 /* Ensure proper inline display */
 span { display: inline; }
 /* Flex container fixes */
-[style*="display: flex"], [style*="display:flex"] { min-width: 0; }
+/* [style*="display: flex"], [style*="display:flex"] { min-width: 0; } */
 /* Icon font styles - using !important to override captured styles */
 .material-icons {
   font-family: 'Material Icons', 'Google Material Icons' !important;
@@ -1673,7 +1711,8 @@ window.addEventListener('message', async (event) => {
 // --- Message handling from popup ---
 // Wrap in try-catch to handle extension context invalidation gracefully
 try {
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "CHECK_INJECTED") {
     sendResponse({ injected: true });
     return true;
@@ -1745,8 +1784,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
-  return true;
-});
+    return true;
+  });
+  }
 } catch (e) {
   console.log('[VibeClone] Could not add message listener:', e.message);
 }
