@@ -10,7 +10,7 @@ let isScrollNavigating = false;   // true when user has scrolled to override the
 let scrollNavigatedElement = null; // the element currently reached via scroll navigation
 
 // Debug: Log when script loads
-console.log('[VibeClone] Content script loaded in frame:', window.location.href.substring(0, 100));
+console.log('[VibeExtract] Content script loaded in frame:', window.location.href.substring(0, 100));
 
 // --- Style Registry for deduplication ---
 let styleRegistry = new Map(); // styleString -> styleName (s1, s2, etc.)
@@ -88,17 +88,20 @@ function injectHelperStyles(root = document) {
       cursor: crosshair !important;
     }
     .web-replica-selected {
-      outline: 3px solid blue !important;
       cursor: crosshair !important;
-      position: relative !important;
     }
-    .web-replica-selected::after {
-      content: '' !important;
-      position: absolute !important;
-      inset: 0 !important;
-      background-color: rgba(59, 130, 246, 0.15) !important;
+    .web-replica-selected:not(html):not(body) {
+      outline: 3px solid rgba(59, 130, 246, 0.8) !important;
+      outline-offset: -3px !important;
+    }
+    #web-replica-overlay {
+      position: fixed !important;
+      background-color: rgba(59, 130, 246, 0.12) !important;
       z-index: 2147483647 !important;
       pointer-events: none !important;
+      border: 2px solid rgba(59, 130, 246, 0.4) !important;
+      border-radius: 2px !important;
+      transition: top 0.1s, left 0.1s, width 0.1s, height 0.1s !important;
     }
   `;
 
@@ -207,10 +210,48 @@ document.addEventListener(
   true
 );
 
+// --- Selection overlay ---
+function getOrCreateOverlay() {
+  let overlay = document.getElementById('web-replica-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'web-replica-overlay';
+    document.documentElement.appendChild(overlay);
+  }
+  return overlay;
+}
+
+function updateOverlay() {
+  const overlay = getOrCreateOverlay();
+  if (selectedElements.size === 0) {
+    overlay.style.display = 'none';
+    return;
+  }
+  // Compute bounding box covering all selected elements
+  let top = Infinity, left = Infinity, bottom = -Infinity, right = -Infinity;
+  selectedElements.forEach((el) => {
+    const rect = el.getBoundingClientRect();
+    if (rect.top < top) top = rect.top;
+    if (rect.left < left) left = rect.left;
+    if (rect.bottom > bottom) bottom = rect.bottom;
+    if (rect.right > right) right = rect.right;
+  });
+  overlay.style.display = 'block';
+  overlay.style.top = top + 'px';
+  overlay.style.left = left + 'px';
+  overlay.style.width = (right - left) + 'px';
+  overlay.style.height = (bottom - top) + 'px';
+}
+
+function removeOverlay() {
+  const overlay = document.getElementById('web-replica-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
 // --- Utility: select/deselect element ---
 function toggleElement(el, shouldSelect) {
   if (!el || !el.classList) {
-    console.log('[VibeClone] Cannot select element - no classList:', el);
+    console.log('[VibeExtract] Cannot select element - no classList:', el);
     return;
   }
   if (shouldSelect) {
@@ -221,13 +262,14 @@ function toggleElement(el, shouldSelect) {
     const clone = el.cloneNode(true);
     selectionClones.set(el, clone);
     const inShadow = getContainingShadowRoot(el) ? 'YES' : 'NO';
-    console.log('[VibeClone] Selected element:', el.tagName, 'In Shadow DOM:', inShadow, 'Total:', selectedElements.size);
+    console.log('[VibeExtract] Selected element:', el.tagName, 'In Shadow DOM:', inShadow, 'Total:', selectedElements.size);
   } else {
     el.classList.remove("web-replica-selected");
     selectedElements.delete(el);
     selectionClones.delete(el);
-    console.log('[VibeClone] Deselected element, remaining:', selectedElements.size);
+    console.log('[VibeExtract] Deselected element, remaining:', selectedElements.size);
   }
+  updateOverlay();
 }
 
 // --- Click handling (with Shadow DOM support) ---
@@ -260,6 +302,7 @@ document.addEventListener(
       );
       selectedElements.clear();
       selectionClones.clear();
+      removeOverlay();
     }
 
     if (selectedElements.has(el)) {
@@ -339,12 +382,12 @@ try {
       if (chrome.runtime.lastError) return;
       if (result.shortcuts) {
         shortcuts = result.shortcuts;
-        console.log('[VibeClone] Loaded custom shortcuts:', shortcuts);
+        console.log('[VibeExtract] Loaded custom shortcuts:', shortcuts);
       }
     });
   }
 } catch (e) {
-  console.log('[VibeClone] Could not load shortcuts:', e.message);
+  console.log('[VibeExtract] Could not load shortcuts:', e.message);
 }
 
 // Listen for shortcut updates from popup (with context check)
@@ -353,12 +396,12 @@ try {
     chrome.storage.onChanged.addListener((changes, namespace) => {
       if (namespace === 'sync' && changes.shortcuts) {
         shortcuts = changes.shortcuts.newValue;
-        console.log('[VibeClone] Shortcuts updated:', shortcuts);
+        console.log('[VibeExtract] Shortcuts updated:', shortcuts);
       }
     });
   }
 } catch (e) {
-  console.log('[VibeClone] Could not add storage listener:', e.message);
+  console.log('[VibeExtract] Could not add storage listener:', e.message);
 }
 
 // Check if a keyboard event matches a shortcut
@@ -384,8 +427,8 @@ function isExtensionContextValid() {
 // Download files via background script (bypasses CSP restrictions)
 function downloadFiles(toonContent, htmlContent) {
   if (!isExtensionContextValid()) {
-    console.warn("[VibeClone] Extension context invalidated. Please refresh the page.");
-    alert("VibeClone: Extension was reloaded. Please refresh this page to continue using the extension.");
+    console.warn("[VibeExtract] Extension context invalidated. Please refresh the page.");
+    alert("VibeExtract: Extension was reloaded. Please refresh this page to continue using the extension.");
     return;
   }
 
@@ -395,41 +438,41 @@ function downloadFiles(toonContent, htmlContent) {
     html: htmlContent
   }, (response) => {
     if (chrome.runtime.lastError) {
-      console.error("[VibeClone] Download error:", chrome.runtime.lastError);
+      console.error("[VibeExtract] Download error:", chrome.runtime.lastError);
     } else {
-      console.log("[VibeClone] Download initiated via background script");
+      console.log("[VibeExtract] Download initiated via background script");
     }
   });
 }
 
 // Perform export action
 function performExport() {
-  console.log("[VibeClone] Export triggered, selected:", selectedElements.size);
+  console.log("[VibeExtract] Export triggered, selected:", selectedElements.size);
   if (selectedElements.size > 0) {
     const result = buildExport();
     if (result && result.toon && result.html) {
-      console.log("[VibeClone] Export data generated, downloading...");
+      console.log("[VibeExtract] Export data generated, downloading...");
 
       // Download both files via background script
       downloadFiles(result.toon, result.html);
 
-      console.log("[VibeClone] Export complete");
+      console.log("[VibeExtract] Export complete");
       return true;
     } else {
-      console.log("[VibeClone] buildExport returned null or incomplete");
+      console.log("[VibeExtract] buildExport returned null or incomplete");
     }
   } else {
-    console.log("[VibeClone] No elements selected for export");
+    console.log("[VibeExtract] No elements selected for export");
   }
   return false;
 }
 
 // Visual feedback for selection mode
 function showModeIndicator(message) {
-  let indicator = document.getElementById('vibeclone-indicator');
+  let indicator = document.getElementById('VibeExtract-indicator');
   if (!indicator) {
     indicator = document.createElement('div');
-    indicator.id = 'vibeclone-indicator';
+    indicator.id = 'VibeExtract-indicator';
     indicator.style.cssText = `
       position: fixed;
       top: 10px;
@@ -484,7 +527,7 @@ document.addEventListener("keydown", (e) => {
     e.stopImmediatePropagation();
     pickMode = true;
     showModeIndicator('Selection mode ON');
-    console.log("[VibeClone] Selection mode started");
+    console.log("[VibeExtract] Selection mode started");
     return false;
   }
 
@@ -498,11 +541,12 @@ document.addEventListener("keydown", (e) => {
       selectedElements.forEach((el) => el.classList.remove("web-replica-selected"));
       selectedElements.clear();
       selectionClones.clear();
+      removeOverlay();
       pickMode = false;
       isScrollNavigating = false;
       scrollNavigatedElement = null;
       showModeIndicator('Selection cleared');
-      console.log("[VibeClone] Selection cleared");
+      console.log("[VibeExtract] Selection cleared");
       return false;
     }
     // Otherwise let ESC do its normal Chrome job
@@ -1015,6 +1059,11 @@ function getCompactStyles(el, isRoot = false) {
 
 // --- Build semantic structure recursively ---
 function buildStructure(el, isRoot = false) {
+  // Skip extension UI elements from export
+  if (el.id === 'web-replica-overlay' || el.id === 'vibeclone-indicator' || el.id === 'web-replica-helper-style') {
+    return null;
+  }
+
   const tagName = el.tagName.toLowerCase();
 
   // Get the ORIGINAL element for computed styles (clones aren't in DOM)
@@ -1337,13 +1386,23 @@ function getScrollParent(el) {
   return ancestor;
 }
 
+const SKIP_NAV_TAGS = new Set(['head', 'script', 'style', 'link', 'meta', 'noscript', 'br', 'hr']);
+
 function getFirstElementChild(el) {
   if (!el) return null;
-  const shadowRoot = getShadowRoot(el);
-  if (shadowRoot && shadowRoot.firstElementChild) {
-    return shadowRoot.firstElementChild;
+  // html -> skip head, go to body
+  if (el === document.documentElement) {
+    return document.body;
   }
-  return el.firstElementChild || null;
+  const shadowRoot = getShadowRoot(el);
+  const children = shadowRoot ? shadowRoot.children : el.children;
+  if (!children || children.length === 0) return null;
+  for (const child of children) {
+    if (!SKIP_NAV_TAGS.has(child.tagName.toLowerCase())) {
+      return child;
+    }
+  }
+  return null;
 }
 
 // --- Get top-level selections (handles Shadow DOM) ---
@@ -1544,9 +1603,9 @@ function buildCloneMapping(original, clone, map) {
 
 // --- Build compact JSON export ---
 function buildExport() {
-  console.log('[VibeClone] buildExport called, selectedElements.size:', selectedElements.size);
+  console.log('[VibeExtract] buildExport called, selectedElements.size:', selectedElements.size);
   selectedElements.forEach((el, idx) => {
-    console.log('[VibeClone] Selected element', idx, ':', el.tagName, el);
+    console.log('[VibeExtract] Selected element', idx, ':', el.tagName, el);
   });
   if (!selectedElements.size) return null;
 
@@ -1862,6 +1921,7 @@ window.addEventListener('message', async (event) => {
     selectedElements.forEach((el) => el.classList.remove("web-replica-selected"));
     selectedElements.clear();
     selectionClones.clear();
+    removeOverlay();
     pickMode = false;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
@@ -1899,6 +1959,7 @@ try {
     );
     selectedElements.clear();
     selectionClones.clear();
+    removeOverlay();
 
     // Show visual feedback
     showModeIndicator('Selection mode ON');
@@ -1916,6 +1977,7 @@ try {
     );
     selectedElements.clear();
     selectionClones.clear();
+    removeOverlay();
     pickMode = false;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
@@ -1960,5 +2022,5 @@ try {
   });
   }
 } catch (e) {
-  console.log('[VibeClone] Could not add message listener:', e.message);
+  console.log('[VibeExtract] Could not add message listener:', e.message);
 }
