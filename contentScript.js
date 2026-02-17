@@ -5,6 +5,10 @@ let selectedElements = new Set();
 // Store clones at selection time to freeze dynamic content (like rotating ProTips)
 let selectionClones = new Map(); // original element -> clone (captured at selection time)
 
+// --- Scroll-navigation state ---
+let isScrollNavigating = false;   // true when user has scrolled to override the natural hover target
+let scrollNavigatedElement = null; // the element currently reached via scroll navigation
+
 // Debug: Log when script loads
 console.log('[VibeClone] Content script loaded in frame:', window.location.href.substring(0, 100));
 
@@ -86,6 +90,15 @@ function injectHelperStyles(root = document) {
     .web-replica-selected {
       outline: 3px solid blue !important;
       cursor: crosshair !important;
+      position: relative !important;
+    }
+    .web-replica-selected::after {
+      content: '' !important;
+      position: absolute !important;
+      inset: 0 !important;
+      background-color: rgba(59, 130, 246, 0.15) !important;
+      z-index: 2147483647 !important;
+      pointer-events: none !important;
     }
   `;
 
@@ -139,6 +152,16 @@ document.addEventListener(
     // Inject styles into any shadow roots along the path (including closed ones!)
     ensureStylesInEventPath(path);
 
+    // During scroll navigation, don't let mouseover snap back to the deepest child.
+    // Only break out when the mouse moves to a genuinely different area.
+    if (isScrollNavigating) {
+      if (actualTarget === scrollNavigatedElement) return;
+      if (scrollNavigatedElement && scrollNavigatedElement.contains(actualTarget)) return;
+      // Mouse moved to a different area — exit scroll navigation
+      isScrollNavigating = false;
+      scrollNavigatedElement = null;
+    }
+
     if (hoverElement && hoverElement !== actualTarget) {
       if (hoverElement.classList) {
         hoverElement.classList.remove("web-replica-hover");
@@ -156,6 +179,23 @@ document.addEventListener(
   "mouseout",
   (e) => {
     if (!pickMode) return;
+
+    // During scroll navigation, only clear if mouse fully leaves the navigated element
+    if (isScrollNavigating && scrollNavigatedElement) {
+      const relatedTarget = e.relatedTarget;
+      if (relatedTarget && (relatedTarget === scrollNavigatedElement || scrollNavigatedElement.contains(relatedTarget))) {
+        return;
+      }
+      // Mouse left the scroll-navigated element entirely
+      if (hoverElement && hoverElement.classList) {
+        hoverElement.classList.remove("web-replica-hover");
+      }
+      hoverElement = null;
+      isScrollNavigating = false;
+      scrollNavigatedElement = null;
+      return;
+    }
+
     const actualTarget = e.composedPath()[0];
     if (actualTarget === hoverElement) {
       if (hoverElement && hoverElement.classList) {
@@ -201,10 +241,16 @@ document.addEventListener(
 
     // Use composedPath to get actual target inside Shadow DOM
     const path = e.composedPath();
-    const el = path[0];
 
     // Inject styles into any shadow roots along the path (including closed ones!)
     ensureStylesInEventPath(path);
+
+    // If scroll-navigating, select the navigated element instead of deepest child
+    const el = isScrollNavigating ? scrollNavigatedElement : path[0];
+
+    // Reset scroll navigation after click
+    isScrollNavigating = false;
+    scrollNavigatedElement = null;
 
     if (!el || !el.classList) return;
 
@@ -234,6 +280,48 @@ document.addEventListener(
     e.stopImmediatePropagation();
   },
   true
+);
+
+// --- Scroll wheel navigation (parent/child traversal) ---
+document.addEventListener(
+  "wheel",
+  (e) => {
+    if (!pickMode) return;
+    if (!hoverElement) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+
+    let targetElement = null;
+
+    if (e.deltaY < 0) {
+      targetElement = getScrollParent(hoverElement);
+    } else if (e.deltaY > 0) {
+      targetElement = getFirstElementChild(hoverElement);
+    }
+
+    if (!targetElement || !targetElement.classList) return;
+
+    // Update hover
+    if (hoverElement && hoverElement.classList) {
+      hoverElement.classList.remove("web-replica-hover");
+    }
+    ensureStylesInShadow(targetElement);
+    hoverElement = targetElement;
+    scrollNavigatedElement = targetElement;
+    isScrollNavigating = true;
+    hoverElement.classList.add("web-replica-hover");
+
+    // Auto-select the navigated element
+    selectedElements.forEach((sel) => sel.classList.remove("web-replica-selected"));
+    selectedElements.clear();
+    selectionClones.clear();
+    toggleElement(targetElement, true);
+
+    showModeIndicator(getElementDescriptor(hoverElement));
+  },
+  { capture: true, passive: false }
 );
 
 // --- Keyboard shortcuts (customizable) ---
@@ -369,6 +457,24 @@ function showModeIndicator(message) {
   }, 2000);
 }
 
+// --- Element descriptor for mode indicator ---
+function getElementDescriptor(el) {
+  if (!el) return '';
+  const tag = el.tagName.toLowerCase();
+  let descriptor = tag;
+  if (el.id) {
+    descriptor += '#' + el.id;
+  } else if (el.classList && el.classList.length > 0) {
+    for (const cls of el.classList) {
+      if (cls !== 'web-replica-hover' && cls !== 'web-replica-selected') {
+        descriptor += '.' + cls;
+        break;
+      }
+    }
+  }
+  return descriptor;
+}
+
 // Use capturing phase to intercept before page handlers
 document.addEventListener("keydown", (e) => {
   // Start selection mode
@@ -393,6 +499,8 @@ document.addEventListener("keydown", (e) => {
       selectedElements.clear();
       selectionClones.clear();
       pickMode = false;
+      isScrollNavigating = false;
+      scrollNavigatedElement = null;
       showModeIndicator('Selection cleared');
       console.log("[VibeClone] Selection cleared");
       return false;
@@ -416,6 +524,42 @@ document.addEventListener("keydown", (e) => {
     } else {
       showModeIndicator('No elements selected');
     }
+    return false;
+  }
+
+  // Alt+Arrow: navigate parent/child and auto-select
+  if (pickMode && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    if (!hoverElement) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+
+    let targetElement = null;
+    if (e.key === 'ArrowUp') {
+      targetElement = getScrollParent(hoverElement);
+    } else {
+      targetElement = getFirstElementChild(hoverElement);
+    }
+
+    if (!targetElement || !targetElement.classList) return false;
+
+    // Update hover highlight
+    if (hoverElement && hoverElement.classList) {
+      hoverElement.classList.remove("web-replica-hover");
+    }
+    ensureStylesInShadow(targetElement);
+    hoverElement = targetElement;
+    scrollNavigatedElement = targetElement;
+    isScrollNavigating = true;
+    hoverElement.classList.add("web-replica-hover");
+
+    // Auto-select: clear previous selection and select the navigated element
+    selectedElements.forEach((sel) => sel.classList.remove("web-replica-selected"));
+    selectedElements.clear();
+    selectionClones.clear();
+    toggleElement(targetElement, true);
+
+    showModeIndicator(getElementDescriptor(hoverElement));
     return false;
   }
 }, true); // true = capturing phase (runs BEFORE page handlers)
@@ -1182,6 +1326,26 @@ function getAncestor(el) {
   return null;
 }
 
+// --- Scroll navigation helpers ---
+function getScrollParent(el) {
+  if (!el) return null;
+  if (el === document.documentElement) return null; // stop at html
+  const ancestor = getAncestor(el);
+  if (!ancestor || ancestor === document) {
+    return document.documentElement;
+  }
+  return ancestor;
+}
+
+function getFirstElementChild(el) {
+  if (!el) return null;
+  const shadowRoot = getShadowRoot(el);
+  if (shadowRoot && shadowRoot.firstElementChild) {
+    return shadowRoot.firstElementChild;
+  }
+  return el.firstElementChild || null;
+}
+
 // --- Get top-level selections (handles Shadow DOM) ---
 function getTopLevelSelections() {
   const topLevel = [];
@@ -1691,12 +1855,16 @@ window.addEventListener('message', async (event) => {
 
   if (msg.type === "START_PICK_MODE") {
     pickMode = true;
+    isScrollNavigating = false;
+    scrollNavigatedElement = null;
     result = { ok: true };
   } else if (msg.type === "CLEAR_SELECTION") {
     selectedElements.forEach((el) => el.classList.remove("web-replica-selected"));
     selectedElements.clear();
     selectionClones.clear();
     pickMode = false;
+    isScrollNavigating = false;
+    scrollNavigatedElement = null;
     result = { ok: true };
   } else if (msg.type === "EXPORT_SELECTION") {
     result = buildExport();
@@ -1720,6 +1888,8 @@ try {
 
   if (msg.type === "START_PICK_MODE") {
     pickMode = true;
+    isScrollNavigating = false;
+    scrollNavigatedElement = null;
     if (hoverElement) {
       hoverElement.classList.remove("web-replica-hover");
       hoverElement = null;
@@ -1747,6 +1917,8 @@ try {
     selectedElements.clear();
     selectionClones.clear();
     pickMode = false;
+    isScrollNavigating = false;
+    scrollNavigatedElement = null;
     if (hoverElement) {
       hoverElement.classList.remove("web-replica-hover");
       hoverElement = null;
