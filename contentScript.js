@@ -368,11 +368,16 @@ document.addEventListener(
 );
 
 // --- Keyboard shortcuts (customizable) ---
+// Detect Mac platform
+const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0 || navigator.userAgent.includes('Mac');
+
 // Default shortcuts - will be overridden by stored settings
+// On Mac, use Cmd (meta) instead of Ctrl
 let shortcuts = {
-  startSelect: { ctrl: true, shift: true, alt: false, key: 'S' },
-  clearSelect: { ctrl: false, shift: false, alt: false, key: 'Escape' },
-  export: { ctrl: true, shift: true, alt: false, key: 'E' }
+  startSelect: { ctrl: !isMac, shift: true, alt: false, meta: isMac, key: 'S' },
+  clearSelect: { ctrl: false, shift: false, alt: false, meta: false, key: 'Escape' },
+  export: { ctrl: !isMac, shift: true, alt: false, meta: isMac, key: 'E' },
+  extractPage: { ctrl: !isMac, shift: true, alt: false, meta: isMac, key: 'X' }
 };
 
 // Load shortcuts from storage (with context check)
@@ -381,6 +386,12 @@ try {
     chrome.storage.sync.get(['shortcuts'], (result) => {
       if (chrome.runtime.lastError) return;
       if (result.shortcuts) {
+        // Migrate old shortcuts missing meta field
+        for (const key of Object.keys(result.shortcuts)) {
+          if (result.shortcuts[key] && result.shortcuts[key].meta === undefined) {
+            result.shortcuts[key].meta = false;
+          }
+        }
         shortcuts = result.shortcuts;
         console.log('[VibeExtract] Loaded custom shortcuts:', shortcuts);
       }
@@ -410,9 +421,10 @@ function matchesShortcut(e, shortcut) {
   const keyMatch = e.key.toLowerCase() === shortcut.key.toLowerCase() ||
                    e.key === shortcut.key;
   return keyMatch &&
-         e.ctrlKey === shortcut.ctrl &&
-         e.shiftKey === shortcut.shift &&
-         e.altKey === shortcut.alt;
+         e.ctrlKey === !!shortcut.ctrl &&
+         e.shiftKey === !!shortcut.shift &&
+         e.altKey === !!shortcut.alt &&
+         e.metaKey === !!shortcut.meta;
 }
 
 // Check if extension context is still valid
@@ -567,6 +579,32 @@ document.addEventListener("keydown", (e) => {
       }
     } else {
       showModeIndicator('No elements selected');
+    }
+    return false;
+  }
+
+  // Extract whole page (select body + export)
+  if (matchesShortcut(e, shortcuts.extractPage)) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    // Clear any existing selection
+    selectedElements.forEach((sel) => sel.classList.remove("web-replica-selected"));
+    selectedElements.clear();
+    selectionClones.clear();
+    // Select the body element
+    const body = document.body;
+    if (body) {
+      toggleElement(body, true);
+      showModeIndicator('Exporting full page...');
+      const success = performExport();
+      if (success) {
+        setTimeout(() => showModeIndicator('Full page exported!'), 100);
+      } else {
+        showModeIndicator('Export failed');
+      }
+    } else {
+      showModeIndicator('No body element found');
     }
     return false;
   }

@@ -2,171 +2,461 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Web Replica Builder</title>
+  <title>VibeExtract</title>
   <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
     body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      margin: 10px;
-      min-width: 300px;
-    }
-    h1 {
-      font-size: 16px;
-      margin: 0 0 8px;
-    }
-    h2 {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      width: 340px;
+      background: #0f0f0f;
+      color: #e4e4e7;
       font-size: 13px;
-      margin: 12px 0 6px;
-      color: #333;
-      border-top: 1px solid #ddd;
-      padding-top: 10px;
+      overflow-x: hidden;
     }
-    button {
-      padding: 6px 10px;
-      margin: 4px 4px 4px 0;
-      border-radius: 4px;
-      border: 1px solid #ccc;
-      cursor: pointer;
-      font-size: 13px;
+
+    /* Header */
+    .header {
+      padding: 16px 16px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid #1f1f23;
     }
-    button:hover {
-      background: #f0f0f0;
+    .logo {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      flex-shrink: 0;
     }
-    button:disabled {
-      opacity: 0.6;
-      cursor: default;
+    .header-text h1 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fafafa;
+      letter-spacing: -0.3px;
+    }
+    .header-text .version {
+      font-size: 10px;
+      color: #52525b;
+      margin-top: 1px;
+    }
+
+    /* Status bar */
+    .status-bar {
+      padding: 10px 16px;
+      background: #18181b;
+      border-bottom: 1px solid #1f1f23;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #52525b;
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+    .status-dot.active {
+      background: #22c55e;
+      box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
     }
     #status {
-      margin-top: 8px;
       font-size: 12px;
+      color: #a1a1aa;
     }
-    #hint {
-      margin-top: 4px;
-      font-size: 11px;
-      color: #555;
-    }
-    .shortcut-row {
+
+    /* Actions */
+    .actions {
+      padding: 12px 16px;
       display: flex;
-      align-items: center;
-      margin: 6px 0;
-      font-size: 12px;
+      gap: 8px;
     }
-    .shortcut-row label {
+    .btn {
       flex: 1;
-      min-width: 80px;
-    }
-    .shortcut-input {
-      flex: 2;
+      padding: 9px 6px;
+      border-radius: 8px;
+      border: 1px solid #27272a;
+      background: #18181b;
+      color: #e4e4e7;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.15s;
       display: flex;
+      flex-direction: column;
+      align-items: center;
       gap: 4px;
-      align-items: center;
     }
-    .shortcut-input input[type="text"] {
-      width: 60px;
-      padding: 4px 6px;
-      border: 1px solid #ccc;
-      border-radius: 3px;
-      font-size: 11px;
-      text-align: center;
+    .btn:hover {
+      background: #27272a;
+      border-color: #3f3f46;
     }
-    .shortcut-input input[type="text"]:focus {
-      outline: 2px solid #4a90d9;
-      border-color: #4a90d9;
+    .btn:active {
+      transform: scale(0.97);
     }
-    .mod-checkbox {
+    .btn .icon {
+      font-size: 16px;
+      line-height: 1;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #7c3aed);
+      border-color: #6366f1;
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #7c7cf7, #8b5cf6);
+      border-color: #818cf8;
+    }
+    .btn-danger {
+      color: #f87171;
+    }
+    .btn-danger:hover {
+      background: rgba(248, 113, 113, 0.1);
+      border-color: rgba(248, 113, 113, 0.3);
+    }
+
+    /* Shortcuts display */
+    .shortcuts-display {
+      padding: 8px 16px 12px;
+      border-bottom: 1px solid #1f1f23;
+    }
+    .shortcut-pills {
       display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .shortcut-pill {
+      display: inline-flex;
       align-items: center;
-      gap: 2px;
+      gap: 5px;
+      padding: 4px 8px;
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 6px;
       font-size: 10px;
     }
-    .mod-checkbox input {
-      margin: 0;
+    .shortcut-pill kbd {
+      font-family: SF Mono, Menlo, Consolas, monospace;
+      font-size: 10px;
+      color: #a78bfa;
+      background: #1e1b2e;
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid #2e2847;
     }
-    #save-shortcuts {
-      margin-top: 8px;
-      background: #4a90d9;
-      color: white;
-      border: none;
+    .shortcut-pill .pill-label {
+      color: #71717a;
     }
-    #save-shortcuts:hover {
-      background: #357abd;
+
+    /* Tips */
+    .tips {
+      padding: 10px 16px;
+      border-bottom: 1px solid #1f1f23;
     }
-    #reset-shortcuts {
+    .tips-title {
+      font-size: 10px;
+      font-weight: 600;
+      color: #52525b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .tip-item {
       font-size: 11px;
-      padding: 4px 8px;
+      color: #71717a;
+      padding: 2px 0;
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    .tip-item::before {
+      content: ">";
+      color: #3f3f46;
+      font-family: SF Mono, Menlo, monospace;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+
+    /* Settings toggle */
+    .settings-toggle-wrap {
+      padding: 10px 16px;
     }
     .settings-toggle {
       font-size: 11px;
-      color: #666;
+      color: #6366f1;
       cursor: pointer;
-      margin-top: 8px;
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: color 0.15s;
+      background: none;
+      border: none;
+      font-family: inherit;
     }
     .settings-toggle:hover {
-      color: #333;
+      color: #818cf8;
     }
+    .settings-toggle .arrow {
+      transition: transform 0.2s;
+      font-size: 9px;
+    }
+    .settings-toggle.open .arrow {
+      transform: rotate(90deg);
+    }
+
+    /* Settings panel */
     #settings-panel {
       display: none;
+      padding: 0 16px 14px;
     }
     #settings-panel.visible {
       display: block;
     }
-    .shortcut-display {
+    .settings-section-title {
       font-size: 10px;
-      color: #666;
-      margin-top: 2px;
+      font-weight: 600;
+      color: #52525b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+    }
+
+    .shortcut-row {
+      display: flex;
+      align-items: center;
+      margin: 0 0 8px;
+      padding: 8px 10px;
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 8px;
+    }
+    .shortcut-row label {
+      min-width: 75px;
+      font-size: 11px;
+      color: #a1a1aa;
+      font-weight: 500;
+    }
+    .shortcut-input {
+      flex: 1;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .mod-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 10px;
+      color: #71717a;
+      cursor: pointer;
+    }
+    .mod-checkbox input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border: 1px solid #3f3f46;
+      border-radius: 3px;
+      background: #09090b;
+      cursor: pointer;
+      position: relative;
+      transition: all 0.15s;
+    }
+    .mod-checkbox input[type="checkbox"]:checked {
+      background: #6366f1;
+      border-color: #6366f1;
+    }
+    .mod-checkbox input[type="checkbox"]:checked::after {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 1px;
+      width: 4px;
+      height: 8px;
+      border: solid #fff;
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(45deg);
+    }
+    .shortcut-input input[type="text"] {
+      width: 52px;
+      padding: 4px 6px;
+      border: 1px solid #3f3f46;
+      border-radius: 5px;
+      font-size: 11px;
+      text-align: center;
+      background: #09090b;
+      color: #e4e4e7;
+      font-family: SF Mono, Menlo, Consolas, monospace;
+      transition: all 0.15s;
+    }
+    .shortcut-input input[type="text"]:focus {
+      outline: none;
+      border-color: #6366f1;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+    }
+
+    .settings-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .btn-save {
+      flex: 1;
+      padding: 8px 12px;
+      background: linear-gradient(135deg, #6366f1, #7c3aed);
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+    .btn-save:hover {
+      background: linear-gradient(135deg, #7c7cf7, #8b5cf6);
+    }
+    .btn-reset {
+      padding: 8px 12px;
+      background: transparent;
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      color: #71717a;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+    .btn-reset:hover {
+      border-color: #3f3f46;
+      color: #a1a1aa;
+    }
+
+    .mac-only {
+      display: none;
+    }
+    body.is-mac .mac-only {
+      display: flex;
     }
   </style>
 </head>
 <body>
-  <h1>Web Replica Builder</h1>
 
-  <button id="start">Start Selecting</button>
-  <button id="clear">Clear Selection</button>
-  <button id="export">Export HTML</button>
-
-  <div id="status">Idle.</div>
-  <div id="hint">
-    Tip: Hover to highlight, click to select, Shift+Click for multi-select. Alt+Arrow Up/Down to navigate and select parent/child (up to body for full page).
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">V</div>
+    <div class="header-text">
+      <h1>VibeExtract</h1>
+      <div class="version">v1.0.0</div>
+    </div>
   </div>
-  <div class="shortcut-display" id="current-shortcuts"></div>
 
-  <span class="settings-toggle" id="toggle-settings">Customize Shortcuts</span>
+  <!-- Status -->
+  <div class="status-bar">
+    <div class="status-dot" id="status-dot"></div>
+    <div id="status">Idle</div>
+  </div>
 
+  <!-- Action buttons -->
+  <div class="actions">
+    <button class="btn btn-primary" id="start">
+      <span class="icon">+</span>
+      Select
+    </button>
+    <button class="btn" id="export">
+      <span class="icon">&darr;</span>
+      Export
+    </button>
+    <button class="btn btn-danger" id="clear">
+      <span class="icon">&times;</span>
+      Clear
+    </button>
+  </div>
+
+  <!-- Current shortcuts pills -->
+  <div class="shortcuts-display">
+    <div class="shortcut-pills" id="current-shortcuts"></div>
+  </div>
+
+  <!-- Tips -->
+  <div class="tips">
+    <div class="tips-title">How to use</div>
+    <div class="tip-item">Hover to preview, click to select</div>
+    <div class="tip-item">Shift+Click for multi-select</div>
+    <div class="tip-item">Alt+Arrow Up/Down to traverse DOM</div>
+    <div class="tip-item">Exports .toon (for LLMs) + .html (preview)</div>
+  </div>
+
+  <!-- Settings toggle -->
+  <div class="settings-toggle-wrap">
+    <button class="settings-toggle" id="toggle-settings">
+      <span class="arrow">&#9654;</span> Customize Shortcuts
+    </button>
+  </div>
+
+  <!-- Settings panel -->
   <div id="settings-panel">
-    <h2>Keyboard Shortcuts</h2>
+    <div class="settings-section-title">Keyboard Shortcuts</div>
 
     <div class="shortcut-row">
-      <label>Start Select:</label>
+      <label>Select</label>
       <div class="shortcut-input">
-        <span class="mod-checkbox"><input type="checkbox" id="start-ctrl"><span>Ctrl</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="start-ctrl"><span class="mod-ctrl-label">Ctrl</span></span>
+        <span class="mod-checkbox mac-only"><input type="checkbox" id="start-meta"><span>Cmd</span></span>
         <span class="mod-checkbox"><input type="checkbox" id="start-shift"><span>Shift</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="start-alt"><span>Alt</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="start-alt"><span class="mod-alt-label">Alt</span></span>
         <input type="text" id="start-key" placeholder="Key" maxlength="20">
       </div>
     </div>
 
     <div class="shortcut-row">
-      <label>Clear/ESC:</label>
+      <label>Clear</label>
       <div class="shortcut-input">
-        <span class="mod-checkbox"><input type="checkbox" id="clear-ctrl"><span>Ctrl</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="clear-ctrl"><span class="mod-ctrl-label">Ctrl</span></span>
+        <span class="mod-checkbox mac-only"><input type="checkbox" id="clear-meta"><span>Cmd</span></span>
         <span class="mod-checkbox"><input type="checkbox" id="clear-shift"><span>Shift</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="clear-alt"><span>Alt</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="clear-alt"><span class="mod-alt-label">Alt</span></span>
         <input type="text" id="clear-key" placeholder="Key" maxlength="20">
       </div>
     </div>
 
     <div class="shortcut-row">
-      <label>Export:</label>
+      <label>Export</label>
       <div class="shortcut-input">
-        <span class="mod-checkbox"><input type="checkbox" id="export-ctrl"><span>Ctrl</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="export-ctrl"><span class="mod-ctrl-label">Ctrl</span></span>
+        <span class="mod-checkbox mac-only"><input type="checkbox" id="export-meta"><span>Cmd</span></span>
         <span class="mod-checkbox"><input type="checkbox" id="export-shift"><span>Shift</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="export-alt"><span>Alt</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="export-alt"><span class="mod-alt-label">Alt</span></span>
         <input type="text" id="export-key" placeholder="Key" maxlength="20">
       </div>
     </div>
 
-    <button id="save-shortcuts">Save Shortcuts</button>
-    <button id="reset-shortcuts">Reset to Defaults</button>
+    <div class="shortcut-row">
+      <label>Full Page</label>
+      <div class="shortcut-input">
+        <span class="mod-checkbox"><input type="checkbox" id="extract-ctrl"><span class="mod-ctrl-label">Ctrl</span></span>
+        <span class="mod-checkbox mac-only"><input type="checkbox" id="extract-meta"><span>Cmd</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="extract-shift"><span>Shift</span></span>
+        <span class="mod-checkbox"><input type="checkbox" id="extract-alt"><span class="mod-alt-label">Alt</span></span>
+        <input type="text" id="extract-key" placeholder="Key" maxlength="20">
+      </div>
+    </div>
+
+    <div class="settings-actions">
+      <button class="btn-save" id="save-shortcuts">Save Shortcuts</button>
+      <button class="btn-reset" id="reset-shortcuts">Reset</button>
+    </div>
   </div>
 
   <script src="popup.js"></script>
