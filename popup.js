@@ -2,53 +2,96 @@ const startBtn = document.getElementById("start");
 const clearBtn = document.getElementById("clear");
 const exportBtn = document.getElementById("export");
 const statusDiv = document.getElementById("status");
+const statusDot = document.getElementById("status-dot");
 const toggleSettings = document.getElementById("toggle-settings");
 const settingsPanel = document.getElementById("settings-panel");
 const saveShortcutsBtn = document.getElementById("save-shortcuts");
 const resetShortcutsBtn = document.getElementById("reset-shortcuts");
 const currentShortcutsDiv = document.getElementById("current-shortcuts");
 
-// Default shortcuts
+// Detect Mac platform
+const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0 || navigator.userAgent.includes('Mac');
+
+// Add Mac class to body for CSS
+if (isMac) {
+  document.body.classList.add('is-mac');
+  // Update Alt labels to Option on Mac
+  document.querySelectorAll('.mod-alt-label').forEach(el => { el.textContent = 'Opt'; });
+}
+
+// Default shortcuts - use Cmd on Mac, Ctrl on other platforms
 const DEFAULT_SHORTCUTS = {
-  startSelect: { ctrl: true, shift: true, alt: false, key: 'S' },
-  clearSelect: { ctrl: false, shift: false, alt: false, key: 'Escape' },
-  export: { ctrl: true, shift: true, alt: false, key: 'E' }
+  startSelect: { ctrl: !isMac, shift: true, alt: false, meta: isMac, key: 'S' },
+  clearSelect: { ctrl: false, shift: false, alt: false, meta: false, key: 'Escape' },
+  export: { ctrl: !isMac, shift: true, alt: false, meta: isMac, key: 'E' },
+  extractPage: { ctrl: !isMac, shift: true, alt: false, meta: isMac, key: 'X' }
 };
 
 // Format shortcut for display
 function formatShortcut(shortcut) {
   const parts = [];
-  if (shortcut.ctrl) parts.push('Ctrl');
-  if (shortcut.shift) parts.push('Shift');
-  if (shortcut.alt) parts.push('Alt');
+  if (shortcut.meta) parts.push(isMac ? '\u2318' : 'Meta');
+  if (shortcut.ctrl) parts.push(isMac ? '\u2303' : 'Ctrl');
+  if (shortcut.shift) parts.push(isMac ? '\u21E7' : 'Shift');
+  if (shortcut.alt) parts.push(isMac ? '\u2325' : 'Alt');
   parts.push(shortcut.key === 'Escape' ? 'ESC' : shortcut.key.toUpperCase());
-  return parts.join('+');
+  return parts.join(isMac ? '' : '+');
 }
 
-// Display current shortcuts
+// Display current shortcuts as pills
 function displayCurrentShortcuts(shortcuts) {
-  currentShortcutsDiv.textContent = `Shortcuts: ${formatShortcut(shortcuts.startSelect)} (select), ${formatShortcut(shortcuts.clearSelect)} (clear), ${formatShortcut(shortcuts.export)} (export)`;
+  const ep = shortcuts.extractPage || DEFAULT_SHORTCUTS.extractPage;
+  const items = [
+    { label: 'Select', shortcut: shortcuts.startSelect },
+    { label: 'Clear', shortcut: shortcuts.clearSelect },
+    { label: 'Export', shortcut: shortcuts.export },
+    { label: 'Full Page', shortcut: ep }
+  ];
+  currentShortcutsDiv.innerHTML = items.map(item =>
+    `<span class="shortcut-pill"><kbd>${formatShortcut(item.shortcut)}</kbd><span class="pill-label">${item.label}</span></span>`
+  ).join('');
+}
+
+// Set status with dot state
+function setStatus(text, active) {
+  statusDiv.textContent = text;
+  if (active) {
+    statusDot.classList.add('active');
+  } else {
+    statusDot.classList.remove('active');
+  }
 }
 
 // Load shortcuts into UI
 function loadShortcutsToUI(shortcuts) {
   // Start Select
-  document.getElementById('start-ctrl').checked = shortcuts.startSelect.ctrl;
-  document.getElementById('start-shift').checked = shortcuts.startSelect.shift;
-  document.getElementById('start-alt').checked = shortcuts.startSelect.alt;
+  document.getElementById('start-ctrl').checked = !!shortcuts.startSelect.ctrl;
+  document.getElementById('start-meta').checked = !!shortcuts.startSelect.meta;
+  document.getElementById('start-shift').checked = !!shortcuts.startSelect.shift;
+  document.getElementById('start-alt').checked = !!shortcuts.startSelect.alt;
   document.getElementById('start-key').value = shortcuts.startSelect.key;
 
   // Clear Select
-  document.getElementById('clear-ctrl').checked = shortcuts.clearSelect.ctrl;
-  document.getElementById('clear-shift').checked = shortcuts.clearSelect.shift;
-  document.getElementById('clear-alt').checked = shortcuts.clearSelect.alt;
+  document.getElementById('clear-ctrl').checked = !!shortcuts.clearSelect.ctrl;
+  document.getElementById('clear-meta').checked = !!shortcuts.clearSelect.meta;
+  document.getElementById('clear-shift').checked = !!shortcuts.clearSelect.shift;
+  document.getElementById('clear-alt').checked = !!shortcuts.clearSelect.alt;
   document.getElementById('clear-key').value = shortcuts.clearSelect.key;
 
   // Export
-  document.getElementById('export-ctrl').checked = shortcuts.export.ctrl;
-  document.getElementById('export-shift').checked = shortcuts.export.shift;
-  document.getElementById('export-alt').checked = shortcuts.export.alt;
+  document.getElementById('export-ctrl').checked = !!shortcuts.export.ctrl;
+  document.getElementById('export-meta').checked = !!shortcuts.export.meta;
+  document.getElementById('export-shift').checked = !!shortcuts.export.shift;
+  document.getElementById('export-alt').checked = !!shortcuts.export.alt;
   document.getElementById('export-key').value = shortcuts.export.key;
+
+  // Extract Page
+  const ep = shortcuts.extractPage || DEFAULT_SHORTCUTS.extractPage;
+  document.getElementById('extract-ctrl').checked = !!ep.ctrl;
+  document.getElementById('extract-meta').checked = !!ep.meta;
+  document.getElementById('extract-shift').checked = !!ep.shift;
+  document.getElementById('extract-alt').checked = !!ep.alt;
+  document.getElementById('extract-key').value = ep.key;
 
   displayCurrentShortcuts(shortcuts);
 }
@@ -58,47 +101,63 @@ function getShortcutsFromUI() {
   return {
     startSelect: {
       ctrl: document.getElementById('start-ctrl').checked,
+      meta: document.getElementById('start-meta').checked,
       shift: document.getElementById('start-shift').checked,
       alt: document.getElementById('start-alt').checked,
       key: document.getElementById('start-key').value || 'S'
     },
     clearSelect: {
       ctrl: document.getElementById('clear-ctrl').checked,
+      meta: document.getElementById('clear-meta').checked,
       shift: document.getElementById('clear-shift').checked,
       alt: document.getElementById('clear-alt').checked,
       key: document.getElementById('clear-key').value || 'Escape'
     },
     export: {
       ctrl: document.getElementById('export-ctrl').checked,
+      meta: document.getElementById('export-meta').checked,
       shift: document.getElementById('export-shift').checked,
       alt: document.getElementById('export-alt').checked,
       key: document.getElementById('export-key').value || 'E'
+    },
+    extractPage: {
+      ctrl: document.getElementById('extract-ctrl').checked,
+      meta: document.getElementById('extract-meta').checked,
+      shift: document.getElementById('extract-shift').checked,
+      alt: document.getElementById('extract-alt').checked,
+      key: document.getElementById('extract-key').value || 'X'
     }
   };
 }
 
-// Load saved shortcuts on popup open
+// Load saved shortcuts on popup open (migrate old shortcuts missing meta field)
 chrome.storage.sync.get(['shortcuts'], (result) => {
-  const shortcuts = result.shortcuts || DEFAULT_SHORTCUTS;
+  let shortcuts = result.shortcuts || DEFAULT_SHORTCUTS;
+  // Migrate old shortcuts that don't have meta field
+  for (const key of Object.keys(shortcuts)) {
+    if (shortcuts[key] && shortcuts[key].meta === undefined) {
+      shortcuts[key].meta = false;
+    }
+  }
   loadShortcutsToUI(shortcuts);
 });
 
 // Toggle settings panel
 toggleSettings.addEventListener('click', () => {
   settingsPanel.classList.toggle('visible');
-  toggleSettings.textContent = settingsPanel.classList.contains('visible')
-    ? 'Hide Shortcuts'
-    : 'Customize Shortcuts';
+  toggleSettings.classList.toggle('open');
+  const isOpen = settingsPanel.classList.contains('visible');
+  toggleSettings.innerHTML = `<span class="arrow">&#9654;</span> ${isOpen ? 'Hide Shortcuts' : 'Customize Shortcuts'}`;
 });
 
 // Save shortcuts
 saveShortcutsBtn.addEventListener('click', () => {
   const shortcuts = getShortcutsFromUI();
   chrome.storage.sync.set({ shortcuts }, () => {
-    statusDiv.textContent = 'Shortcuts saved!';
+    setStatus('Shortcuts saved!', true);
     displayCurrentShortcuts(shortcuts);
     setTimeout(() => {
-      statusDiv.textContent = 'Selection mode active. Click elements to select.';
+      setStatus('Selection mode active', true);
     }, 1500);
   });
 });
@@ -107,15 +166,15 @@ saveShortcutsBtn.addEventListener('click', () => {
 resetShortcutsBtn.addEventListener('click', () => {
   loadShortcutsToUI(DEFAULT_SHORTCUTS);
   chrome.storage.sync.set({ shortcuts: DEFAULT_SHORTCUTS }, () => {
-    statusDiv.textContent = 'Shortcuts reset to defaults!';
+    setStatus('Shortcuts reset to defaults!', false);
     setTimeout(() => {
-      statusDiv.textContent = 'Selection mode active. Click elements to select.';
+      setStatus('Selection mode active', true);
     }, 1500);
   });
 });
 
 // Handle key input - capture actual key pressed
-['start-key', 'clear-key', 'export-key'].forEach(id => {
+['start-key', 'clear-key', 'export-key', 'extract-key'].forEach(id => {
   const input = document.getElementById(id);
   input.addEventListener('keydown', (e) => {
     e.preventDefault();
@@ -144,7 +203,7 @@ function isTabCompatible(tab) {
 
 async function sendMessageToTab(tab, message, callback) {
   if (!isTabCompatible(tab)) {
-    statusDiv.textContent = "Extension doesn't work on this page type.";
+    setStatus("Can't run on this page type", false);
     callback(null);
     return;
   }
@@ -196,7 +255,7 @@ async function sendMessageToTab(tab, message, callback) {
     // Fallback
     chrome.tabs.sendMessage(tab.id, message, (response) => {
       if (chrome.runtime.lastError) {
-        statusDiv.textContent = `Error: ${chrome.runtime.lastError.message}`;
+        setStatus(`Error: ${chrome.runtime.lastError.message}`, false);
         callback(null);
         return;
       }
@@ -209,7 +268,7 @@ function activateSelectionMode() {
   getActiveTab((tab) => {
     sendMessageToTab(tab, { type: "START_PICK_MODE" }, (response) => {
       if (!response) return;
-      statusDiv.textContent = "Selection mode active. Click elements to select.";
+      setStatus("Selection mode active", true);
     });
   });
 }
@@ -223,7 +282,7 @@ clearBtn.addEventListener("click", () => {
   getActiveTab((tab) => {
     sendMessageToTab(tab, { type: "CLEAR_SELECTION" }, (response) => {
       if (response) {
-        statusDiv.textContent = "Selection cleared.";
+        setStatus("Selection cleared", false);
       }
     });
   });
@@ -233,7 +292,7 @@ exportBtn.addEventListener("click", () => {
   getActiveTab((tab) => {
     sendMessageToTab(tab, { type: "EXPORT_SELECTION" }, (response) => {
       if (!response || !response.toon) {
-        statusDiv.textContent = "No elements selected.";
+        setStatus("No elements selected", false);
         return;
       }
 
@@ -257,7 +316,7 @@ exportBtn.addEventListener("click", () => {
         URL.revokeObjectURL(htmlUrl);
       }, 100);
 
-      statusDiv.textContent = "Exported! TOON for Claude, HTML for preview.";
+      setStatus("Exported! .toon + .html downloaded", true);
     });
   });
 });
