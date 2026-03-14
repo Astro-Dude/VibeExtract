@@ -3,7 +3,7 @@
   "name": "VibeExtract",
   "version": "1.0.0",
   "description": "Select elements on web pages and export them as a standalone HTML file with inline styles.",
-  "permissions": ["activeTab", "scripting", "webNavigation", "storage", "downloads"],
+  "permissions": ["activeTab", "scripting", "webNavigation", "storage", "downloads", "clipboardWrite"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html"
