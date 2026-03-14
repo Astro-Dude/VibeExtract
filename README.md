@@ -16,14 +16,16 @@ Point. Click. Extract. VibeExtract captures the full visual fidelity of any UI c
 - **Shift+Click** to multi-select multiple elements
 - **Hover highlighting** shows elements with a red outline as you move your mouse
 - **Visual overlay** covers all selected elements with a blue bounding box
+- **Auto-activates** selection mode when the popup opens — no extra clicks
 
 ### DOM Navigation
 - **Alt/Opt + Arrow Up** — navigate to the parent element
 - **Alt/Opt + Arrow Down** — navigate to the first child element
-- Auto-selects the navigated element so you can quickly drill up to `<body>` for a full-page grab
+- **Scroll navigation** — scroll while hovering to move through sibling/parent elements
+- Auto-selects the navigated element so you can quickly drill up or down the DOM tree
 
 ### Full Page Export
-- One shortcut to select `<body>` and export the entire page instantly
+- One shortcut (`Cmd+Shift+X` / `Ctrl+Shift+X`) to select `<body>` and export the entire page instantly
 
 ### Smart Style Capture
 - **Computed styles** extracted and deduplicated into shared CSS classes
@@ -33,13 +35,29 @@ Point. Click. Extract. VibeExtract captures the full visual fidelity of any UI c
 - **Icon fonts** auto-detected (Material Icons, Material Symbols, Font Awesome)
 - **Layout preservation** — strict sizing for media, fluid sizing for text
 - **RGB to hex** conversion, transparent color removal, default value pruning
+- **Primary font detection** — identifies and displays the dominant font used in exports
 
 ### Shadow DOM & iframe Support
 - Works inside open Shadow DOM elements
-- Broadcasts commands across all frames/iframes
+- Broadcasts commands across all frames/iframes on the page
 
 ### Dynamic Content Freezing
 - Elements are cloned at selection time, so rotating content (like GitHub ProTips) is captured exactly as you see it
+
+### Export Preview Page
+- On export, a new tab opens with three views:
+  - **Preview** — live rendered HTML preview of the captured component, auto-sized to content
+  - **HTML** — syntax-highlighted source with copy button, file size, and detected primary font
+  - **TOON** — the LLM-optimized format with copy button, file size, and detected primary font
+- **Save .html** — downloads the HTML file
+- **Save .toon** — downloads the TOON file
+- **Save Both** — downloads both files at once
+- **Clipboard auto-copy** — after each save, the full file path is automatically copied to your clipboard so you can paste it directly into Claude or any tool
+
+### Cross-Platform Shortcuts
+- All shortcuts adapt to your platform: **Cmd** on Mac, **Ctrl** on Windows/Linux
+- **Alt** label changes to **Opt** on Mac
+- Fully customizable from the popup settings panel
 
 ## Keyboard Shortcuts
 
@@ -67,13 +85,13 @@ All shortcuts are fully customizable from the popup settings panel.
 1. Click the VibeExtract icon in your toolbar (auto-enters selection mode)
 2. Hover over elements to preview, click to select
 3. Use **Shift+Click** to add more elements, **Alt+Arrows** to navigate the DOM tree
-4. Press **Export** or hit the export shortcut — two files download:
-   - `component.toon` — feed this to Claude or any LLM
-   - `preview.html` — open in browser to verify the capture
+4. Press **Export** or hit the export shortcut
+5. A new tab opens with Preview, HTML, and TOON views
+6. Pick your format and download — the file path is copied to your clipboard automatically
 
 ### Full Page Workflow
 
-Hit `Cmd+Shift+X` / `Ctrl+Shift+X` to grab the entire page in one keystroke.
+Hit `Cmd+Shift+X` / `Ctrl+Shift+X` to grab the entire page in one keystroke. The export tab opens immediately.
 
 ### Customize Shortcuts
 
@@ -96,6 +114,7 @@ A standalone HTML file with all CSS inlined, font imports included, and box-sizi
 | `webNavigation` | Support iframe/frame selection |
 | `storage` | Persist your custom shortcuts |
 | `downloads` | Save the exported `.toon` and `.html` files |
+| `clipboardWrite` | Auto-copy saved file paths to clipboard |
 
 ## License
 
