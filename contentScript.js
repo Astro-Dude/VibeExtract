@@ -445,14 +445,15 @@ function downloadFiles(toonContent, htmlContent) {
   }
 
   chrome.runtime.sendMessage({
-    type: 'DOWNLOAD_FILES',
+    type: 'OPEN_EXPORT_TAB',
     toon: toonContent,
-    html: htmlContent
+    html: htmlContent,
+    sourceURL: window.location.href
   }, (response) => {
     if (chrome.runtime.lastError) {
-      console.error("[VibeExtract] Download error:", chrome.runtime.lastError);
+      console.error("[VibeExtract] Export error:", chrome.runtime.lastError);
     } else {
-      console.log("[VibeExtract] Download initiated via background script");
+      console.log("[VibeExtract] Export tab opened");
     }
   });
 }
@@ -1731,9 +1732,7 @@ function buildExport() {
   }
 
   // Build TOON output
-  let toon = `# Component Structure (TOON format)
-# Paste to Claude: "Replicate this component in React/Vue/Tailwind"
-# Format: tag.class[inline-style] (attrs) "text" { children }
+  let toon = `
 
 ## Styles\n`;
 
@@ -1983,6 +1982,7 @@ try {
     sendResponse({ injected: true });
     return true;
   }
+
 
   if (msg.type === "START_PICK_MODE") {
     pickMode = true;

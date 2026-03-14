@@ -296,27 +296,16 @@ exportBtn.addEventListener("click", () => {
         return;
       }
 
-      // Download TOON (for Claude - token optimized)
-      const toonBlob = new Blob([response.toon], { type: "text/plain" });
-      const toonUrl = URL.createObjectURL(toonBlob);
-      const toonLink = document.createElement("a");
-      toonLink.href = toonUrl;
-      toonLink.download = "component.toon";
-      toonLink.click();
-      URL.revokeObjectURL(toonUrl);
+      // Store export data and open the export page in a new tab
+      chrome.storage.local.set({
+        exportHTML: response.html,
+        exportTOON: response.toon,
+        exportSourceURL: tab.url || ''
+      }, () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL('export.html') });
+      });
 
-      // Download HTML (for preview)
-      setTimeout(() => {
-        const htmlBlob = new Blob([response.html], { type: "text/html" });
-        const htmlUrl = URL.createObjectURL(htmlBlob);
-        const htmlLink = document.createElement("a");
-        htmlLink.href = htmlUrl;
-        htmlLink.download = "preview.html";
-        htmlLink.click();
-        URL.revokeObjectURL(htmlUrl);
-      }, 100);
-
-      setStatus("Exported! .toon + .html downloaded", true);
+      setStatus("Opening export page...", true);
     });
   });
 });

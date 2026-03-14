@@ -1,33 +1,17 @@
-// Background script for handling downloads
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'DOWNLOAD_FILES') {
-    const { toon, html } = message;
+// Background script for VibeExtract
 
-    // Download TOON file using application/octet-stream to preserve extension
-    const toonBlob = new Blob([toon], { type: 'application/octet-stream' });
-    const toonReader = new FileReader();
-    toonReader.onload = () => {
-      chrome.downloads.download({
-        url: toonReader.result,
-        filename: 'component.toon',
-        saveAs: false,
-        conflictAction: 'uniquify'
-      }, () => {
-        // Download HTML file after TOON
-        const htmlBlob = new Blob([html], { type: 'text/html' });
-        const htmlReader = new FileReader();
-        htmlReader.onload = () => {
-          chrome.downloads.download({
-            url: htmlReader.result,
-            filename: 'preview.html',
-            saveAs: false,
-            conflictAction: 'uniquify'
-          });
-        };
-        htmlReader.readAsDataURL(htmlBlob);
-      });
-    };
-    toonReader.readAsDataURL(toonBlob);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Content script requests to open the export tab
+  if (message.type === 'OPEN_EXPORT_TAB') {
+    const { toon, html, sourceURL } = message;
+
+    chrome.storage.local.set({
+      exportHTML: html,
+      exportTOON: toon,
+      exportSourceURL: sourceURL || ''
+    }, () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('export.html') });
+    });
 
     sendResponse({ ok: true });
     return true;
