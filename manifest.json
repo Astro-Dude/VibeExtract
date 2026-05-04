@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VibeExtract",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "Select elements on web pages and export them as a standalone HTML file with inline styles.",
   "permissions": ["activeTab", "scripting", "webNavigation", "storage", "downloads", "clipboardWrite"],
   "host_permissions": ["<all_urls>"],

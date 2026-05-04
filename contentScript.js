@@ -1216,20 +1216,20 @@ function getCompactStyles(el, isRoot = false, parentComputed = null) {
   const positionValue = computed.getPropertyValue('position');
   const isListElement = ['ul', 'ol', 'li'].includes(tagName);
 
-  // Get border values to check if border should be rendered
-  const borderWidth = computed.getPropertyValue('border-width');
+  // Get border values to check if border should be rendered.
+  // Capture a border whenever it is visible: any style other than `none`/`hidden`
+  // and any width > 0. We previously also compared border-color to text-color
+  // and dropped matches, but that silently killed intentional same-color
+  // accents (e.g. the green flight-time line "12:59pm —— 2:24pm" uses
+  // `border-top: 2px solid currentColor` with `color: green`).
   const borderStyle = computed.getPropertyValue('border-style');
-  const borderColor = computed.getPropertyValue('border-color');
-  const textColor = computed.getPropertyValue('color');
-
-  // Check if border has meaningful styling (not just inheriting from text color)
-  const hasVisibleBorder = borderWidth !== '0px' && borderStyle !== 'none';
-  // Border color often inherits from text color - only keep border if colors differ significantly
-  // or if border-color is explicitly a neutral/gray color
-  const borderColorHex = rgbToHex(borderColor);
-  const textColorHex = rgbToHex(textColor);
-  const hasMeaningfulBorder = hasVisibleBorder && borderColorHex &&
-    (borderColorHex !== textColorHex || isNeutralColor(borderColorHex));
+  const borderTopWidth = parseFloat(computed.getPropertyValue('border-top-width')) || 0;
+  const borderRightWidth = parseFloat(computed.getPropertyValue('border-right-width')) || 0;
+  const borderBottomWidth = parseFloat(computed.getPropertyValue('border-bottom-width')) || 0;
+  const borderLeftWidth = parseFloat(computed.getPropertyValue('border-left-width')) || 0;
+  const anyBorderWidth = borderTopWidth + borderRightWidth + borderBottomWidth + borderLeftWidth;
+  const styleHasVisible = /\b(?:solid|dashed|dotted|double|groove|ridge|inset|outset)\b/.test(borderStyle);
+  const hasMeaningfulBorder = anyBorderWidth > 0 && styleHasVisible;
 
   // Process SHARED properties (go into CSS classes)
   for (const prop of SHARED_PROPS) {
@@ -1416,33 +1416,53 @@ function buildStructure(el, isRoot = false) {
     svgClone.querySelectorAll('.web-replica-hover, .web-replica-selected').forEach(node => {
       node.classList.remove('web-replica-hover', 'web-replica-selected');
     });
+    // Strip the original SVG's class attribute so styling comes from our
+    // captured shared style only — the original page's CSS class is gone.
+    svgClone.removeAttribute('class');
 
-    // Get computed dimensions and add inline styles to ensure SVG is visible
-    // Use originalEl for computed styles since clones aren't in the DOM
+    // Capture FULL shared styles for the SVG (position, top/left/right/bottom,
+    // margin, padding, transform, z-index, etc.) so field icons that relied
+    // on `.uitk-field-icon { position: absolute; left: 12px; top: 14px }`
+    // continue to render in the right spot.
+    const originalParentForSvg = originalEl.parentElement;
+    const parentComputedForSvg = (!isRoot && originalParentForSvg && originalParentForSvg.nodeType === Node.ELEMENT_NODE)
+      ? window.getComputedStyle(originalParentForSvg)
+      : null;
+    const svgStyles = getCompactStyles(originalEl, isRoot, parentComputedForSvg);
+
+    // Always also pin width / height / fill inline so the SVG renders at the
+    // displayed pixel dimensions regardless of what its parent's flex
+    // algorithm decides. Merge with whatever inline `style` the SVG already
+    // had on the page (which sometimes contains user-select / transform).
     const computed = window.getComputedStyle(originalEl);
     const width = computed.width;
     const height = computed.height;
     const fill = computed.fill;
-
-    // Add inline styles if not already present
     let existingStyle = svgClone.getAttribute('style') || '';
-    if (width && width !== 'auto' && !existingStyle.includes('width')) {
-      existingStyle += `width: ${width}; `;
+    if (existingStyle && !existingStyle.endsWith(';')) existingStyle += ';';
+    if (width && width !== 'auto' && !/\bwidth\s*:/.test(existingStyle)) {
+      existingStyle += `width: ${width};`;
     }
-    if (height && height !== 'auto' && !existingStyle.includes('height')) {
-      existingStyle += `height: ${height}; `;
+    if (height && height !== 'auto' && !/\bheight\s*:/.test(existingStyle)) {
+      existingStyle += `height: ${height};`;
     }
-    if (fill && fill !== 'none' && !existingStyle.includes('fill')) {
-      existingStyle += `fill: ${fill}; `;
+    if (fill && fill !== 'none' && !/\bfill\s*:/.test(existingStyle)) {
+      existingStyle += `fill: ${fill};`;
     }
     if (existingStyle) {
-      svgClone.setAttribute('style', existingStyle.trim());
+      svgClone.setAttribute('style', existingStyle.replace(/^;+/, '').trim());
     }
 
-    return {
-      tag: 'svg',
-      svg: svgClone.outerHTML
-    };
+    const node = { tag: 'svg', svg: svgClone.outerHTML };
+    if (svgStyles && svgStyles.shared) {
+      node.svgStyle = getOrCreateStyleName(svgStyles.shared);
+    }
+    if (svgStyles && svgStyles.inline) {
+      node.svgInline = Object.entries(svgStyles.inline)
+        .map(([prop, val]) => `${prop}: ${val}`)
+        .join('; ');
+    }
+    return node;
   }
 
   // Use originalEl for class manipulation and computed styles (clones aren't in DOM)
@@ -1633,6 +1653,23 @@ function buildStructure(el, isRoot = false) {
   if (el.type && (tagName === 'input' || tagName === 'button')) node.type = el.type;
   if (el.value && (tagName === 'input' || tagName === 'textarea')) node.value = el.value;
 
+  // Capture boolean HTML attributes when set on the original DOM element. Without
+  // these, <details> always renders collapsed (chart hidden), checkboxes always
+  // render unchecked, disabled controls render enabled, and pre-selected
+  // <option>s lose their selection. We read the IDL property because that
+  // reflects the live state, including any user interaction or JS-set value.
+  if (tagName === 'details' && el.open) node.open = true;
+  if ((tagName === 'input' || tagName === 'option') && el.checked) node.checked = true;
+  if ((tagName === 'option') && el.selected) node.selected = true;
+  if ((tagName === 'input' || tagName === 'textarea' || tagName === 'select' ||
+       tagName === 'button' || tagName === 'option' || tagName === 'fieldset') &&
+      el.disabled) node.disabled = true;
+  if ((tagName === 'input' || tagName === 'textarea') && el.readOnly) node.readonly = true;
+  if ((tagName === 'input' || tagName === 'textarea' || tagName === 'select') &&
+      el.required) node.required = true;
+  if (tagName === 'select' && el.multiple) node.multiple = true;
+  if (el.hasAttribute && el.hasAttribute('hidden')) node.hidden = true;
+
   // Capture aria-label for accessibility
   if (el.getAttribute('aria-label')) node.ariaLabel = el.getAttribute('aria-label');
 
@@ -1752,9 +1789,32 @@ function structureToHtml(node, indent = 0) {
   const pad = '  '.repeat(indent);
   const tag = node.tag;
 
-  // SVG - output the preserved outerHTML directly
+  // SVG - output the preserved outerHTML, but inject the captured shared
+  // class and any inline-only props (typically width/height/min-* from the
+  // dimension capture) into the <svg> tag so position/margin/transform/etc.
+  // from the original CSS class survive.
   if (node.svg) {
-    return `${pad}${node.svg}`;
+    let svgHtml = node.svg;
+    if (node.svgStyle) {
+      // Insert class="..." right after the opening <svg
+      if (/<svg\b[^>]*\bclass=/.test(svgHtml)) {
+        svgHtml = svgHtml.replace(/(<svg\b[^>]*\bclass=)"([^"]*)"/, `$1"$2 ${node.svgStyle}"`);
+      } else {
+        svgHtml = svgHtml.replace(/<svg\b/, `<svg class="${node.svgStyle}"`);
+      }
+    }
+    if (node.svgInline) {
+      // Append our inline style props to any existing style="..." on the svg
+      if (/<svg\b[^>]*\bstyle=/.test(svgHtml)) {
+        svgHtml = svgHtml.replace(/(<svg\b[^>]*\bstyle=)"([^"]*)"/, (m, pre, existing) => {
+          const trimmed = existing.replace(/;\s*$/, '');
+          return `${pre}"${trimmed ? trimmed + '; ' : ''}${node.svgInline}"`;
+        });
+      } else {
+        svgHtml = svgHtml.replace(/<svg\b/, `<svg style="${node.svgInline}"`);
+      }
+    }
+    return `${pad}${svgHtml}`;
   }
 
   // Build attributes: class (shared styles) + style (inline dimensions)
@@ -1793,6 +1853,19 @@ function structureToHtml(node, indent = 0) {
     attrs += ` style="${inlineStyleParts.join('; ')}"`;
   }
 
+  // Boolean HTML attributes — emitted as bare tokens (`open`, `checked`, ...)
+  // so <details>, checkboxes, radios, disabled controls, pre-selected options
+  // render in the same state they had on the original page.
+  let boolAttrs = '';
+  if (node.open) boolAttrs += ' open';
+  if (node.checked) boolAttrs += ' checked';
+  if (node.selected) boolAttrs += ' selected';
+  if (node.disabled) boolAttrs += ' disabled';
+  if (node.readonly) boolAttrs += ' readonly';
+  if (node.required) boolAttrs += ' required';
+  if (node.multiple) boolAttrs += ' multiple';
+  if (node.hidden) boolAttrs += ' hidden';
+
   // Self-closing tags
   if (['img', 'input', 'br', 'hr'].includes(tag)) {
     if (node.src) attrs += ` src="${node.src}"`;
@@ -1802,8 +1875,14 @@ function structureToHtml(node, indent = 0) {
     const placeholder = node.placeholder || node.ariaLabel;
     if (placeholder) attrs += ` placeholder="${escapeHtml(placeholder)}"`;
     if (node.value) attrs += ` value="${escapeHtml(node.value)}"`;
-    // For inputs, override tiny widths to show placeholder properly and ensure flex-grow
-    if (tag === 'input') {
+    // For TEXT inputs only, override tiny widths to show placeholder properly.
+    // Don't touch checkbox/radio/range/etc. — they need their captured size.
+    const isTextInput = tag === 'input' && (
+      !node.type ||
+      ['text', 'search', 'email', 'password', 'url', 'tel', 'number',
+       'date', 'time', 'datetime-local', 'month', 'week'].includes(node.type)
+    );
+    if (isTextInput) {
       const hasSmallWidth = node.inlineStyle && (node.inlineStyle.includes('width: 1px') || node.inlineStyle.includes('width: 0'));
       if (hasSmallWidth || !node.inlineStyle) {
         // Remove existing style if present and add proper width
@@ -1811,7 +1890,7 @@ function structureToHtml(node, indent = 0) {
         attrs += ` style="width: 100%; min-width: 0; flex-grow: 1;"`;
       }
     }
-    return `${pad}<${tag}${attrs}>`;
+    return `${pad}<${tag}${attrs}${boolAttrs}>`;
   }
 
   // Textarea needs placeholder and value
@@ -1819,11 +1898,12 @@ function structureToHtml(node, indent = 0) {
     const placeholder = node.placeholder || node.ariaLabel;
     if (placeholder) attrs += ` placeholder="${escapeHtml(placeholder)}"`;
     const content = node.value || node.text || '';
-    return `${pad}<${tag}${attrs}>${escapeHtml(content)}</${tag}>`;
+    return `${pad}<${tag}${attrs}${boolAttrs}>${escapeHtml(content)}</${tag}>`;
   }
 
   if (node.href) attrs += ` href="${node.href}"`;
   if (node.ariaLabel) attrs += ` aria-label="${node.ariaLabel}"`;
+  attrs += boolAttrs;
 
   // No children and just text - don't apply fixed width/height that could cause wrapping/clipping
   if (!node.children && node.text) {
@@ -1863,6 +1943,7 @@ function structureToHtml(node, indent = 0) {
     if (finalStyle) attrs += ` style="${finalStyle}"`;
     if (node.href) attrs += ` href="${node.href}"`;
     if (node.ariaLabel) attrs += ` aria-label="${node.ariaLabel}"`;
+    attrs += boolAttrs;
     return `${pad}<${tag}${attrs}>${node.text}</${tag}>`;
   }
 
@@ -2135,6 +2216,14 @@ function buildExport() {
     if (node.placeholder) attrs.push(`placeholder="${node.placeholder}"`);
     if (node.value) attrs.push(`value="${node.value}"`);
     if (node.ariaLabel) attrs.push(`aria-label="${node.ariaLabel}"`);
+    if (node.open) attrs.push(`open`);
+    if (node.checked) attrs.push(`checked`);
+    if (node.selected) attrs.push(`selected`);
+    if (node.disabled) attrs.push(`disabled`);
+    if (node.readonly) attrs.push(`readonly`);
+    if (node.required) attrs.push(`required`);
+    if (node.multiple) attrs.push(`multiple`);
+    if (node.hidden) attrs.push(`hidden`);
     if (node.isIcon) attrs.push(`icon`);
     if (attrs.length) toon += ` (${attrs.join(' ')})`;
 
@@ -2303,9 +2392,11 @@ li { list-style: none; background: inherit; color: inherit; }
 /* Ensure all elements inherit box-sizing and prevent overflow issues */
 *, *::before, *::after { box-sizing: border-box; }
 img, video, svg, canvas { max-width: 100%; }
-/* Fix button/input/link resets - inherit colors from parent */
+/* Fix button/input/link resets - inherit colors from parent.
+   Scope the input reset to *text-like* inputs: checkbox/radio/range/color/file
+   need their UA chrome to be visible at all, so we leave those alone. */
 button { background: transparent; border: none; cursor: pointer; color: inherit; padding: 0; }
-input { background: transparent; border: none; outline: none; color: inherit; min-width: 0; }
+input:where(:not([type]), [type="text"], [type="search"], [type="email"], [type="password"], [type="url"], [type="tel"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]) { background: transparent; border: none; outline: none; color: inherit; min-width: 0; }
 input::placeholder { color: inherit; opacity: 0.5; }
 a { color: inherit; text-decoration: inherit; }
 /* Ensure proper inline display */
