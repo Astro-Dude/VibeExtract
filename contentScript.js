@@ -8,6 +8,7 @@ let selectionClones = new Map(); // original element -> clone (captured at selec
 // --- Scroll-navigation state ---
 let isScrollNavigating = false;   // true when user has scrolled to override the natural hover target
 let scrollNavigatedElement = null; // the element currently reached via scroll navigation
+let wheelNavStack = [];            // stack of nodes visited via wheel-up, popped by wheel-down to backtrack
 
 // Debug: Log when script loads
 console.log('[VibeExtract] Content script loaded in frame:', window.location.href.substring(0, 100));
@@ -163,6 +164,7 @@ document.addEventListener(
       // Mouse moved to a different area — exit scroll navigation
       isScrollNavigating = false;
       scrollNavigatedElement = null;
+      wheelNavStack = [];
     }
 
     if (hoverElement && hoverElement !== actualTarget) {
@@ -196,6 +198,7 @@ document.addEventListener(
       hoverElement = null;
       isScrollNavigating = false;
       scrollNavigatedElement = null;
+      wheelNavStack = [];
       return;
     }
 
@@ -272,6 +275,94 @@ function toggleElement(el, shouldSelect) {
   updateOverlay();
 }
 
+// --- Smart container expansion ---
+// When a user clicks a small leaf element (input, overlay button, icon),
+// they usually mean "the visible field/card that contains it", not the leaf itself.
+// This walks up to the nearest visually-distinct ancestor that's meaningfully larger.
+// Bypassed by Alt+Click (exact target) and by Shift+Click (multi-select).
+function expandToMeaningfulContainer(el) {
+  if (!el || !el.tagName) return el;
+  const tag = el.tagName.toLowerCase();
+
+  // Already a structural container — don't expand.
+  if (['div', 'section', 'article', 'aside', 'nav', 'header', 'footer',
+       'main', 'form', 'fieldset', 'ul', 'ol', 'table', 'tbody', 'thead',
+       'tr'].includes(tag)) {
+    return el;
+  }
+
+  const cs = window.getComputedStyle(el);
+
+  // Rule A: Overlay button/anchor that's positioned absolute/fixed → use offsetParent.
+  // (This is the Expedia "Going to" overlay-button-on-top-of-a-real-input pattern.)
+  if ((tag === 'button' || tag === 'a') &&
+      (cs.position === 'absolute' || cs.position === 'fixed')) {
+    const op = el.offsetParent;
+    if (op && op !== document.body && op !== document.documentElement) {
+      const elArea = el.offsetWidth * el.offsetHeight;
+      const opArea = op.offsetWidth * op.offsetHeight;
+      if (opArea >= elArea * 1.05) return op;
+    }
+  }
+
+  // Rule B: Leaf-ish elements (form fields, icons, small buttons, plain text leaves).
+  // Walk up until we find a visually distinct wrapper or a structural ancestor.
+  const isLeafish = ['input', 'select', 'textarea', 'button', 'a', 'span',
+                     'img', 'svg', 'label', 'i', 'em', 'strong', 'p',
+                     'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag);
+  if (!isLeafish) return el;
+
+  const startW = el.offsetWidth || el.getBoundingClientRect().width;
+  const startH = el.offsetHeight || el.getBoundingClientRect().height;
+  const startArea = startW * startH;
+  if (!startArea) return el;
+
+  const vpArea = window.innerWidth * window.innerHeight;
+  const maxArea = vpArea * 0.4;     // don't expand beyond 40% of viewport
+  const minGrowth = 1.2;             // ancestor must be at least 20% larger
+
+  let current = el.parentElement;
+  let depth = 0;
+  let bestMatch = null;
+
+  while (current && current !== document.body && current !== document.documentElement && depth < 8) {
+    const ccs = window.getComputedStyle(current);
+    const cArea = current.offsetWidth * current.offsetHeight;
+
+    if (cArea > maxArea) break;
+    if (cArea < startArea * minGrowth) {
+      current = current.parentElement;
+      depth++;
+      continue;
+    }
+
+    // Visually distinct ancestor — has its own card-like styling
+    const hasBg = ccs.backgroundColor && ccs.backgroundColor !== 'rgba(0, 0, 0, 0)' && ccs.backgroundColor !== 'transparent';
+    const hasBorder = parseFloat(ccs.borderTopWidth) > 0 || parseFloat(ccs.borderLeftWidth) > 0;
+    const hasRadius = parseFloat(ccs.borderTopLeftRadius) > 0;
+    const hasShadow = ccs.boxShadow && ccs.boxShadow !== 'none';
+    const hasPadding = parseFloat(ccs.paddingTop) >= 4 || parseFloat(ccs.paddingLeft) >= 4;
+    const isVisuallyDistinct = hasBg || hasBorder || hasRadius || hasShadow || hasPadding;
+
+    const ctag = current.tagName.toLowerCase();
+    const isStructural = ['form', 'fieldset', 'label', 'li', 'tr', 'article',
+                          'section', 'header', 'footer', 'aside', 'nav'].includes(ctag);
+
+    if (isVisuallyDistinct || isStructural) {
+      bestMatch = current;
+      // Form inputs: stop at the first wrapper — usually the field card.
+      if (['input', 'select', 'textarea'].includes(tag)) return current;
+      // Otherwise also stop here; one level is normally enough.
+      return current;
+    }
+
+    current = current.parentElement;
+    depth++;
+  }
+
+  return bestMatch || el;
+}
+
 // --- Click handling (with Shadow DOM support) ---
 document.addEventListener(
   "mousedown",
@@ -287,12 +378,22 @@ document.addEventListener(
     // Inject styles into any shadow roots along the path (including closed ones!)
     ensureStylesInEventPath(path);
 
-    // If scroll-navigating, select the navigated element instead of deepest child
-    const el = isScrollNavigating ? scrollNavigatedElement : path[0];
+    // If scroll-navigating, select the navigated element instead of deepest child.
+    // Otherwise, smart-expand small leaf clicks to their visible container —
+    // unless Alt is held (exact-target escape hatch) or Shift is held (multi-select).
+    let el;
+    if (isScrollNavigating) {
+      el = scrollNavigatedElement;
+    } else if (e.altKey || e.shiftKey) {
+      el = path[0];
+    } else {
+      el = expandToMeaningfulContainer(path[0]);
+    }
 
     // Reset scroll navigation after click
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
 
     if (!el || !el.classList) return;
 
@@ -339,9 +440,23 @@ document.addEventListener(
     let targetElement = null;
 
     if (e.deltaY < 0) {
+      // Wheel-up: walk to parent, push current onto the back-stack so wheel-down can return.
       targetElement = getScrollParent(hoverElement);
+      if (targetElement && targetElement !== hoverElement) {
+        wheelNavStack.push(hoverElement);
+      }
     } else if (e.deltaY > 0) {
-      targetElement = getFirstElementChild(hoverElement);
+      // Wheel-down: prefer popping the back-stack (return to where we came from).
+      // Only honour the stack if the top is still a descendant of where we are now —
+      // otherwise the stack is stale (mouse moved, etc.) and we fall through to first child.
+      const top = wheelNavStack[wheelNavStack.length - 1];
+      if (top && top !== hoverElement && hoverElement && hoverElement.contains(top)) {
+        targetElement = top;
+        wheelNavStack.pop();
+      } else {
+        wheelNavStack = [];
+        targetElement = getFirstElementChild(hoverElement);
+      }
     }
 
     if (!targetElement || !targetElement.classList) return;
@@ -558,6 +673,7 @@ document.addEventListener("keydown", (e) => {
       pickMode = false;
       isScrollNavigating = false;
       scrollNavigatedElement = null;
+      wheelNavStack = [];
       showModeIndicator('Selection cleared');
       console.log("[VibeExtract] Selection cleared");
       return false;
@@ -620,8 +736,18 @@ document.addEventListener("keydown", (e) => {
     let targetElement = null;
     if (e.key === 'ArrowUp') {
       targetElement = getScrollParent(hoverElement);
+      if (targetElement && targetElement !== hoverElement) {
+        wheelNavStack.push(hoverElement);
+      }
     } else {
-      targetElement = getFirstElementChild(hoverElement);
+      const top = wheelNavStack[wheelNavStack.length - 1];
+      if (top && top !== hoverElement && hoverElement && hoverElement.contains(top)) {
+        targetElement = top;
+        wheelNavStack.pop();
+      } else {
+        wheelNavStack = [];
+        targetElement = getFirstElementChild(hoverElement);
+      }
     }
 
     if (!targetElement || !targetElement.classList) return false;
@@ -1953,6 +2079,7 @@ window.addEventListener('message', async (event) => {
     pickMode = true;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
     result = { ok: true };
   } else if (msg.type === "CLEAR_SELECTION") {
     selectedElements.forEach((el) => el.classList.remove("web-replica-selected"));
@@ -1962,6 +2089,7 @@ window.addEventListener('message', async (event) => {
     pickMode = false;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
     result = { ok: true };
   } else if (msg.type === "EXPORT_SELECTION") {
     result = buildExport();
@@ -1988,6 +2116,7 @@ try {
     pickMode = true;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
     if (hoverElement) {
       hoverElement.classList.remove("web-replica-hover");
       hoverElement = null;
@@ -2019,6 +2148,7 @@ try {
     pickMode = false;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
     if (hoverElement) {
       hoverElement.classList.remove("web-replica-hover");
       hoverElement = null;
