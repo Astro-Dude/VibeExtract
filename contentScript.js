@@ -565,7 +565,7 @@ function isExtensionContextValid() {
 }
 
 // Download files via background script (bypasses CSP restrictions)
-function downloadFiles(toonContent, htmlContent) {
+function downloadFiles(toonContent, htmlContent, diagnostics) {
   if (!isExtensionContextValid()) {
     console.warn("[VibeExtract] Extension context invalidated. Please refresh the page.");
     alert("VibeExtract: Extension was reloaded. Please refresh this page to continue using the extension.");
@@ -576,6 +576,7 @@ function downloadFiles(toonContent, htmlContent) {
     type: 'OPEN_EXPORT_TAB',
     toon: toonContent,
     html: htmlContent,
+    diagnostics: diagnostics || null,
     sourceURL: window.location.href
   }, (response) => {
     if (chrome.runtime.lastError) {
@@ -595,7 +596,7 @@ function performExport() {
       console.log("[VibeExtract] Export data generated, downloading...");
 
       // Download both files via background script
-      downloadFiles(result.toon, result.html);
+      downloadFiles(result.toon, result.html, result.diagnostics);
 
       console.log("[VibeExtract] Export complete");
       return true;
@@ -1406,6 +1407,7 @@ function buildStructure(el, isRoot = false) {
   if (!isRoot && !isElementVisible(computed)) {
     if (hadHover) originalEl.classList.add("web-replica-hover");
     if (hadSelected) originalEl.classList.add("web-replica-selected");
+    if (_exportDiag) _exportDiag.filteredCount++;
     return null;
   }
 
@@ -1541,6 +1543,7 @@ function buildStructure(el, isRoot = false) {
         const isEmptySpan = childNode.tag === 'span' && !hasText && !hasChildren && !hasSvg && !hasImage && !hasPseudoBg;
 
         if (isEmptySpan) {
+          if (_exportDiag) _exportDiag.emptySpansSkipped++;
           continue; // Skip empty decorative spans
         }
 
@@ -1883,6 +1886,11 @@ function captureLayoutParentStyles(parent, hasPositionedChildren) {
   return captured;
 }
 
+// Diagnostics object collected during one buildExport pass. When non-null,
+// buildStructure increments counters as it filters nodes. Reset at the start
+// of every buildExport call.
+let _exportDiag = null;
+
 // Global map to link clones back to originals (for style computation)
 let cloneToOriginal = new Map();
 
@@ -1907,7 +1915,20 @@ function buildExport() {
   resetStyleRegistry();
   cloneToOriginal = new Map();
 
+  _exportDiag = {
+    selectionCount: 0,
+    groupCount: 0,
+    wrapperCount: 0,
+    filteredCount: 0,
+    emptySpansSkipped: 0,
+    selections: [],
+    styleCount: 0,
+    pseudoStyleCount: 0,
+    hoverStyleCount: 0,
+  };
+
   const topLevel = getTopLevelSelections();
+  _exportDiag.selectionCount = topLevel.length;
 
   // Group top-level selections by their LAYOUT parent (parentElement, or
   // offsetParent for position:absolute|fixed). Siblings sharing a parent will
@@ -1926,7 +1947,7 @@ function buildExport() {
   }
 
   const structures = [];
-  let exportDiagFiltered = 0; // populated by Tier 5 later — for now just counted here.
+  _exportDiag.groupCount = groups.size;
 
   for (const { parent, originals } of groups.values()) {
     const childStructures = [];
@@ -1939,10 +1960,24 @@ function buildExport() {
       buildCloneMapping(original, clone, cloneToOriginal);
 
       const structure = buildStructure(clone, true);
-      if (!structure) {
-        exportDiagFiltered++;
-        continue;
-      }
+
+      // Diagnostics: record what was selected
+      const rect = original.getBoundingClientRect();
+      const className = (typeof original.className === 'string')
+        ? original.className.split(/\s+/).filter(c => c && !c.startsWith('web-replica-')).slice(0, 3).join(' ').slice(0, 60)
+        : '';
+      _exportDiag.selections.push({
+        tag: original.tagName.toLowerCase(),
+        className,
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+        wrapped: !!parent,
+        kept: !!structure,
+      });
+
+      if (!structure) continue;
 
       const ocs = window.getComputedStyle(original);
       if (ocs.position === 'absolute' || ocs.position === 'fixed') {
@@ -1964,6 +1999,7 @@ function buildExport() {
         children: childStructures.map(({ structure }) => structure),
       };
       structures.push(wrapper);
+      _exportDiag.wrapperCount++;
     } else {
       // No useful parent context. Push children as-is, but normalize any
       // root-level position:absolute|fixed so its top/right/bottom/left
@@ -2257,9 +2293,16 @@ ${bodyHtml}
 </body>
 </html>`;
 
+  _exportDiag.styleCount = styleRegistry.size;
+  _exportDiag.pseudoStyleCount = pseudoStyleRegistry.size;
+  _exportDiag.hoverStyleCount = hoverStyleRegistry.size;
+  const diagnostics = _exportDiag;
+  _exportDiag = null;
+
   return {
     toon,  // TOON format for LLMs (more token-efficient)
-    html
+    html,
+    diagnostics
   };
 }
 

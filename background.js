@@ -3,12 +3,13 @@
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Content script requests to open the export tab
   if (message.type === 'OPEN_EXPORT_TAB') {
-    const { toon, html, sourceURL } = message;
+    const { toon, html, sourceURL, diagnostics } = message;
 
     chrome.storage.local.set({
       exportHTML: html,
       exportTOON: toon,
-      exportSourceURL: sourceURL || ''
+      exportSourceURL: sourceURL || '',
+      exportDiagnostics: diagnostics || null
     }, () => {
       chrome.tabs.create({ url: chrome.runtime.getURL('export.html') });
     });
