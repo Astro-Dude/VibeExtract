@@ -1262,17 +1262,25 @@ function getCompactStyles(el, isRoot = false) {
 
       // Width Handling
       if (width > 0) {
-          if (isMedia || !isFluid) {
-              // STRICT STRATEGY: For media and structure (divs), lock the width.
-              // This preserves the page layout grid.
+          if (isMedia) {
+              // Media (img/video/iframe/input/etc.): keep the displayed pixel size.
               inline['width'] = `${width}px`;
-              // We also capture min-width to prevent shrinking below this point in flex contexts
               inline['min-width'] = `${width}px`;
+          } else if (!isFluid) {
+              // Structural (div/section/etc.): start at displayed pixel width.
+              // For root selections, allow shrinking to fit the export iframe;
+              // inner structural divs keep min-width so flex children don't collapse.
+              inline['width'] = `${width}px`;
+              if (isRoot) {
+                  inline['max-width'] = '100%';
+              } else {
+                  inline['min-width'] = `${width}px`;
+              }
           } else {
               // FLUID STRATEGY: For text elements, use min-width + auto.
               // This fixes the text overflow issue.
               inline['min-width'] = `${width}px`;
-              inline['flex-basis'] = 'auto'; 
+              inline['flex-basis'] = 'auto';
               inline['width'] = 'auto';
           }
       }
@@ -1820,6 +1828,55 @@ function structureToHtml(node, indent = 0) {
   return html;
 }
 
+// --- Layout parent helpers (Tier 3 parent-context wrapper) ---
+// For non-positioned elements, the layout parent is parentElement.
+// For position:absolute|fixed elements, it's offsetParent (the containing
+// block whose top/right/bottom/left coordinates resolve against).
+function getLayoutParent(el) {
+  if (!el) return null;
+  const cs = window.getComputedStyle(el);
+  if (cs.position === 'absolute' || cs.position === 'fixed') {
+    return el.offsetParent || el.parentElement;
+  }
+  return el.parentElement;
+}
+
+const LAYOUT_PARENT_PROPS = [
+  'display',
+  'flex-direction', 'flex-wrap', 'justify-content', 'align-items',
+  'align-content', 'gap', 'row-gap', 'column-gap',
+  'grid-template-columns', 'grid-template-rows', 'grid-auto-flow',
+  'grid-auto-columns', 'grid-auto-rows',
+  'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'background-color',
+  'position',
+  'border-radius',
+];
+
+function captureLayoutParentStyles(parent, hasPositionedChildren) {
+  if (!parent) return {};
+  const cs = window.getComputedStyle(parent);
+  const captured = {};
+  for (const prop of LAYOUT_PARENT_PROPS) {
+    let value = cs.getPropertyValue(prop);
+    if (isDefaultValue(prop, value)) continue;
+    if (prop === 'position' && value === 'static') continue;
+    if (prop.includes('color') || prop === 'background-color') {
+      const hex = rgbToHex(value);
+      if (!hex) continue;
+      value = hex;
+    }
+    captured[prop] = value;
+  }
+  // Wrapper must establish a containing block when its children are absolute/fixed.
+  if (hasPositionedChildren && (!captured['position'] || captured['position'] === 'static')) {
+    captured['position'] = 'relative';
+  }
+  // Ensure the wrapper participates in normal flow with at least block display
+  // (a wrapper without an explicit display defaults to block, which is fine).
+  return captured;
+}
+
 // Global map to link clones back to originals (for style computation)
 let cloneToOriginal = new Map();
 
@@ -1846,23 +1903,75 @@ function buildExport() {
 
   const topLevel = getTopLevelSelections();
 
-  // USE SELECTION-TIME CLONES: These were captured when user clicked, freezing dynamic content
-  // This ensures rotating content (like GitHub ProTips) shows what user saw at selection time
-  const clones = topLevel.map(el => {
-    // Use the clone captured at selection time, or fall back to cloning now
-    const clone = selectionClones.get(el) || el.cloneNode(true);
-    // Build mapping from clone nodes to original nodes for style computation
-    buildCloneMapping(el, clone, cloneToOriginal);
-    return clone;
-  });
+  // Group top-level selections by their LAYOUT parent (parentElement, or
+  // offsetParent for position:absolute|fixed). Siblings sharing a parent will
+  // be wrapped together so the wrapper's flex/grid layout still applies.
+  const groups = new Map(); // parent (or null) -> { parent, originals: [] }
+  for (const el of topLevel) {
+    const layoutParent = getLayoutParent(el);
+    const useWrapper = layoutParent &&
+      layoutParent !== document.body &&
+      layoutParent !== document.documentElement;
+    const key = useWrapper ? layoutParent : null;
+    if (!groups.has(key)) {
+      groups.set(key, { parent: useWrapper ? layoutParent : null, originals: [] });
+    }
+    groups.get(key).originals.push(el);
+  }
 
   const structures = [];
+  let exportDiagFiltered = 0; // populated by Tier 5 later — for now just counted here.
 
-  // Process CLONES (text is frozen from selection time), but use originals for computed styles
-  for (const clone of clones) {
-    const structure = buildStructure(clone, true);
-    if (structure) {
-      structures.push(structure);
+  for (const { parent, originals } of groups.values()) {
+    const childStructures = [];
+    let hasPositioned = false;
+
+    for (const original of originals) {
+      // USE SELECTION-TIME CLONES: text is frozen at click time so rotating
+      // content (e.g. GitHub ProTip) reflects what the user saw.
+      const clone = selectionClones.get(original) || original.cloneNode(true);
+      buildCloneMapping(original, clone, cloneToOriginal);
+
+      const structure = buildStructure(clone, true);
+      if (!structure) {
+        exportDiagFiltered++;
+        continue;
+      }
+
+      const ocs = window.getComputedStyle(original);
+      if (ocs.position === 'absolute' || ocs.position === 'fixed') {
+        hasPositioned = true;
+      }
+      childStructures.push({ structure, original });
+    }
+
+    if (childStructures.length === 0) continue;
+
+    if (parent) {
+      // Wrap the group in a synthetic div carrying the layout parent's styles.
+      const parentStyles = captureLayoutParentStyles(parent, hasPositioned);
+      const styleObj = parentStyles;
+      const wrapper = {
+        tag: 'div',
+        style: Object.keys(styleObj).length > 0 ? getOrCreateStyleName(styleObj) : undefined,
+        orderedContent: childStructures.map(({ structure }) => ({ type: 'element', node: structure })),
+        children: childStructures.map(({ structure }) => structure),
+      };
+      structures.push(wrapper);
+    } else {
+      // No useful parent context. Push children as-is, but normalize any
+      // root-level position:absolute|fixed so its top/right/bottom/left
+      // doesn't resolve against <body>.
+      for (const { structure, original } of childStructures) {
+        const ocs = window.getComputedStyle(original);
+        if (ocs.position === 'absolute' || ocs.position === 'fixed') {
+          const overrides = 'position: relative; top: auto; right: auto; bottom: auto; left: auto';
+          structure.inlineStyle = structure.inlineStyle
+            ? `${structure.inlineStyle}; ${overrides}`
+            : overrides;
+        }
+        structures.push(structure);
+      }
     }
   }
 
