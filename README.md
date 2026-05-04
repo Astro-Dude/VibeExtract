@@ -12,16 +12,17 @@ Point. Click. Extract. VibeExtract captures the full visual fidelity of any UI c
 ## Features
 
 ### Element Selection
-- **Click to select** any element on the page
-- **Shift+Click** to multi-select multiple elements
+- **Click to select** — small leaf elements (form fields, overlay buttons, icons, headings, plain spans) auto-expand to their nearest visually distinct or structural ancestor, so a click on a search field captures the whole field card instead of just the bare `<input>`
+- **Alt+Click** — bypass smart expansion and take the exact element under the cursor
+- **Shift+Click** — multi-select (also bypasses smart expansion)
 - **Hover highlighting** shows elements with a red outline as you move your mouse
 - **Visual overlay** covers all selected elements with a blue bounding box
 - **Auto-activates** selection mode when the popup opens — no extra clicks
 
 ### DOM Navigation
 - **Alt/Opt + Arrow Up** — navigate to the parent element
-- **Alt/Opt + Arrow Down** — navigate to the first child element
-- **Scroll navigation** — scroll while hovering to move through sibling/parent elements
+- **Alt/Opt + Arrow Down** — navigate to the first child *or* back to the node you came from (the wheel/keyboard navigator keeps a back-stack so over-scrolling up no longer leaves you stuck)
+- **Scroll navigation** — scroll while hovering to walk parent ↔ child along the same path
 - Auto-selects the navigated element so you can quickly drill up or down the DOM tree
 
 ### Full Page Export
@@ -29,11 +30,12 @@ Point. Click. Extract. VibeExtract captures the full visual fidelity of any UI c
 
 ### Smart Style Capture
 - **Computed styles** extracted and deduplicated into shared CSS classes
-- **Hover states** captured for interactive elements (links, buttons, inputs)
-- **Pseudo-elements** (`::before`, `::after`) including avatar circles and icon content
+- **Pseudo-elements** — both `::before` and `::after` captured independently as real `.classN::before` / `::after` rules in the output stylesheet, including decorative pseudos with empty `content`. Captures `box-shadow`, `transform`, positioning, fonts, padding/margin, filter, opacity, etc.
+- **Parent layout context** — when you select inner elements, the surrounding flex/grid container's display, flex/grid props, gap, padding, and named grid areas are wrapped around your selection so the layout still flows correctly. CSS Grid templates with `grid-template-areas` are preserved
 - **Web fonts** auto-detected and included from Google Fonts (Inter, Roboto, Poppins, etc.)
 - **Icon fonts** auto-detected (Material Icons, Material Symbols, Font Awesome)
-- **Layout preservation** — strict sizing for media, fluid sizing for text
+- **Layout preservation** — strict sizing for media, fluid sizing for text, and root structural elements adapt to the export iframe via `max-width: 100%` instead of pixel-locked min-width
+- **Position normalization** — `position: absolute|fixed` selections that have no positioned ancestor in the export get their offsets cleared so they don't render relative to `<body>`
 - **RGB to hex** conversion, transparent color removal, default value pruning
 - **Primary font detection** — identifies and displays the dominant font used in exports
 
@@ -49,6 +51,7 @@ Point. Click. Extract. VibeExtract captures the full visual fidelity of any UI c
   - **Preview** — live rendered HTML preview of the captured component, auto-sized to content
   - **HTML** — syntax-highlighted source with copy button, file size, and detected primary font
   - **TOON** — the LLM-optimized format with copy button, file size, and detected primary font
+- **Diagnostics panel** — collapsible panel above the tabs shows how many top-level selections were captured, how many nodes were dropped by the visibility filter, registry sizes, and per-selection bounding boxes. Surfaces silent filtering so an empty preview is never a mystery
 - **Save .html** — downloads the HTML file
 - **Save .toon** — downloads the TOON file
 - **Save Both** — downloads both files at once
@@ -70,7 +73,9 @@ All shortcuts are fully customizable from the popup settings panel.
 | Export Selected | `Cmd+Shift+E` | `Ctrl+Shift+E` |
 | Extract Full Page | `Cmd+Shift+X` | `Ctrl+Shift+X` |
 | Navigate Parent | `Alt+Arrow Up` | `Alt+Arrow Up` |
-| Navigate Child | `Alt+Arrow Down` | `Alt+Arrow Down` |
+| Navigate Child / Back | `Alt+Arrow Down` | `Alt+Arrow Down` |
+| Exact target (no expansion) | `Alt+Click` | `Alt+Click` |
+| Multi-select | `Shift+Click` | `Shift+Click` |
 
 ## Installation
 
@@ -83,10 +88,10 @@ All shortcuts are fully customizable from the popup settings panel.
 ## Usage
 
 1. Click the VibeExtract icon in your toolbar (auto-enters selection mode)
-2. Hover over elements to preview, click to select
-3. Use **Shift+Click** to add more elements, **Alt+Arrows** to navigate the DOM tree
+2. Hover over elements to preview, click to select — small leaves auto-expand to their visible container
+3. Use **Alt+Click** if you want the exact element under the cursor instead, **Shift+Click** to add more elements, or **Alt+Arrows** / scroll wheel to walk up and back down the DOM tree
 4. Press **Export** or hit the export shortcut
-5. A new tab opens with Preview, HTML, and TOON views
+5. A new tab opens with Preview, HTML, TOON views, and a Diagnostics panel showing what got captured vs. dropped
 6. Pick your format and download — the file path is copied to your clipboard automatically
 
 ### Full Page Workflow
