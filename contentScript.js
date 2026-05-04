@@ -16,12 +16,16 @@ console.log('[VibeExtract] Content script loaded in frame:', window.location.hre
 // --- Style Registry for deduplication ---
 let styleRegistry = new Map(); // styleString -> styleName (s1, s2, etc.)
 let hoverStyleRegistry = new Map(); // Maps base styleName -> hover styles object
+let pseudoStyleRegistry = new Map(); // pseudoBundleKey -> { className, bundle }
 let styleCounter = 0;
+let pseudoCounter = 0;
 
 function resetStyleRegistry() {
   styleRegistry.clear();
   hoverStyleRegistry.clear();
+  pseudoStyleRegistry.clear();
   styleCounter = 0;
+  pseudoCounter = 0;
   resetDetectedFonts();
 }
 
@@ -39,6 +43,15 @@ function registerHoverStyle(styleName, hoverObj) {
   if (hoverObj && Object.keys(hoverObj).length > 0) {
     hoverStyleRegistry.set(styleName, hoverObj);
   }
+}
+
+function getOrCreatePseudoClass(bundle) {
+  const key = JSON.stringify(bundle);
+  const existing = pseudoStyleRegistry.get(key);
+  if (existing) return existing.className;
+  const className = `p${++pseudoCounter}`;
+  pseudoStyleRegistry.set(key, { className, bundle });
+  return className;
 }
 
 // --- Shadow DOM helpers ---
@@ -888,6 +901,87 @@ const SHARED_PROPS = [
 // --- Properties for INLINE styles (unique per element) ---
 const INLINE_PROPS = []; // Dimensions handled manually now
 
+// --- Properties to capture for ::before / ::after pseudo-elements ---
+const PSEUDO_PROPS = [
+  'display',
+  'position', 'top', 'right', 'bottom', 'left', 'z-index',
+  'width', 'height',
+  'background-color', 'background-image', 'background-size',
+  'background-position', 'background-repeat',
+  'border-width', 'border-style', 'border-color', 'border-radius',
+  'box-shadow',
+  'color', 'opacity',
+  'transform', 'transform-origin',
+  'filter',
+  'font-family', 'font-size', 'font-weight', 'line-height',
+  'text-align', 'vertical-align',
+  'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+  'overflow', 'overflow-x', 'overflow-y',
+  'pointer-events',
+];
+
+// A pseudo with empty content is still worth capturing if it carries any of
+// these decorative properties (most common pattern: `content: ""` plus a
+// background, border, transform, or shadow used as a visual flourish).
+function isDecorativePseudo(style) {
+  const bg = style.getPropertyValue('background-color');
+  const bgImg = style.getPropertyValue('background-image');
+  const transform = style.getPropertyValue('transform');
+  const shadow = style.getPropertyValue('box-shadow');
+  const borderTop = parseFloat(style.getPropertyValue('border-top-width')) || 0;
+  const borderLeft = parseFloat(style.getPropertyValue('border-left-width')) || 0;
+  const w = parseFloat(style.getPropertyValue('width')) || 0;
+  const h = parseFloat(style.getPropertyValue('height')) || 0;
+  if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return true;
+  if (bgImg && bgImg !== 'none') return true;
+  if (transform && transform !== 'none') return true;
+  if (shadow && shadow !== 'none') return true;
+  if (borderTop > 0 || borderLeft > 0) return true;
+  if (w > 0 && h > 0) return true;
+  return false;
+}
+
+function capturePseudoStyles(pseudoStyle) {
+  const captured = {};
+  const positionValue = pseudoStyle.getPropertyValue('position');
+  for (const prop of PSEUDO_PROPS) {
+    if (['top', 'right', 'bottom', 'left'].includes(prop) && positionValue === 'static') continue;
+    let value = pseudoStyle.getPropertyValue(prop);
+    if (isDefaultValue(prop, value)) continue;
+    if (prop.includes('color') || prop === 'background-color') {
+      const hex = rgbToHex(value);
+      if (!hex) continue;
+      value = hex;
+    }
+    if (prop === 'font-family') {
+      const short = shortenFontFamily(value);
+      if (!short) continue;
+      value = short;
+    }
+    captured[prop] = value;
+  }
+  return captured;
+}
+
+function tryCapturePseudo(originalEl, position) {
+  const style = window.getComputedStyle(originalEl, '::' + position);
+  const content = style.getPropertyValue('content');
+  if (!content || content === 'none' || content === 'normal') return null;
+  const cleaned = content.replace(/^["']|["']$/g, '');
+  const hasContent = cleaned.length > 0;
+  const hasDecoration = isDecorativePseudo(style);
+  if (!hasContent && !hasDecoration) return null;
+  const styles = capturePseudoStyles(style);
+  if (!hasContent && Object.keys(styles).length === 0) return null;
+  return { content: cleaned, styles };
+}
+
+const VOID_ELEMENT_TAGS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img',
+  'input', 'link', 'meta', 'source', 'track', 'wbr'
+]);
+
 // --- Check if value is a default (should skip) ---
 function isDefaultValue(prop, value) {
   if (!value || value === '' || value === 'initial' || value === 'inherit') return true;
@@ -1362,68 +1456,39 @@ function buildStructure(el, isRoot = false) {
     }
   }
 
-  // Capture ::before and ::after pseudo-element content AND styling (for letter avatars, icons, etc.)
-  // Use originalEl for computed styles since clones aren't in the DOM
-  const beforeStyle = window.getComputedStyle(originalEl, '::before');
-  const afterStyle = window.getComputedStyle(originalEl, '::after');
-  const beforeContent = beforeStyle.getPropertyValue('content');
-  const afterContent = afterStyle.getPropertyValue('content');
+  // Capture ::before and ::after pseudo-elements.
+  // For non-void elements we emit real ::before/::after CSS rules; for void
+  // elements (input, img, hr, ...) we fall back to merging visible properties
+  // onto the element itself, since browsers don't render pseudo content for them.
+  const beforePseudo = tryCapturePseudo(originalEl, 'before');
+  const afterPseudo = tryCapturePseudo(originalEl, 'after');
 
-  // Check if we have visible pseudo-element content
-  let pseudoSource = null;
-  let pseudoContent = '';
-
-  if (beforeContent && beforeContent !== 'none' && beforeContent !== 'normal') {
-    const clean = beforeContent.replace(/^["']|["']$/g, '');
-    if (clean && clean.length <= 5) { // Only capture short content like letters
-      pseudoContent = clean;
-      pseudoSource = beforeStyle;
-    }
-  }
-  if (!pseudoContent && afterContent && afterContent !== 'none' && afterContent !== 'normal') {
-    const clean = afterContent.replace(/^["']|["']$/g, '');
-    if (clean && clean.length <= 5) {
-      pseudoContent = clean;
-      pseudoSource = afterStyle;
-    }
-  }
-
-  if (pseudoContent && !textContent) {
-    node.text = pseudoContent;
-    node.fromPseudo = true; // Flag that this came from pseudo-element
-  }
-
-  // Capture pseudo-element styling (background-color, border-radius, dimensions) for avatar circles
-  if (pseudoSource) {
-    const pseudoBg = pseudoSource.getPropertyValue('background-color');
-    const pseudoRadius = pseudoSource.getPropertyValue('border-radius');
-    const pseudoWidth = pseudoSource.getPropertyValue('width');
-    const pseudoHeight = pseudoSource.getPropertyValue('height');
-    const pseudoColor = pseudoSource.getPropertyValue('color');
-
-    // If pseudo-element has its own background/styling, merge into the element's style
-    if (pseudoBg && pseudoBg !== 'transparent' && pseudoBg !== 'rgba(0, 0, 0, 0)') {
-      // This element uses a pseudo-element for visual styling
-      // Add these styles to the shared style object
+  if (beforePseudo || afterPseudo) {
+    if (VOID_ELEMENT_TAGS.has(tagName)) {
+      // Fallback: merge a subset of pseudo styling onto the element's own styles.
+      // (Letter-avatar inputs, icon-only inputs, etc. — rare but worth preserving.)
+      const src = beforePseudo || afterPseudo;
+      if (src.content && !textContent) {
+        node.text = src.content;
+        node.fromPseudo = true;
+      }
       if (styleResult && styleResult.shared) {
-        // Only override if not already set or if transparent
-        if (!styleResult.shared['background-color'] || styleResult.shared['background-color'] === 'transparent') {
-          styleResult.shared['background-color'] = rgbToHex(pseudoBg);
+        for (const [prop, val] of Object.entries(src.styles)) {
+          if (!styleResult.shared[prop]) styleResult.shared[prop] = val;
         }
       }
-      node.pseudoBg = rgbToHex(pseudoBg);
-    }
-    if (pseudoRadius && pseudoRadius !== '0px') {
-      node.pseudoRadius = pseudoRadius;
-    }
-    if (pseudoColor) {
-      node.pseudoColor = rgbToHex(pseudoColor);
-    }
-    if (pseudoWidth && pseudoWidth !== 'auto') {
-      node.pseudoWidth = pseudoWidth;
-    }
-    if (pseudoHeight && pseudoHeight !== 'auto') {
-      node.pseudoHeight = pseudoHeight;
+    } else {
+      const bundle = {};
+      if (beforePseudo) bundle.before = beforePseudo;
+      if (afterPseudo) bundle.after = afterPseudo;
+      node.pseudoClass = getOrCreatePseudoClass(bundle);
+      // For elements with ONLY a pseudo content marker (no text, no children)
+      // we keep the historical fromPseudo behaviour so structureToHtml's text
+      // path can still center the letter-avatar pattern.
+      if (beforePseudo && beforePseudo.content && !textContent &&
+          el.children.length === 0) {
+        node.fromPseudo = true;
+      }
     }
   }
 
@@ -1621,6 +1686,7 @@ function structureToHtml(node, indent = 0) {
   let attrs = '';
   let classes = [];
   if (node.style) classes.push(node.style);
+  if (node.pseudoClass) classes.push(node.pseudoClass);
 
   // Add icon font class if needed - this class makes the icon text render as actual icons
   if (node.isIcon && node.iconFont) {
@@ -1713,6 +1779,7 @@ function structureToHtml(node, indent = 0) {
     attrs = '';
     let classes = [];
     if (node.style) classes.push(node.style);
+    if (node.pseudoClass) classes.push(node.pseudoClass);
     if (node.isIcon && node.iconFont) {
       if (node.iconFont.includes('symbol')) classes.push('material-symbols-outlined');
       else classes.push('material-icons');
@@ -1812,6 +1879,30 @@ function buildExport() {
     hoverStyles[styleName] = styleObjToCss(hoverObj);
   });
 
+  // Build pseudo styles: { className: { before?: { content, css }, after?: ... } }
+  const pseudoStyles = {};
+  pseudoStyleRegistry.forEach(({ className, bundle }) => {
+    const out = {};
+    if (bundle.before) {
+      out.before = {
+        content: bundle.before.content,
+        css: styleObjToCss(bundle.before.styles),
+      };
+    }
+    if (bundle.after) {
+      out.after = {
+        content: bundle.after.content,
+        css: styleObjToCss(bundle.after.styles),
+      };
+    }
+    pseudoStyles[className] = out;
+  });
+
+  function escapePseudoContent(s) {
+    if (s == null) return '';
+    return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+
   const structure = structures.length === 1 ? structures[0] : structures;
 
   // Build TOON (Token-Optimized Object Notation) - more efficient for LLMs
@@ -1823,6 +1914,7 @@ function buildExport() {
     // Tag with style class
     toon += node.tag;
     if (node.style) toon += `.${node.style}`;
+    if (node.pseudoClass) toon += `.${node.pseudoClass}`;
     if (node.inlineStyle) toon += `[${node.inlineStyle}]`;
 
     // Attributes on same line
@@ -1873,6 +1965,18 @@ function buildExport() {
     }
   }
 
+  if (Object.keys(pseudoStyles).length > 0) {
+    toon += `\n## Pseudo Styles\n`;
+    for (const [name, parts] of Object.entries(pseudoStyles)) {
+      if (parts.before) {
+        toon += `.${name}::before [content="${parts.before.content}"]: ${parts.before.css}\n`;
+      }
+      if (parts.after) {
+        toon += `.${name}::after [content="${parts.after.content}"]: ${parts.after.css}\n`;
+      }
+    }
+  }
+
   toon += `\n## Structure\n`;
   if (Array.isArray(structure)) {
     for (const s of structure) {
@@ -1912,6 +2016,17 @@ function buildExport() {
   // Add hover styles
   for (const [name, cssString] of Object.entries(hoverStyles)) {
     css += `.${name}:hover { ${sanitizeCss(cssString)}; }\n`;
+  }
+  // Add ::before / ::after pseudo-element rules
+  for (const [name, parts] of Object.entries(pseudoStyles)) {
+    if (parts.before) {
+      const body = parts.before.css ? `${sanitizeCss(parts.before.css)}; ` : '';
+      css += `.${name}::before { content: '${escapePseudoContent(parts.before.content)}'; ${body}}\n`;
+    }
+    if (parts.after) {
+      const body = parts.after.css ? `${sanitizeCss(parts.after.css)}; ` : '';
+      css += `.${name}::after { content: '${escapePseudoContent(parts.after.content)}'; ${body}}\n`;
+    }
   }
 
   const bodyHtml = Array.isArray(structure)
