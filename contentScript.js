@@ -818,8 +818,13 @@ const DEFAULT_SKIP = {
   'order': ['0'],
   'grid-template-columns': ['none'],
   'grid-template-rows': ['none'],
+  'grid-template-areas': ['none'],
   'grid-column': ['auto'],
   'grid-row': ['auto'],
+  'grid-area': ['auto / auto / auto / auto', 'auto'],
+  'grid-auto-flow': ['row'],
+  'grid-auto-columns': ['auto'],
+  'grid-auto-rows': ['auto'],
   'background-color': ['transparent', 'rgba(0, 0, 0, 0)'],
   'background-image': ['none'],
   'background-size': ['auto'],
@@ -872,7 +877,9 @@ const SHARED_PROPS = [
   // Flex item
   'flex-grow', 'flex-shrink', 'flex-basis', 'align-self', 'order',
   // Grid
-  'grid-template-columns', 'grid-template-rows', 'grid-column', 'grid-row',
+  'grid-template-columns', 'grid-template-rows', 'grid-template-areas',
+  'grid-column', 'grid-row', 'grid-area',
+  'grid-auto-flow', 'grid-auto-columns', 'grid-auto-rows',
   // Position offsets
   'top', 'right', 'bottom', 'left', 'z-index',
   // Background
@@ -1854,8 +1861,8 @@ const LAYOUT_PARENT_PROPS = [
   'display',
   'flex-direction', 'flex-wrap', 'justify-content', 'align-items',
   'align-content', 'gap', 'row-gap', 'column-gap',
-  'grid-template-columns', 'grid-template-rows', 'grid-auto-flow',
-  'grid-auto-columns', 'grid-auto-rows',
+  'grid-template-columns', 'grid-template-rows', 'grid-template-areas',
+  'grid-auto-flow', 'grid-auto-columns', 'grid-auto-rows',
   'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
   'background-color',
   'position',
