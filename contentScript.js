@@ -1102,10 +1102,12 @@ function getDetectedFonts() {
 // --- Check visibility ---
 function isElementVisible(computed) {
   if (computed.display === 'none' ||
-      computed.visibility === 'hidden' ||
-      computed.opacity === '0') {
+      computed.visibility === 'hidden') {
     return false;
   }
+  // opacity:0 is intentionally NOT a hard filter: lots of elements are
+  // mid-fade-in or mid-animation at click time. They reappear once
+  // animations finish, so capturing them is usually what the user wants.
 
   // Check for screen-reader-only / visually hidden elements
   // These are often 1x1px or use clip to hide content visually
@@ -1115,8 +1117,10 @@ function isElementVisible(computed) {
   const clipPath = computed.clipPath || '';
   const position = computed.position || '';
 
-  // Detect sr-only patterns: tiny size + absolute positioning
-  if (position === 'absolute' && (width <= 1 || height <= 1)) {
+  // Detect classic sr-only: absolute-positioned 1×1 (or smaller) point.
+  // Require BOTH dimensions to be tiny — a 1×24 element is a real divider/bar,
+  // not sr-only content.
+  if (position === 'absolute' && width <= 1 && height <= 1) {
     return false;
   }
 
@@ -1396,8 +1400,10 @@ function buildStructure(el, isRoot = false) {
 
   const computed = window.getComputedStyle(originalEl);
 
-  // Skip hidden elements
-  if (!isElementVisible(computed)) {
+  // Skip hidden elements — but only for descendants. The user explicitly chose
+  // the root element, so we render it even if it would otherwise look sr-only:
+  // far better to show a tiny element than to silently produce an empty export.
+  if (!isRoot && !isElementVisible(computed)) {
     if (hadHover) originalEl.classList.add("web-replica-hover");
     if (hadSelected) originalEl.classList.add("web-replica-selected");
     return null;
