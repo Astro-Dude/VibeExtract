@@ -10,15 +10,18 @@ const toast = document.getElementById('toast');
 const toastText = document.getElementById('toast-text');
 
 // ── Load data from storage ──
-chrome.storage.local.get(['exportHTML', 'exportTOON', 'exportSourceURL'], (data) => {
+chrome.storage.local.get(['exportHTML', 'exportTOON', 'exportSourceURL', 'exportDiagnostics'], (data) => {
   htmlContent = data.exportHTML || '';
   toonContent = data.exportTOON || '';
   sourceUrl = data.exportSourceURL || '';
+  const diagnostics = data.exportDiagnostics || null;
 
   // Show source url
   if (sourceUrl) {
     document.getElementById('source-url').textContent = sourceUrl;
   }
+
+  renderDiagnostics(diagnostics);
 
   // Populate code views
   document.getElementById('html-code').textContent = htmlContent;
@@ -50,8 +53,103 @@ chrome.storage.local.get(['exportHTML', 'exportTOON', 'exportSourceURL'], (data)
   iframe.srcdoc = htmlContent;
 
   // Clean up storage after loading
-  chrome.storage.local.remove(['exportHTML', 'exportTOON', 'exportSourceURL']);
+  chrome.storage.local.remove(['exportHTML', 'exportTOON', 'exportSourceURL', 'exportDiagnostics']);
 });
+
+function renderDiagnostics(d) {
+  const wrap = document.getElementById('diag');
+  if (!d) return;
+  wrap.hidden = false;
+
+  const summary = document.getElementById('diag-summary');
+  summary.innerHTML = '';
+
+  const label = document.createElement('span');
+  label.textContent = 'Diagnostics';
+  summary.appendChild(label);
+
+  const sel = document.createElement('span');
+  sel.className = 'diag-pill';
+  sel.textContent = `${d.selectionCount} selection${d.selectionCount === 1 ? '' : 's'}`;
+  summary.appendChild(sel);
+
+  if (d.wrapperCount > 0) {
+    const wr = document.createElement('span');
+    wr.className = 'diag-pill';
+    wr.textContent = `${d.wrapperCount} parent-wrap${d.wrapperCount === 1 ? '' : 's'}`;
+    summary.appendChild(wr);
+  }
+
+  if (d.filteredCount > 0 || d.emptySpansSkipped > 0) {
+    const flt = document.createElement('span');
+    flt.className = 'diag-pill warn';
+    flt.textContent = `${d.filteredCount + d.emptySpansSkipped} dropped`;
+    summary.appendChild(flt);
+  }
+
+  const styles = document.createElement('span');
+  styles.className = 'diag-pill';
+  styles.textContent = `${d.styleCount} styles`;
+  summary.appendChild(styles);
+
+  if (d.pseudoStyleCount > 0) {
+    const ps = document.createElement('span');
+    ps.className = 'diag-pill';
+    ps.textContent = `${d.pseudoStyleCount} pseudo`;
+    summary.appendChild(ps);
+  }
+
+  // Body: list each selection
+  const body = document.getElementById('diag-body');
+  body.innerHTML = '';
+
+  if (d.filteredCount > 0 || d.emptySpansSkipped > 0) {
+    const note = document.createElement('div');
+    note.className = 'diag-row';
+    note.style.color = '#fbbf24';
+    note.innerHTML = `<span class="meta">Filtered out ${d.filteredCount} hidden node${d.filteredCount === 1 ? '' : 's'} and ${d.emptySpansSkipped} empty span${d.emptySpansSkipped === 1 ? '' : 's'} from descendants. Use Alt+Click for exact targeting if you want them included.</span>`;
+    body.appendChild(note);
+  }
+
+  if (!d.selections || d.selections.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'diag-row';
+    empty.innerHTML = `<span class="meta">No top-level selections recorded.</span>`;
+    body.appendChild(empty);
+    return;
+  }
+
+  for (const s of d.selections) {
+    const row = document.createElement('div');
+    row.className = 'diag-row';
+
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = `<${s.tag}>`;
+    row.appendChild(tag);
+
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const cls = s.className ? `.${s.className.replace(/\s+/g, '.')}` : '';
+    meta.textContent = `${cls} — ${s.w}×${s.h} at (${s.x}, ${s.y})`;
+    row.appendChild(meta);
+
+    if (s.wrapped) {
+      const b = document.createElement('span');
+      b.className = 'badge';
+      b.textContent = 'wrapped';
+      row.appendChild(b);
+    }
+    if (!s.kept) {
+      const b = document.createElement('span');
+      b.className = 'badge dropped';
+      b.textContent = 'dropped';
+      row.appendChild(b);
+    }
+
+    body.appendChild(row);
+  }
+}
 
 // ── Tabs ──
 tabs.forEach((tab) => {
