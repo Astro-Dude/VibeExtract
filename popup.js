@@ -300,7 +300,8 @@ exportBtn.addEventListener("click", () => {
       chrome.storage.local.set({
         exportHTML: response.html,
         exportTOON: response.toon,
-        exportSourceURL: tab.url || ''
+        exportSourceURL: tab.url || '',
+        exportDiagnostics: response.diagnostics || null
       }, () => {
         chrome.tabs.create({ url: chrome.runtime.getURL('export.html') });
       });

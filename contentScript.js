@@ -8,6 +8,7 @@ let selectionClones = new Map(); // original element -> clone (captured at selec
 // --- Scroll-navigation state ---
 let isScrollNavigating = false;   // true when user has scrolled to override the natural hover target
 let scrollNavigatedElement = null; // the element currently reached via scroll navigation
+let wheelNavStack = [];            // stack of nodes visited via wheel-up, popped by wheel-down to backtrack
 
 // Debug: Log when script loads
 console.log('[VibeExtract] Content script loaded in frame:', window.location.href.substring(0, 100));
@@ -15,12 +16,16 @@ console.log('[VibeExtract] Content script loaded in frame:', window.location.hre
 // --- Style Registry for deduplication ---
 let styleRegistry = new Map(); // styleString -> styleName (s1, s2, etc.)
 let hoverStyleRegistry = new Map(); // Maps base styleName -> hover styles object
+let pseudoStyleRegistry = new Map(); // pseudoBundleKey -> { className, bundle }
 let styleCounter = 0;
+let pseudoCounter = 0;
 
 function resetStyleRegistry() {
   styleRegistry.clear();
   hoverStyleRegistry.clear();
+  pseudoStyleRegistry.clear();
   styleCounter = 0;
+  pseudoCounter = 0;
   resetDetectedFonts();
 }
 
@@ -38,6 +43,15 @@ function registerHoverStyle(styleName, hoverObj) {
   if (hoverObj && Object.keys(hoverObj).length > 0) {
     hoverStyleRegistry.set(styleName, hoverObj);
   }
+}
+
+function getOrCreatePseudoClass(bundle) {
+  const key = JSON.stringify(bundle);
+  const existing = pseudoStyleRegistry.get(key);
+  if (existing) return existing.className;
+  const className = `p${++pseudoCounter}`;
+  pseudoStyleRegistry.set(key, { className, bundle });
+  return className;
 }
 
 // --- Shadow DOM helpers ---
@@ -163,6 +177,7 @@ document.addEventListener(
       // Mouse moved to a different area — exit scroll navigation
       isScrollNavigating = false;
       scrollNavigatedElement = null;
+      wheelNavStack = [];
     }
 
     if (hoverElement && hoverElement !== actualTarget) {
@@ -196,6 +211,7 @@ document.addEventListener(
       hoverElement = null;
       isScrollNavigating = false;
       scrollNavigatedElement = null;
+      wheelNavStack = [];
       return;
     }
 
@@ -272,6 +288,94 @@ function toggleElement(el, shouldSelect) {
   updateOverlay();
 }
 
+// --- Smart container expansion ---
+// When a user clicks a small leaf element (input, overlay button, icon),
+// they usually mean "the visible field/card that contains it", not the leaf itself.
+// This walks up to the nearest visually-distinct ancestor that's meaningfully larger.
+// Bypassed by Alt+Click (exact target) and by Shift+Click (multi-select).
+function expandToMeaningfulContainer(el) {
+  if (!el || !el.tagName) return el;
+  const tag = el.tagName.toLowerCase();
+
+  // Already a structural container — don't expand.
+  if (['div', 'section', 'article', 'aside', 'nav', 'header', 'footer',
+       'main', 'form', 'fieldset', 'ul', 'ol', 'table', 'tbody', 'thead',
+       'tr'].includes(tag)) {
+    return el;
+  }
+
+  const cs = window.getComputedStyle(el);
+
+  // Rule A: Overlay button/anchor that's positioned absolute/fixed → use offsetParent.
+  // (This is the Expedia "Going to" overlay-button-on-top-of-a-real-input pattern.)
+  if ((tag === 'button' || tag === 'a') &&
+      (cs.position === 'absolute' || cs.position === 'fixed')) {
+    const op = el.offsetParent;
+    if (op && op !== document.body && op !== document.documentElement) {
+      const elArea = el.offsetWidth * el.offsetHeight;
+      const opArea = op.offsetWidth * op.offsetHeight;
+      if (opArea >= elArea * 1.05) return op;
+    }
+  }
+
+  // Rule B: Leaf-ish elements (form fields, icons, small buttons, plain text leaves).
+  // Walk up until we find a visually distinct wrapper or a structural ancestor.
+  const isLeafish = ['input', 'select', 'textarea', 'button', 'a', 'span',
+                     'img', 'svg', 'label', 'i', 'em', 'strong', 'p',
+                     'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag);
+  if (!isLeafish) return el;
+
+  const startW = el.offsetWidth || el.getBoundingClientRect().width;
+  const startH = el.offsetHeight || el.getBoundingClientRect().height;
+  const startArea = startW * startH;
+  if (!startArea) return el;
+
+  const vpArea = window.innerWidth * window.innerHeight;
+  const maxArea = vpArea * 0.4;     // don't expand beyond 40% of viewport
+  const minGrowth = 1.2;             // ancestor must be at least 20% larger
+
+  let current = el.parentElement;
+  let depth = 0;
+  let bestMatch = null;
+
+  while (current && current !== document.body && current !== document.documentElement && depth < 8) {
+    const ccs = window.getComputedStyle(current);
+    const cArea = current.offsetWidth * current.offsetHeight;
+
+    if (cArea > maxArea) break;
+    if (cArea < startArea * minGrowth) {
+      current = current.parentElement;
+      depth++;
+      continue;
+    }
+
+    // Visually distinct ancestor — has its own card-like styling
+    const hasBg = ccs.backgroundColor && ccs.backgroundColor !== 'rgba(0, 0, 0, 0)' && ccs.backgroundColor !== 'transparent';
+    const hasBorder = parseFloat(ccs.borderTopWidth) > 0 || parseFloat(ccs.borderLeftWidth) > 0;
+    const hasRadius = parseFloat(ccs.borderTopLeftRadius) > 0;
+    const hasShadow = ccs.boxShadow && ccs.boxShadow !== 'none';
+    const hasPadding = parseFloat(ccs.paddingTop) >= 4 || parseFloat(ccs.paddingLeft) >= 4;
+    const isVisuallyDistinct = hasBg || hasBorder || hasRadius || hasShadow || hasPadding;
+
+    const ctag = current.tagName.toLowerCase();
+    const isStructural = ['form', 'fieldset', 'label', 'li', 'tr', 'article',
+                          'section', 'header', 'footer', 'aside', 'nav'].includes(ctag);
+
+    if (isVisuallyDistinct || isStructural) {
+      bestMatch = current;
+      // Form inputs: stop at the first wrapper — usually the field card.
+      if (['input', 'select', 'textarea'].includes(tag)) return current;
+      // Otherwise also stop here; one level is normally enough.
+      return current;
+    }
+
+    current = current.parentElement;
+    depth++;
+  }
+
+  return bestMatch || el;
+}
+
 // --- Click handling (with Shadow DOM support) ---
 document.addEventListener(
   "mousedown",
@@ -287,12 +391,22 @@ document.addEventListener(
     // Inject styles into any shadow roots along the path (including closed ones!)
     ensureStylesInEventPath(path);
 
-    // If scroll-navigating, select the navigated element instead of deepest child
-    const el = isScrollNavigating ? scrollNavigatedElement : path[0];
+    // If scroll-navigating, select the navigated element instead of deepest child.
+    // Otherwise, smart-expand small leaf clicks to their visible container —
+    // unless Alt is held (exact-target escape hatch) or Shift is held (multi-select).
+    let el;
+    if (isScrollNavigating) {
+      el = scrollNavigatedElement;
+    } else if (e.altKey || e.shiftKey) {
+      el = path[0];
+    } else {
+      el = expandToMeaningfulContainer(path[0]);
+    }
 
     // Reset scroll navigation after click
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
 
     if (!el || !el.classList) return;
 
@@ -339,9 +453,23 @@ document.addEventListener(
     let targetElement = null;
 
     if (e.deltaY < 0) {
+      // Wheel-up: walk to parent, push current onto the back-stack so wheel-down can return.
       targetElement = getScrollParent(hoverElement);
+      if (targetElement && targetElement !== hoverElement) {
+        wheelNavStack.push(hoverElement);
+      }
     } else if (e.deltaY > 0) {
-      targetElement = getFirstElementChild(hoverElement);
+      // Wheel-down: prefer popping the back-stack (return to where we came from).
+      // Only honour the stack if the top is still a descendant of where we are now —
+      // otherwise the stack is stale (mouse moved, etc.) and we fall through to first child.
+      const top = wheelNavStack[wheelNavStack.length - 1];
+      if (top && top !== hoverElement && hoverElement && hoverElement.contains(top)) {
+        targetElement = top;
+        wheelNavStack.pop();
+      } else {
+        wheelNavStack = [];
+        targetElement = getFirstElementChild(hoverElement);
+      }
     }
 
     if (!targetElement || !targetElement.classList) return;
@@ -437,7 +565,7 @@ function isExtensionContextValid() {
 }
 
 // Download files via background script (bypasses CSP restrictions)
-function downloadFiles(toonContent, htmlContent) {
+function downloadFiles(toonContent, htmlContent, diagnostics) {
   if (!isExtensionContextValid()) {
     console.warn("[VibeExtract] Extension context invalidated. Please refresh the page.");
     alert("VibeExtract: Extension was reloaded. Please refresh this page to continue using the extension.");
@@ -448,6 +576,7 @@ function downloadFiles(toonContent, htmlContent) {
     type: 'OPEN_EXPORT_TAB',
     toon: toonContent,
     html: htmlContent,
+    diagnostics: diagnostics || null,
     sourceURL: window.location.href
   }, (response) => {
     if (chrome.runtime.lastError) {
@@ -467,7 +596,7 @@ function performExport() {
       console.log("[VibeExtract] Export data generated, downloading...");
 
       // Download both files via background script
-      downloadFiles(result.toon, result.html);
+      downloadFiles(result.toon, result.html, result.diagnostics);
 
       console.log("[VibeExtract] Export complete");
       return true;
@@ -558,6 +687,7 @@ document.addEventListener("keydown", (e) => {
       pickMode = false;
       isScrollNavigating = false;
       scrollNavigatedElement = null;
+      wheelNavStack = [];
       showModeIndicator('Selection cleared');
       console.log("[VibeExtract] Selection cleared");
       return false;
@@ -620,8 +750,18 @@ document.addEventListener("keydown", (e) => {
     let targetElement = null;
     if (e.key === 'ArrowUp') {
       targetElement = getScrollParent(hoverElement);
+      if (targetElement && targetElement !== hoverElement) {
+        wheelNavStack.push(hoverElement);
+      }
     } else {
-      targetElement = getFirstElementChild(hoverElement);
+      const top = wheelNavStack[wheelNavStack.length - 1];
+      if (top && top !== hoverElement && hoverElement && hoverElement.contains(top)) {
+        targetElement = top;
+        wheelNavStack.pop();
+      } else {
+        wheelNavStack = [];
+        targetElement = getFirstElementChild(hoverElement);
+      }
     }
 
     if (!targetElement || !targetElement.classList) return false;
@@ -678,8 +818,13 @@ const DEFAULT_SKIP = {
   'order': ['0'],
   'grid-template-columns': ['none'],
   'grid-template-rows': ['none'],
+  'grid-template-areas': ['none'],
   'grid-column': ['auto'],
   'grid-row': ['auto'],
+  'grid-area': ['auto / auto / auto / auto', 'auto'],
+  'grid-auto-flow': ['row'],
+  'grid-auto-columns': ['auto'],
+  'grid-auto-rows': ['auto'],
   'background-color': ['transparent', 'rgba(0, 0, 0, 0)'],
   'background-image': ['none'],
   'background-size': ['auto'],
@@ -732,7 +877,9 @@ const SHARED_PROPS = [
   // Flex item
   'flex-grow', 'flex-shrink', 'flex-basis', 'align-self', 'order',
   // Grid
-  'grid-template-columns', 'grid-template-rows', 'grid-column', 'grid-row',
+  'grid-template-columns', 'grid-template-rows', 'grid-template-areas',
+  'grid-column', 'grid-row', 'grid-area',
+  'grid-auto-flow', 'grid-auto-columns', 'grid-auto-rows',
   // Position offsets
   'top', 'right', 'bottom', 'left', 'z-index',
   // Background
@@ -761,6 +908,87 @@ const SHARED_PROPS = [
 
 // --- Properties for INLINE styles (unique per element) ---
 const INLINE_PROPS = []; // Dimensions handled manually now
+
+// --- Properties to capture for ::before / ::after pseudo-elements ---
+const PSEUDO_PROPS = [
+  'display',
+  'position', 'top', 'right', 'bottom', 'left', 'z-index',
+  'width', 'height',
+  'background-color', 'background-image', 'background-size',
+  'background-position', 'background-repeat',
+  'border-width', 'border-style', 'border-color', 'border-radius',
+  'box-shadow',
+  'color', 'opacity',
+  'transform', 'transform-origin',
+  'filter',
+  'font-family', 'font-size', 'font-weight', 'line-height',
+  'text-align', 'vertical-align',
+  'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+  'overflow', 'overflow-x', 'overflow-y',
+  'pointer-events',
+];
+
+// A pseudo with empty content is still worth capturing if it carries any of
+// these decorative properties (most common pattern: `content: ""` plus a
+// background, border, transform, or shadow used as a visual flourish).
+function isDecorativePseudo(style) {
+  const bg = style.getPropertyValue('background-color');
+  const bgImg = style.getPropertyValue('background-image');
+  const transform = style.getPropertyValue('transform');
+  const shadow = style.getPropertyValue('box-shadow');
+  const borderTop = parseFloat(style.getPropertyValue('border-top-width')) || 0;
+  const borderLeft = parseFloat(style.getPropertyValue('border-left-width')) || 0;
+  const w = parseFloat(style.getPropertyValue('width')) || 0;
+  const h = parseFloat(style.getPropertyValue('height')) || 0;
+  if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return true;
+  if (bgImg && bgImg !== 'none') return true;
+  if (transform && transform !== 'none') return true;
+  if (shadow && shadow !== 'none') return true;
+  if (borderTop > 0 || borderLeft > 0) return true;
+  if (w > 0 && h > 0) return true;
+  return false;
+}
+
+function capturePseudoStyles(pseudoStyle) {
+  const captured = {};
+  const positionValue = pseudoStyle.getPropertyValue('position');
+  for (const prop of PSEUDO_PROPS) {
+    if (['top', 'right', 'bottom', 'left'].includes(prop) && positionValue === 'static') continue;
+    let value = pseudoStyle.getPropertyValue(prop);
+    if (isDefaultValue(prop, value)) continue;
+    if (prop.includes('color') || prop === 'background-color') {
+      const hex = rgbToHex(value);
+      if (!hex) continue;
+      value = hex;
+    }
+    if (prop === 'font-family') {
+      const short = shortenFontFamily(value);
+      if (!short) continue;
+      value = short;
+    }
+    captured[prop] = value;
+  }
+  return captured;
+}
+
+function tryCapturePseudo(originalEl, position) {
+  const style = window.getComputedStyle(originalEl, '::' + position);
+  const content = style.getPropertyValue('content');
+  if (!content || content === 'none' || content === 'normal') return null;
+  const cleaned = content.replace(/^["']|["']$/g, '');
+  const hasContent = cleaned.length > 0;
+  const hasDecoration = isDecorativePseudo(style);
+  if (!hasContent && !hasDecoration) return null;
+  const styles = capturePseudoStyles(style);
+  if (!hasContent && Object.keys(styles).length === 0) return null;
+  return { content: cleaned, styles };
+}
+
+const VOID_ELEMENT_TAGS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img',
+  'input', 'link', 'meta', 'source', 'track', 'wbr'
+]);
 
 // --- Check if value is a default (should skip) ---
 function isDefaultValue(prop, value) {
@@ -882,10 +1110,12 @@ function getDetectedFonts() {
 // --- Check visibility ---
 function isElementVisible(computed) {
   if (computed.display === 'none' ||
-      computed.visibility === 'hidden' ||
-      computed.opacity === '0') {
+      computed.visibility === 'hidden') {
     return false;
   }
+  // opacity:0 is intentionally NOT a hard filter: lots of elements are
+  // mid-fade-in or mid-animation at click time. They reappear once
+  // animations finish, so capturing them is usually what the user wants.
 
   // Check for screen-reader-only / visually hidden elements
   // These are often 1x1px or use clip to hide content visually
@@ -895,8 +1125,10 @@ function isElementVisible(computed) {
   const clipPath = computed.clipPath || '';
   const position = computed.position || '';
 
-  // Detect sr-only patterns: tiny size + absolute positioning
-  if (position === 'absolute' && (width <= 1 || height <= 1)) {
+  // Detect classic sr-only: absolute-positioned 1×1 (or smaller) point.
+  // Require BOTH dimensions to be tiny — a 1×24 element is a real divider/bar,
+  // not sr-only content.
+  if (position === 'absolute' && width <= 1 && height <= 1) {
     return false;
   }
 
@@ -1042,17 +1274,25 @@ function getCompactStyles(el, isRoot = false) {
 
       // Width Handling
       if (width > 0) {
-          if (isMedia || !isFluid) {
-              // STRICT STRATEGY: For media and structure (divs), lock the width.
-              // This preserves the page layout grid.
+          if (isMedia) {
+              // Media (img/video/iframe/input/etc.): keep the displayed pixel size.
               inline['width'] = `${width}px`;
-              // We also capture min-width to prevent shrinking below this point in flex contexts
               inline['min-width'] = `${width}px`;
+          } else if (!isFluid) {
+              // Structural (div/section/etc.): start at displayed pixel width.
+              // For root selections, allow shrinking to fit the export iframe;
+              // inner structural divs keep min-width so flex children don't collapse.
+              inline['width'] = `${width}px`;
+              if (isRoot) {
+                  inline['max-width'] = '100%';
+              } else {
+                  inline['min-width'] = `${width}px`;
+              }
           } else {
               // FLUID STRATEGY: For text elements, use min-width + auto.
               // This fixes the text overflow issue.
               inline['min-width'] = `${width}px`;
-              inline['flex-basis'] = 'auto'; 
+              inline['flex-basis'] = 'auto';
               inline['width'] = 'auto';
           }
       }
@@ -1168,10 +1408,13 @@ function buildStructure(el, isRoot = false) {
 
   const computed = window.getComputedStyle(originalEl);
 
-  // Skip hidden elements
-  if (!isElementVisible(computed)) {
+  // Skip hidden elements — but only for descendants. The user explicitly chose
+  // the root element, so we render it even if it would otherwise look sr-only:
+  // far better to show a tiny element than to silently produce an empty export.
+  if (!isRoot && !isElementVisible(computed)) {
     if (hadHover) originalEl.classList.add("web-replica-hover");
     if (hadSelected) originalEl.classList.add("web-replica-selected");
+    if (_exportDiag) _exportDiag.filteredCount++;
     return null;
   }
 
@@ -1236,68 +1479,39 @@ function buildStructure(el, isRoot = false) {
     }
   }
 
-  // Capture ::before and ::after pseudo-element content AND styling (for letter avatars, icons, etc.)
-  // Use originalEl for computed styles since clones aren't in the DOM
-  const beforeStyle = window.getComputedStyle(originalEl, '::before');
-  const afterStyle = window.getComputedStyle(originalEl, '::after');
-  const beforeContent = beforeStyle.getPropertyValue('content');
-  const afterContent = afterStyle.getPropertyValue('content');
+  // Capture ::before and ::after pseudo-elements.
+  // For non-void elements we emit real ::before/::after CSS rules; for void
+  // elements (input, img, hr, ...) we fall back to merging visible properties
+  // onto the element itself, since browsers don't render pseudo content for them.
+  const beforePseudo = tryCapturePseudo(originalEl, 'before');
+  const afterPseudo = tryCapturePseudo(originalEl, 'after');
 
-  // Check if we have visible pseudo-element content
-  let pseudoSource = null;
-  let pseudoContent = '';
-
-  if (beforeContent && beforeContent !== 'none' && beforeContent !== 'normal') {
-    const clean = beforeContent.replace(/^["']|["']$/g, '');
-    if (clean && clean.length <= 5) { // Only capture short content like letters
-      pseudoContent = clean;
-      pseudoSource = beforeStyle;
-    }
-  }
-  if (!pseudoContent && afterContent && afterContent !== 'none' && afterContent !== 'normal') {
-    const clean = afterContent.replace(/^["']|["']$/g, '');
-    if (clean && clean.length <= 5) {
-      pseudoContent = clean;
-      pseudoSource = afterStyle;
-    }
-  }
-
-  if (pseudoContent && !textContent) {
-    node.text = pseudoContent;
-    node.fromPseudo = true; // Flag that this came from pseudo-element
-  }
-
-  // Capture pseudo-element styling (background-color, border-radius, dimensions) for avatar circles
-  if (pseudoSource) {
-    const pseudoBg = pseudoSource.getPropertyValue('background-color');
-    const pseudoRadius = pseudoSource.getPropertyValue('border-radius');
-    const pseudoWidth = pseudoSource.getPropertyValue('width');
-    const pseudoHeight = pseudoSource.getPropertyValue('height');
-    const pseudoColor = pseudoSource.getPropertyValue('color');
-
-    // If pseudo-element has its own background/styling, merge into the element's style
-    if (pseudoBg && pseudoBg !== 'transparent' && pseudoBg !== 'rgba(0, 0, 0, 0)') {
-      // This element uses a pseudo-element for visual styling
-      // Add these styles to the shared style object
+  if (beforePseudo || afterPseudo) {
+    if (VOID_ELEMENT_TAGS.has(tagName)) {
+      // Fallback: merge a subset of pseudo styling onto the element's own styles.
+      // (Letter-avatar inputs, icon-only inputs, etc. — rare but worth preserving.)
+      const src = beforePseudo || afterPseudo;
+      if (src.content && !textContent) {
+        node.text = src.content;
+        node.fromPseudo = true;
+      }
       if (styleResult && styleResult.shared) {
-        // Only override if not already set or if transparent
-        if (!styleResult.shared['background-color'] || styleResult.shared['background-color'] === 'transparent') {
-          styleResult.shared['background-color'] = rgbToHex(pseudoBg);
+        for (const [prop, val] of Object.entries(src.styles)) {
+          if (!styleResult.shared[prop]) styleResult.shared[prop] = val;
         }
       }
-      node.pseudoBg = rgbToHex(pseudoBg);
-    }
-    if (pseudoRadius && pseudoRadius !== '0px') {
-      node.pseudoRadius = pseudoRadius;
-    }
-    if (pseudoColor) {
-      node.pseudoColor = rgbToHex(pseudoColor);
-    }
-    if (pseudoWidth && pseudoWidth !== 'auto') {
-      node.pseudoWidth = pseudoWidth;
-    }
-    if (pseudoHeight && pseudoHeight !== 'auto') {
-      node.pseudoHeight = pseudoHeight;
+    } else {
+      const bundle = {};
+      if (beforePseudo) bundle.before = beforePseudo;
+      if (afterPseudo) bundle.after = afterPseudo;
+      node.pseudoClass = getOrCreatePseudoClass(bundle);
+      // For elements with ONLY a pseudo content marker (no text, no children)
+      // we keep the historical fromPseudo behaviour so structureToHtml's text
+      // path can still center the letter-avatar pattern.
+      if (beforePseudo && beforePseudo.content && !textContent &&
+          el.children.length === 0) {
+        node.fromPseudo = true;
+      }
     }
   }
 
@@ -1336,6 +1550,7 @@ function buildStructure(el, isRoot = false) {
         const isEmptySpan = childNode.tag === 'span' && !hasText && !hasChildren && !hasSvg && !hasImage && !hasPseudoBg;
 
         if (isEmptySpan) {
+          if (_exportDiag) _exportDiag.emptySpansSkipped++;
           continue; // Skip empty decorative spans
         }
 
@@ -1495,6 +1710,7 @@ function structureToHtml(node, indent = 0) {
   let attrs = '';
   let classes = [];
   if (node.style) classes.push(node.style);
+  if (node.pseudoClass) classes.push(node.pseudoClass);
 
   // Add icon font class if needed - this class makes the icon text render as actual icons
   if (node.isIcon && node.iconFont) {
@@ -1587,6 +1803,7 @@ function structureToHtml(node, indent = 0) {
     attrs = '';
     let classes = [];
     if (node.style) classes.push(node.style);
+    if (node.pseudoClass) classes.push(node.pseudoClass);
     if (node.isIcon && node.iconFont) {
       if (node.iconFont.includes('symbol')) classes.push('material-symbols-outlined');
       else classes.push('material-icons');
@@ -1627,6 +1844,60 @@ function structureToHtml(node, indent = 0) {
   return html;
 }
 
+// --- Layout parent helpers (Tier 3 parent-context wrapper) ---
+// For non-positioned elements, the layout parent is parentElement.
+// For position:absolute|fixed elements, it's offsetParent (the containing
+// block whose top/right/bottom/left coordinates resolve against).
+function getLayoutParent(el) {
+  if (!el) return null;
+  const cs = window.getComputedStyle(el);
+  if (cs.position === 'absolute' || cs.position === 'fixed') {
+    return el.offsetParent || el.parentElement;
+  }
+  return el.parentElement;
+}
+
+const LAYOUT_PARENT_PROPS = [
+  'display',
+  'flex-direction', 'flex-wrap', 'justify-content', 'align-items',
+  'align-content', 'gap', 'row-gap', 'column-gap',
+  'grid-template-columns', 'grid-template-rows', 'grid-template-areas',
+  'grid-auto-flow', 'grid-auto-columns', 'grid-auto-rows',
+  'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'background-color',
+  'position',
+  'border-radius',
+];
+
+function captureLayoutParentStyles(parent, hasPositionedChildren) {
+  if (!parent) return {};
+  const cs = window.getComputedStyle(parent);
+  const captured = {};
+  for (const prop of LAYOUT_PARENT_PROPS) {
+    let value = cs.getPropertyValue(prop);
+    if (isDefaultValue(prop, value)) continue;
+    if (prop === 'position' && value === 'static') continue;
+    if (prop.includes('color') || prop === 'background-color') {
+      const hex = rgbToHex(value);
+      if (!hex) continue;
+      value = hex;
+    }
+    captured[prop] = value;
+  }
+  // Wrapper must establish a containing block when its children are absolute/fixed.
+  if (hasPositionedChildren && (!captured['position'] || captured['position'] === 'static')) {
+    captured['position'] = 'relative';
+  }
+  // Ensure the wrapper participates in normal flow with at least block display
+  // (a wrapper without an explicit display defaults to block, which is fine).
+  return captured;
+}
+
+// Diagnostics object collected during one buildExport pass. When non-null,
+// buildStructure increments counters as it filters nodes. Reset at the start
+// of every buildExport call.
+let _exportDiag = null;
+
 // Global map to link clones back to originals (for style computation)
 let cloneToOriginal = new Map();
 
@@ -1651,25 +1922,105 @@ function buildExport() {
   resetStyleRegistry();
   cloneToOriginal = new Map();
 
-  const topLevel = getTopLevelSelections();
+  _exportDiag = {
+    selectionCount: 0,
+    groupCount: 0,
+    wrapperCount: 0,
+    filteredCount: 0,
+    emptySpansSkipped: 0,
+    selections: [],
+    styleCount: 0,
+    pseudoStyleCount: 0,
+    hoverStyleCount: 0,
+  };
 
-  // USE SELECTION-TIME CLONES: These were captured when user clicked, freezing dynamic content
-  // This ensures rotating content (like GitHub ProTips) shows what user saw at selection time
-  const clones = topLevel.map(el => {
-    // Use the clone captured at selection time, or fall back to cloning now
-    const clone = selectionClones.get(el) || el.cloneNode(true);
-    // Build mapping from clone nodes to original nodes for style computation
-    buildCloneMapping(el, clone, cloneToOriginal);
-    return clone;
-  });
+  const topLevel = getTopLevelSelections();
+  _exportDiag.selectionCount = topLevel.length;
+
+  // Group top-level selections by their LAYOUT parent (parentElement, or
+  // offsetParent for position:absolute|fixed). Siblings sharing a parent will
+  // be wrapped together so the wrapper's flex/grid layout still applies.
+  const groups = new Map(); // parent (or null) -> { parent, originals: [] }
+  for (const el of topLevel) {
+    const layoutParent = getLayoutParent(el);
+    const useWrapper = layoutParent &&
+      layoutParent !== document.body &&
+      layoutParent !== document.documentElement;
+    const key = useWrapper ? layoutParent : null;
+    if (!groups.has(key)) {
+      groups.set(key, { parent: useWrapper ? layoutParent : null, originals: [] });
+    }
+    groups.get(key).originals.push(el);
+  }
 
   const structures = [];
+  _exportDiag.groupCount = groups.size;
 
-  // Process CLONES (text is frozen from selection time), but use originals for computed styles
-  for (const clone of clones) {
-    const structure = buildStructure(clone, true);
-    if (structure) {
-      structures.push(structure);
+  for (const { parent, originals } of groups.values()) {
+    const childStructures = [];
+    let hasPositioned = false;
+
+    for (const original of originals) {
+      // USE SELECTION-TIME CLONES: text is frozen at click time so rotating
+      // content (e.g. GitHub ProTip) reflects what the user saw.
+      const clone = selectionClones.get(original) || original.cloneNode(true);
+      buildCloneMapping(original, clone, cloneToOriginal);
+
+      const structure = buildStructure(clone, true);
+
+      // Diagnostics: record what was selected
+      const rect = original.getBoundingClientRect();
+      const className = (typeof original.className === 'string')
+        ? original.className.split(/\s+/).filter(c => c && !c.startsWith('web-replica-')).slice(0, 3).join(' ').slice(0, 60)
+        : '';
+      _exportDiag.selections.push({
+        tag: original.tagName.toLowerCase(),
+        className,
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+        wrapped: !!parent,
+        kept: !!structure,
+      });
+
+      if (!structure) continue;
+
+      const ocs = window.getComputedStyle(original);
+      if (ocs.position === 'absolute' || ocs.position === 'fixed') {
+        hasPositioned = true;
+      }
+      childStructures.push({ structure, original });
+    }
+
+    if (childStructures.length === 0) continue;
+
+    if (parent) {
+      // Wrap the group in a synthetic div carrying the layout parent's styles.
+      const parentStyles = captureLayoutParentStyles(parent, hasPositioned);
+      const styleObj = parentStyles;
+      const wrapper = {
+        tag: 'div',
+        style: Object.keys(styleObj).length > 0 ? getOrCreateStyleName(styleObj) : undefined,
+        orderedContent: childStructures.map(({ structure }) => ({ type: 'element', node: structure })),
+        children: childStructures.map(({ structure }) => structure),
+      };
+      structures.push(wrapper);
+      _exportDiag.wrapperCount++;
+    } else {
+      // No useful parent context. Push children as-is, but normalize any
+      // root-level position:absolute|fixed so its top/right/bottom/left
+      // doesn't resolve against <body>.
+      for (const { structure, original } of childStructures) {
+        const ocs = window.getComputedStyle(original);
+        if (ocs.position === 'absolute' || ocs.position === 'fixed') {
+          const overrides = 'position: relative; top: auto; right: auto; bottom: auto; left: auto';
+          structure.inlineStyle = structure.inlineStyle
+            ? `${structure.inlineStyle}; ${overrides}`
+            : overrides;
+        }
+        structures.push(structure);
+      }
     }
   }
 
@@ -1686,6 +2037,30 @@ function buildExport() {
     hoverStyles[styleName] = styleObjToCss(hoverObj);
   });
 
+  // Build pseudo styles: { className: { before?: { content, css }, after?: ... } }
+  const pseudoStyles = {};
+  pseudoStyleRegistry.forEach(({ className, bundle }) => {
+    const out = {};
+    if (bundle.before) {
+      out.before = {
+        content: bundle.before.content,
+        css: styleObjToCss(bundle.before.styles),
+      };
+    }
+    if (bundle.after) {
+      out.after = {
+        content: bundle.after.content,
+        css: styleObjToCss(bundle.after.styles),
+      };
+    }
+    pseudoStyles[className] = out;
+  });
+
+  function escapePseudoContent(s) {
+    if (s == null) return '';
+    return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+
   const structure = structures.length === 1 ? structures[0] : structures;
 
   // Build TOON (Token-Optimized Object Notation) - more efficient for LLMs
@@ -1697,6 +2072,7 @@ function buildExport() {
     // Tag with style class
     toon += node.tag;
     if (node.style) toon += `.${node.style}`;
+    if (node.pseudoClass) toon += `.${node.pseudoClass}`;
     if (node.inlineStyle) toon += `[${node.inlineStyle}]`;
 
     // Attributes on same line
@@ -1747,6 +2123,18 @@ function buildExport() {
     }
   }
 
+  if (Object.keys(pseudoStyles).length > 0) {
+    toon += `\n## Pseudo Styles\n`;
+    for (const [name, parts] of Object.entries(pseudoStyles)) {
+      if (parts.before) {
+        toon += `.${name}::before [content="${parts.before.content}"]: ${parts.before.css}\n`;
+      }
+      if (parts.after) {
+        toon += `.${name}::after [content="${parts.after.content}"]: ${parts.after.css}\n`;
+      }
+    }
+  }
+
   toon += `\n## Structure\n`;
   if (Array.isArray(structure)) {
     for (const s of structure) {
@@ -1786,6 +2174,17 @@ function buildExport() {
   // Add hover styles
   for (const [name, cssString] of Object.entries(hoverStyles)) {
     css += `.${name}:hover { ${sanitizeCss(cssString)}; }\n`;
+  }
+  // Add ::before / ::after pseudo-element rules
+  for (const [name, parts] of Object.entries(pseudoStyles)) {
+    if (parts.before) {
+      const body = parts.before.css ? `${sanitizeCss(parts.before.css)}; ` : '';
+      css += `.${name}::before { content: '${escapePseudoContent(parts.before.content)}'; ${body}}\n`;
+    }
+    if (parts.after) {
+      const body = parts.after.css ? `${sanitizeCss(parts.after.css)}; ` : '';
+      css += `.${name}::after { content: '${escapePseudoContent(parts.after.content)}'; ${body}}\n`;
+    }
   }
 
   const bodyHtml = Array.isArray(structure)
@@ -1901,9 +2300,16 @@ ${bodyHtml}
 </body>
 </html>`;
 
+  _exportDiag.styleCount = styleRegistry.size;
+  _exportDiag.pseudoStyleCount = pseudoStyleRegistry.size;
+  _exportDiag.hoverStyleCount = hoverStyleRegistry.size;
+  const diagnostics = _exportDiag;
+  _exportDiag = null;
+
   return {
     toon,  // TOON format for LLMs (more token-efficient)
-    html
+    html,
+    diagnostics
   };
 }
 
@@ -1953,6 +2359,7 @@ window.addEventListener('message', async (event) => {
     pickMode = true;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
     result = { ok: true };
   } else if (msg.type === "CLEAR_SELECTION") {
     selectedElements.forEach((el) => el.classList.remove("web-replica-selected"));
@@ -1962,6 +2369,7 @@ window.addEventListener('message', async (event) => {
     pickMode = false;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
     result = { ok: true };
   } else if (msg.type === "EXPORT_SELECTION") {
     result = buildExport();
@@ -1988,6 +2396,7 @@ try {
     pickMode = true;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
     if (hoverElement) {
       hoverElement.classList.remove("web-replica-hover");
       hoverElement = null;
@@ -2019,6 +2428,7 @@ try {
     pickMode = false;
     isScrollNavigating = false;
     scrollNavigatedElement = null;
+    wheelNavStack = [];
     if (hoverElement) {
       hoverElement.classList.remove("web-replica-hover");
       hoverElement = null;
