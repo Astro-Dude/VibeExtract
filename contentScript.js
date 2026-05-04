@@ -909,6 +909,22 @@ const SHARED_PROPS = [
 // --- Properties for INLINE styles (unique per element) ---
 const INLINE_PROPS = []; // Dimensions handled manually now
 
+// CSS properties that inherit from parent. We capture them on the root and
+// rely on inheritance for descendants; descendants only re-state a value when
+// it differs from the parent's resolved value. Without this, every captured
+// class redundantly carries 10+ font/text properties.
+const INHERITED_PROPS = new Set([
+  'color',
+  'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant',
+  'font-variant-ligatures', 'font-optical-sizing',
+  'line-height', 'letter-spacing', 'word-spacing',
+  'text-align', 'text-indent', 'text-transform',
+  'white-space', 'word-break', 'overflow-wrap', 'hyphens', 'tab-size',
+  'cursor', 'visibility',
+  '-webkit-font-smoothing', '-moz-osx-font-smoothing', 'text-rendering',
+  'scrollbar-width', 'scrollbar-color',
+]);
+
 // --- Properties to capture for ::before / ::after pseudo-elements ---
 const PSEUDO_PROPS = [
   'display',
@@ -1185,7 +1201,9 @@ function getHoverStyles(el, normalStyles) {
 
 // --- Get non-default styles as compact object ---
 // Returns { shared: {}, inline: {} } where shared goes to CSS class, inline to style attribute
-function getCompactStyles(el, isRoot = false) {
+// parentComputed: window.getComputedStyle(originalParent) for inherited-prop dedup;
+//                 pass null for the root element so we still capture the baseline.
+function getCompactStyles(el, isRoot = false, parentComputed = null) {
   const hadHover = el.classList.contains("web-replica-hover");
   const hadSelected = el.classList.contains("web-replica-selected");
   el.classList.remove("web-replica-hover", "web-replica-selected");
@@ -1242,6 +1260,23 @@ function getCompactStyles(el, isRoot = false) {
 
     if (isDefaultValue(prop, value)) continue;
 
+    // Drop outline entirely when its style is `none` — Chrome's default outline
+    // shorthand is "<currentColor> none medium" on every element, which
+    // otherwise pollutes every captured class with an invisible declaration.
+    if (prop === 'outline') {
+      // Computed shorthand looks like "rgb(25, 30, 59) none 1.33333px"; check
+      // for a standalone " none " token so we don't false-match a colour name.
+      if (/(?:^|\s)none(?:\s|$)/.test(value)) continue;
+    }
+
+    // Inherited-prop dedup: if this property inherits and the parent's
+    // resolved value matches, skip it — the descendant inherits the same
+    // value automatically. Always keep on root so the cascade has a baseline.
+    if (!isRoot && parentComputed && INHERITED_PROPS.has(prop)) {
+      const parentVal = parentComputed.getPropertyValue(prop);
+      if (parentVal === value) continue;
+    }
+
     // Shorten colors
     if (prop.includes('color') || prop === 'background-color') {
       value = rgbToHex(value);
@@ -1255,6 +1290,20 @@ function getCompactStyles(el, isRoot = false) {
     }
 
     shared[prop] = value;
+  }
+
+  // Floating-label fix: when an absolute/fixed element has BOTH a pixel left
+  // and a pixel right offset, the right offset was measured against the
+  // original parent's width. In the export the parent may render at a
+  // different width (different font, narrower iframe), and the right offset
+  // ends up pulling the label across the input. Drop the right offset and
+  // let the element flow from `left` constrained by max-width / margin-right.
+  if ((positionValue === 'absolute' || positionValue === 'fixed') &&
+      shared['left'] && shared['right'] &&
+      /\d+(\.\d+)?px$/.test(shared['left']) &&
+      /\d+(\.\d+)?px$/.test(shared['right']) &&
+      parseFloat(shared['right']) > 0) {
+    delete shared['right'];
   }
 
   // Process INLINE properties (Dimensions - Manual Layout Logic)
@@ -1279,34 +1328,29 @@ function getCompactStyles(el, isRoot = false) {
               inline['width'] = `${width}px`;
               inline['min-width'] = `${width}px`;
           } else if (!isFluid) {
-              // Structural (div/section/etc.): start at displayed pixel width.
-              // For root selections, allow shrinking to fit the export iframe;
-              // inner structural divs keep min-width so flex children don't collapse.
+              // Structural (div/section/etc.): start at the displayed pixel width
+              // but allow shrinking to fit narrower parents. NO min-width — that
+              // forced overflow whenever a child happened to measure 1–4 px wider
+              // than its parent on the original page.
               inline['width'] = `${width}px`;
-              if (isRoot) {
-                  inline['max-width'] = '100%';
-              } else {
-                  inline['min-width'] = `${width}px`;
-              }
+              inline['max-width'] = '100%';
           } else {
-              // FLUID STRATEGY: For text elements, use min-width + auto.
-              // This fixes the text overflow issue.
+              // Fluid (text elements): minimum content width hint, otherwise auto.
               inline['min-width'] = `${width}px`;
               inline['flex-basis'] = 'auto';
               inline['width'] = 'auto';
           }
       }
-      
-      // Height Handling
+
+      // Height Handling — only lock height for media; everything else uses
+      // min-height as a hint so containers can grow when content reflows in
+      // the export iframe (different font, narrower width, wrapped text).
       if (height > 0) {
-          if (isMedia || !isFluid) {
-              // STRICT STRATEGY
+          if (isMedia) {
               inline['height'] = `${height}px`;
               inline['min-height'] = `${height}px`;
           } else {
-             // FLUID STRATEGY
-             inline['min-height'] = `${height}px`;
-             inline['height'] = 'auto'; 
+              inline['min-height'] = `${height}px`;
           }
       }
   }
@@ -1452,8 +1496,15 @@ function buildStructure(el, isRoot = false) {
   }
 
   // Get compact styles (returns { shared, inline })
-  // Note: originalEl was declared at function start for visibility check
-  const styleResult = getCompactStyles(originalEl, isRoot);
+  // Note: originalEl was declared at function start for visibility check.
+  // Pass the original parent's computed style so inherited text properties
+  // (font-family, color, line-height, white-space, …) only get re-stated on
+  // descendants whose value diverges from the parent's resolved value.
+  const originalParent = originalEl.parentElement;
+  const parentComputed = (!isRoot && originalParent && originalParent.nodeType === Node.ELEMENT_NODE)
+    ? window.getComputedStyle(originalParent)
+    : null;
+  const styleResult = getCompactStyles(originalEl, isRoot, parentComputed);
   if (styleResult) {
     // Shared styles go into deduplicated CSS class
     if (styleResult.shared) {
@@ -2259,6 +2310,14 @@ input::placeholder { color: inherit; opacity: 0.5; }
 a { color: inherit; text-decoration: inherit; }
 /* Ensure proper inline display */
 span { display: inline; }
+/* Reset UA-default chrome that otherwise paints rogue borders/padding around
+   <fieldset> (groove border + padding around every filter section), <legend>
+   (built-in side padding), and <hr> (1px inset border on left/right whenever
+   the page only overrides top). Captured class rules still win because of
+   class > tag specificity. */
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+legend { padding: 0; }
+hr { border: 0; padding: 0; margin: 0; height: 0; color: inherit; background: transparent; }
 /* Flex container fixes */
 /* [style*="display: flex"], [style*="display:flex"] { min-width: 0; } */
 /* Icon font styles - using !important to override captured styles */
@@ -2303,6 +2362,38 @@ ${bodyHtml}
   _exportDiag.styleCount = styleRegistry.size;
   _exportDiag.pseudoStyleCount = pseudoStyleRegistry.size;
   _exportDiag.hoverStyleCount = hoverStyleRegistry.size;
+
+  // Primary font diagnostic — find the most-frequently-declared first font
+  // across captured styles, and flag whether we'll auto-load it from Google
+  // Fonts. When a proprietary font (Centra No2, Adobe Typekit, etc.) is the
+  // primary, the export silently falls back to the system stack and text
+  // metrics shift, which causes the "looks overflowed in the export but not
+  // on the original" symptom.
+  const fontCounts = new Map();
+  styleRegistry.forEach((_name, styleJson) => {
+    try {
+      const obj = JSON.parse(styleJson);
+      if (obj['font-family']) {
+        const first = obj['font-family'].split(',')[0].trim().replace(/["']/g, '');
+        const lo = first.toLowerCase();
+        if (['sans-serif', 'serif', 'monospace', 'cursive', 'fantasy',
+             '-apple-system', 'blinkmacsystemfont', 'system-ui',
+             'inherit', 'initial'].includes(lo)) return;
+        if (lo.includes('icon') || lo.includes('material') || lo.includes('fontawesome')) return;
+        fontCounts.set(first, (fontCounts.get(first) || 0) + 1);
+      }
+    } catch (e) {}
+  });
+  let primaryFont = null;
+  let primaryFontCount = 0;
+  fontCounts.forEach((count, font) => {
+    if (count > primaryFontCount) { primaryFont = font; primaryFontCount = count; }
+  });
+  _exportDiag.primaryFont = primaryFont;
+  _exportDiag.primaryFontWillLoad = primaryFont
+    ? Array.from(detectedFonts).some(f => f.toLowerCase() === primaryFont.toLowerCase())
+    : false;
+
   const diagnostics = _exportDiag;
   _exportDiag = null;
 

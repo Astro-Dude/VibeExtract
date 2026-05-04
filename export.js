@@ -99,6 +99,13 @@ function renderDiagnostics(d) {
     summary.appendChild(ps);
   }
 
+  if (d.primaryFont && !d.primaryFontWillLoad) {
+    const fp = document.createElement('span');
+    fp.className = 'diag-pill warn';
+    fp.textContent = `font fallback: ${d.primaryFont}`;
+    summary.appendChild(fp);
+  }
+
   // Body: list each selection
   const body = document.getElementById('diag-body');
   body.innerHTML = '';
@@ -108,6 +115,14 @@ function renderDiagnostics(d) {
     note.className = 'diag-row';
     note.style.color = '#fbbf24';
     note.innerHTML = `<span class="meta">Filtered out ${d.filteredCount} hidden node${d.filteredCount === 1 ? '' : 's'} and ${d.emptySpansSkipped} empty span${d.emptySpansSkipped === 1 ? '' : 's'} from descendants. Use Alt+Click for exact targeting if you want them included.</span>`;
+    body.appendChild(note);
+  }
+
+  if (d.primaryFont && !d.primaryFontWillLoad) {
+    const note = document.createElement('div');
+    note.className = 'diag-row';
+    note.style.color = '#fbbf24';
+    note.innerHTML = `<span class="meta">Primary font <strong>${d.primaryFont}</strong> is not on Google Fonts and isn't being auto-loaded — the export will fall back to the system stack and text widths may differ from the original. Add the font manually if precise metrics matter.</span>`;
     body.appendChild(note);
   }
 
