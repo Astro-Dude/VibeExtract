@@ -310,7 +310,7 @@ function nodeToHtml(node, indent = 0) {
   if (node.children && node.children.length) {
     inner = '\n' + node.children.map(c => nodeToHtml(c, indent + 1)).join('\n') + '\n' + pad;
   } else if (node.text != null) {
-    inner = node.text;
+    inner = escapeHtml(node.text);
   }
   return `${pad}<${tag}${attrs}>${inner}</${tag}>`;
 }
