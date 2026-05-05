@@ -1236,16 +1236,26 @@ function detectFontFaces() {
         /url\(\s*["']?([^"')]+)["']?\s*\)\s*(?:format\(\s*["']?([^"')]+)["']?\s*\))?/gi
       )];
       if (matches.length === 0) continue;
+      const normalizeFontFormat = (declaredFormat, url) => {
+        const declared = (declaredFormat || '').toLowerCase();
+        if (declared === 'woff2' || declared === 'woff' || declared === 'opentype' || declared === 'truetype') {
+          return declared;
+        }
+        const urlPath = url.split('#')[0].split('?')[0].toLowerCase();
+        if (urlPath.endsWith('.woff2')) return 'woff2';
+        if (urlPath.endsWith('.woff')) return 'woff';
+        if (urlPath.endsWith('.otf')) return 'opentype';
+        if (urlPath.endsWith('.ttf')) return 'truetype';
+        return '';
+      };
       const ranked = matches.map(m => {
         const url = m[1];
-        const fmt = (m[2] || '').toLowerCase() ||
-          (url.endsWith('.woff2') ? 'woff2' :
-           url.endsWith('.woff') ? 'woff' :
-           url.endsWith('.otf') ? 'opentype' :
-           url.endsWith('.ttf') ? 'truetype' : '');
+        const fmt = normalizeFontFormat(m[2], url);
         const score = fmt === 'woff2' ? 4 : fmt === 'woff' ? 3 : fmt === 'opentype' ? 2 : fmt === 'truetype' ? 1 : 0;
-        return { url, format: fmt || 'woff2', score };
-      }).sort((a, b) => b.score - a.score);
+        return { url, format: fmt, score };
+      }).filter(candidate => candidate.score > 0)
+        .sort((a, b) => b.score - a.score);
+      if (ranked.length === 0) continue;
       const chosen = ranked[0];
       if (!chosen.url || chosen.url.startsWith('data:')) continue; // already inlined
 
