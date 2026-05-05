@@ -19,6 +19,10 @@ let hoverStyleRegistry = new Map(); // Maps base styleName -> hover styles objec
 let pseudoStyleRegistry = new Map(); // pseudoBundleKey -> { className, bundle }
 let styleCounter = 0;
 let pseudoCounter = 0;
+// Children whose horizontal margins have been promoted onto a parent's
+// `column-gap`. Their `getCompactStyles` skips margin-left / margin-right so
+// the spacing isn't double-applied. Reset between exports.
+let _skipMarginInlineSet = new WeakSet();
 
 function resetStyleRegistry() {
   styleRegistry.clear();
@@ -27,6 +31,8 @@ function resetStyleRegistry() {
   styleCounter = 0;
   pseudoCounter = 0;
   resetDetectedFonts();
+  // Discard any margin-promotion notes from a previous extraction.
+  _skipMarginInlineSet = new WeakSet();
 }
 
 function getOrCreateStyleName(styleObj) {
@@ -307,7 +313,7 @@ function expandToMeaningfulContainer(el) {
   const cs = window.getComputedStyle(el);
 
   // Rule A: Overlay button/anchor that's positioned absolute/fixed → use offsetParent.
-  // (This is the Expedia "Going to" overlay-button-on-top-of-a-real-input pattern.)
+  // (Common pattern: a transparent button overlaying a real input or other field.)
   if ((tag === 'button' || tag === 'a') &&
       (cs.position === 'absolute' || cs.position === 'fixed')) {
     const op = el.offsetParent;
@@ -565,7 +571,7 @@ function isExtensionContextValid() {
 }
 
 // Download files via background script (bypasses CSP restrictions)
-function downloadFiles(toonContent, htmlContent, diagnostics) {
+function downloadFiles(toonContent, htmlContent, diagnostics, fontFaces) {
   if (!isExtensionContextValid()) {
     console.warn("[VibeExtract] Extension context invalidated. Please refresh the page.");
     alert("VibeExtract: Extension was reloaded. Please refresh this page to continue using the extension.");
@@ -577,6 +583,7 @@ function downloadFiles(toonContent, htmlContent, diagnostics) {
     toon: toonContent,
     html: htmlContent,
     diagnostics: diagnostics || null,
+    fontFaces: fontFaces || [],
     sourceURL: window.location.href
   }, (response) => {
     if (chrome.runtime.lastError) {
@@ -596,7 +603,7 @@ function performExport() {
       console.log("[VibeExtract] Export data generated, downloading...");
 
       // Download both files via background script
-      downloadFiles(result.toon, result.html, result.diagnostics);
+      downloadFiles(result.toon, result.html, result.diagnostics, result.fontFaces);
 
       console.log("[VibeExtract] Export complete");
       return true;
@@ -814,7 +821,13 @@ const DEFAULT_SKIP = {
   'flex-grow': ['0'],
   'flex-shrink': ['1'],
   'flex-basis': ['auto'],
-  'align-self': ['auto'],
+  // `align-self: baseline` on icon-only grid items resolves to the bottom of
+  // the inline content (no text baseline available), which sinks the swap
+  // button to the bottom of its 48 px row. Skip the value so the parent's
+  // align-items wins instead.
+  'align-self': ['auto', 'baseline'],
+  'justify-self': ['auto', 'normal'],
+  'justify-items': ['legacy', 'normal'],
   'order': ['0'],
   'grid-template-columns': ['none'],
   'grid-template-rows': ['none'],
@@ -833,6 +846,21 @@ const DEFAULT_SKIP = {
   'opacity': ['1'],
   'border-width': ['0px'],
   'border-style': ['none'],
+  // Per-side longhand defaults so SHARED_PROPS doesn't spam every captured
+  // class with `border-top-width: 0px; border-top-style: none; ...` for
+  // sides where there isn't actually a border.
+  'border-top-width': ['0px'],
+  'border-right-width': ['0px'],
+  'border-bottom-width': ['0px'],
+  'border-left-width': ['0px'],
+  'border-top-style': ['none'],
+  'border-right-style': ['none'],
+  'border-bottom-style': ['none'],
+  'border-left-style': ['none'],
+  // Border-color longhands: when their corresponding -style is `none` the
+  // SHARED_PROPS loop already suppresses them via hasMeaningfulBorder, so
+  // we don't need a colour-default here. Listing the colour anyway would
+  // wrongly drop intentional currentColor borders.
   'border-radius': ['0px'],
   'box-shadow': ['none'],
   'outline': ['none'],
@@ -876,6 +904,12 @@ const SHARED_PROPS = [
   'flex-direction', 'flex-wrap', 'justify-content', 'align-items', 'align-content', 'gap',
   // Flex item
   'flex-grow', 'flex-shrink', 'flex-basis', 'align-self', 'order',
+  // Grid item placement (justify-self lets a 36 px circle button center inside
+  // a 16 px grid column and overflow ~30 % into both adjacent cells, a common
+  // pattern for circular swap/toggle buttons positioned between two fields).
+  // Without capturing this, the grid item defaults to inline-start and snaps
+  // to the left of its column.
+  'justify-self', 'justify-items',
   // Grid
   'grid-template-columns', 'grid-template-rows', 'grid-template-areas',
   'grid-column', 'grid-row', 'grid-area',
@@ -886,7 +920,15 @@ const SHARED_PROPS = [
   'background-color', 'background-image', 'background-size', 'background-position', 'background-repeat',
   // Visual
   'color', 'opacity',
-  'border-width', 'border-style', 'border-color', 'border-radius',
+  // Borders captured as 4-side longhands so non-uniform per-side colours
+  // (e.g. `border-bottom: 2px solid green` on an otherwise borderless
+  // step-indicator element) round-trip exactly. Reading the `border-color`
+  // shorthand via getComputedStyle could collapse to a single navy value
+  // when only one side had non-zero width, dropping the green entirely.
+  'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+  'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
+  'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
+  'border-radius',
   'box-shadow', 'outline',
   // Text
   'font-family', 'font-size', 'font-weight', 'line-height', 'text-align',
@@ -909,6 +951,22 @@ const SHARED_PROPS = [
 // --- Properties for INLINE styles (unique per element) ---
 const INLINE_PROPS = []; // Dimensions handled manually now
 
+// CSS properties that inherit from parent. We capture them on the root and
+// rely on inheritance for descendants; descendants only re-state a value when
+// it differs from the parent's resolved value. Without this, every captured
+// class redundantly carries 10+ font/text properties.
+const INHERITED_PROPS = new Set([
+  'color',
+  'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant',
+  'font-variant-ligatures', 'font-optical-sizing',
+  'line-height', 'letter-spacing', 'word-spacing',
+  'text-align', 'text-indent', 'text-transform',
+  'white-space', 'word-break', 'overflow-wrap', 'hyphens', 'tab-size',
+  'cursor', 'visibility',
+  '-webkit-font-smoothing', '-moz-osx-font-smoothing', 'text-rendering',
+  'scrollbar-width', 'scrollbar-color',
+]);
+
 // --- Properties to capture for ::before / ::after pseudo-elements ---
 const PSEUDO_PROPS = [
   'display',
@@ -916,7 +974,14 @@ const PSEUDO_PROPS = [
   'width', 'height',
   'background-color', 'background-image', 'background-size',
   'background-position', 'background-repeat',
-  'border-width', 'border-style', 'border-color', 'border-radius',
+  // Borders captured per-side (longhands) so non-uniform borders such as
+  // `border-bottom: 2px solid green` on an otherwise borderless element
+  // survive intact. The shorthand `border-color` collapsed to a single
+  // value when the other three sides had width:0, dropping the green.
+  'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+  'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
+  'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
+  'border-radius',
   'box-shadow',
   'color', 'opacity',
   'transform', 'transform-origin',
@@ -955,6 +1020,17 @@ function capturePseudoStyles(pseudoStyle) {
   const positionValue = pseudoStyle.getPropertyValue('position');
   for (const prop of PSEUDO_PROPS) {
     if (['top', 'right', 'bottom', 'left'].includes(prop) && positionValue === 'static') continue;
+
+    // Per-side border-longhand skip — same logic as in getCompactStyles.
+    // Only emit `border-{side}-*` for sides that have a rendered border.
+    const borderSideMatch = prop.match(/^border-(top|right|bottom|left)-(width|style|color)$/);
+    if (borderSideMatch) {
+      const side = borderSideMatch[1];
+      const sideWidth = parseFloat(pseudoStyle.getPropertyValue(`border-${side}-width`)) || 0;
+      const sideStyle = pseudoStyle.getPropertyValue(`border-${side}-style`);
+      if (sideWidth <= 0 || sideStyle === 'none' || sideStyle === 'hidden') continue;
+    }
+
     let value = pseudoStyle.getPropertyValue(prop);
     if (isDefaultValue(prop, value)) continue;
     if (prop.includes('color') || prop === 'background-color') {
@@ -1107,6 +1183,107 @@ function getDetectedFonts() {
   return detectedFonts;
 }
 
+// --- Detect @font-face rules used by captured styles ---
+// Walks the page's CSSOM for @font-face rules whose family matches a captured
+// `font-family`. Returns a deduped array of descriptors so the export can
+// fetch the woff2 binaries via background.js, save them alongside the .html,
+// and reference them in the export's own @font-face declarations. Without
+// this, proprietary fonts like Centra No2 are unavailable in the export
+// iframe and text wraps differently due to system-font fallback metrics.
+function detectFontFaces() {
+  // Collect every distinct first-stack font name we've captured so far.
+  const usedFamilies = new Set();
+  styleRegistry.forEach((_name, key) => {
+    try {
+      const obj = JSON.parse(key);
+      if (obj['font-family']) {
+        for (const part of obj['font-family'].split(',')) {
+          const cleaned = part.trim().replace(/^["']|["']$/g, '');
+          if (cleaned) usedFamilies.add(cleaned.toLowerCase());
+        }
+      }
+    } catch (_) {}
+  });
+  if (usedFamilies.size === 0) return [];
+
+  // Drop generic CSS keywords / known system stacks — no point fetching them.
+  const skip = new Set([
+    'sans-serif', 'serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
+    'ui-sans-serif', 'ui-serif', 'ui-monospace', 'ui-rounded',
+    '-apple-system', 'blinkmacsystemfont', 'segoe ui', 'noto sans',
+    'helvetica', 'arial', 'roboto', 'apple color emoji', 'segoe ui emoji',
+    'inherit', 'initial', 'unset',
+  ]);
+
+  const seen = new Set();
+  const faces = [];
+  for (const sheet of document.styleSheets) {
+    let rules;
+    try { rules = sheet.cssRules; } catch (_) { continue; } // CORS-restricted
+    if (!rules) continue;
+    for (const rule of rules) {
+      // CSSFontFaceRule is type 5; checking constructor name is more robust
+      // across browser quirks than the magic number.
+      if (rule.type !== 5 && rule.constructor.name !== 'CSSFontFaceRule') continue;
+      const familyRaw = rule.style.fontFamily || '';
+      const family = familyRaw.replace(/^["']|["']$/g, '');
+      const familyLo = family.toLowerCase();
+      if (!family || skip.has(familyLo) || !usedFamilies.has(familyLo)) continue;
+
+      const src = rule.style.src || '';
+      // Pull every url(...) format(...) pair; prefer woff2 > woff > otf > ttf.
+      const matches = [...src.matchAll(
+        /url\(\s*["']?([^"')]+)["']?\s*\)\s*(?:format\(\s*["']?([^"')]+)["']?\s*\))?/gi
+      )];
+      if (matches.length === 0) continue;
+      const normalizeFontFormat = (declaredFormat, url) => {
+        const declared = (declaredFormat || '').toLowerCase();
+        if (declared === 'woff2' || declared === 'woff' || declared === 'opentype' || declared === 'truetype') {
+          return declared;
+        }
+        const urlPath = url.split('#')[0].split('?')[0].toLowerCase();
+        if (urlPath.endsWith('.woff2')) return 'woff2';
+        if (urlPath.endsWith('.woff')) return 'woff';
+        if (urlPath.endsWith('.otf')) return 'opentype';
+        if (urlPath.endsWith('.ttf')) return 'truetype';
+        return '';
+      };
+      const ranked = matches.map(m => {
+        const url = m[1];
+        const fmt = normalizeFontFormat(m[2], url);
+        const score = fmt === 'woff2' ? 4 : fmt === 'woff' ? 3 : fmt === 'opentype' ? 2 : fmt === 'truetype' ? 1 : 0;
+        return { url, format: fmt, score };
+      }).filter(candidate => candidate.score > 0)
+        .sort((a, b) => b.score - a.score);
+      if (ranked.length === 0) continue;
+      const chosen = ranked[0];
+      if (!chosen.url || chosen.url.startsWith('data:')) continue; // already inlined
+
+      const weight = (rule.style.fontWeight || '400').toString();
+      const style = (rule.style.fontStyle || 'normal').toString();
+
+      // Resolve relative URLs against the stylesheet's location (or document).
+      let absoluteUrl = chosen.url;
+      try {
+        absoluteUrl = new URL(chosen.url, sheet.href || document.baseURI).href;
+      } catch (_) {}
+
+      const dedupKey = `${familyLo}|${weight}|${style}|${absoluteUrl}`;
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+
+      faces.push({
+        family,
+        weight,
+        style,
+        format: chosen.format,
+        url: absoluteUrl,
+      });
+    }
+  }
+  return faces;
+}
+
 // --- Check visibility ---
 function isElementVisible(computed) {
   if (computed.display === 'none' ||
@@ -1185,7 +1362,9 @@ function getHoverStyles(el, normalStyles) {
 
 // --- Get non-default styles as compact object ---
 // Returns { shared: {}, inline: {} } where shared goes to CSS class, inline to style attribute
-function getCompactStyles(el, isRoot = false) {
+// parentComputed: window.getComputedStyle(originalParent) for inherited-prop dedup;
+//                 pass null for the root element so we still capture the baseline.
+function getCompactStyles(el, isRoot = false, parentComputed = null) {
   const hadHover = el.classList.contains("web-replica-hover");
   const hadSelected = el.classList.contains("web-replica-selected");
   el.classList.remove("web-replica-hover", "web-replica-selected");
@@ -1198,20 +1377,20 @@ function getCompactStyles(el, isRoot = false) {
   const positionValue = computed.getPropertyValue('position');
   const isListElement = ['ul', 'ol', 'li'].includes(tagName);
 
-  // Get border values to check if border should be rendered
-  const borderWidth = computed.getPropertyValue('border-width');
+  // Get border values to check if border should be rendered.
+  // Capture a border whenever it is visible: any style other than `none`/`hidden`
+  // and any width > 0. We previously also compared border-color to text-color
+  // and dropped matches, but that silently killed intentional same-color
+  // accents (e.g. the green flight-time line "12:59pm —— 2:24pm" uses
+  // `border-top: 2px solid currentColor` with `color: green`).
   const borderStyle = computed.getPropertyValue('border-style');
-  const borderColor = computed.getPropertyValue('border-color');
-  const textColor = computed.getPropertyValue('color');
-
-  // Check if border has meaningful styling (not just inheriting from text color)
-  const hasVisibleBorder = borderWidth !== '0px' && borderStyle !== 'none';
-  // Border color often inherits from text color - only keep border if colors differ significantly
-  // or if border-color is explicitly a neutral/gray color
-  const borderColorHex = rgbToHex(borderColor);
-  const textColorHex = rgbToHex(textColor);
-  const hasMeaningfulBorder = hasVisibleBorder && borderColorHex &&
-    (borderColorHex !== textColorHex || isNeutralColor(borderColorHex));
+  const borderTopWidth = parseFloat(computed.getPropertyValue('border-top-width')) || 0;
+  const borderRightWidth = parseFloat(computed.getPropertyValue('border-right-width')) || 0;
+  const borderBottomWidth = parseFloat(computed.getPropertyValue('border-bottom-width')) || 0;
+  const borderLeftWidth = parseFloat(computed.getPropertyValue('border-left-width')) || 0;
+  const anyBorderWidth = borderTopWidth + borderRightWidth + borderBottomWidth + borderLeftWidth;
+  const styleHasVisible = /\b(?:solid|dashed|dotted|double|groove|ridge|inset|outset)\b/.test(borderStyle);
+  const hasMeaningfulBorder = anyBorderWidth > 0 && styleHasVisible;
 
   // Process SHARED properties (go into CSS classes)
   for (const prop of SHARED_PROPS) {
@@ -1221,8 +1400,32 @@ function getCompactStyles(el, isRoot = false) {
     // Skip position offsets when position is static
     if (['top', 'right', 'bottom', 'left'].includes(prop) && positionValue === 'static') continue;
 
-    // Skip all border properties if border is just inheriting text color (causes blue outlines)
+    // R4 — skip margin-left / margin-right when this element's parent has
+    // already promoted those margins onto its own `column-gap`. Without this
+    // the spacing would be double-applied (4 px child margin + 8 px parent
+    // gap = 16 px between adjacent chips instead of the intended 8 px).
+    if ((prop === 'margin-left' || prop === 'margin-right') &&
+        _skipMarginInlineSet.has(el)) {
+      continue;
+    }
+
+    // Skip all border properties if NO side has a visible border on this
+    // element. Keeps captured classes free of `border-top-*: ...` noise on
+    // borderless elements.
     if (prop.startsWith('border-') && prop !== 'border-radius' && !hasMeaningfulBorder) continue;
+
+    // Per-side border longhand skip: only capture `border-{side}-*` when
+    // that specific side actually has a rendered border. Without this we'd
+    // emit `border-top-color: rgb(...); border-right-color: rgb(...); ...`
+    // for a step-indicator div that only paints `border-bottom`, polluting
+    // every captured class with three useless colour declarations.
+    const borderSideMatch = prop.match(/^border-(top|right|bottom|left)-(width|style|color)$/);
+    if (borderSideMatch) {
+      const side = borderSideMatch[1];
+      const sideWidth = parseFloat(computed.getPropertyValue(`border-${side}-width`)) || 0;
+      const sideStyle = computed.getPropertyValue(`border-${side}-style`);
+      if (sideWidth <= 0 || sideStyle === 'none' || sideStyle === 'hidden') continue;
+    }
 
     let value = computed.getPropertyValue(prop);
 
@@ -1242,6 +1445,23 @@ function getCompactStyles(el, isRoot = false) {
 
     if (isDefaultValue(prop, value)) continue;
 
+    // Drop outline entirely when its style is `none` — Chrome's default outline
+    // shorthand is "<currentColor> none medium" on every element, which
+    // otherwise pollutes every captured class with an invisible declaration.
+    if (prop === 'outline') {
+      // Computed shorthand looks like "rgb(25, 30, 59) none 1.33333px"; check
+      // for a standalone " none " token so we don't false-match a colour name.
+      if (/(?:^|\s)none(?:\s|$)/.test(value)) continue;
+    }
+
+    // Inherited-prop dedup: if this property inherits and the parent's
+    // resolved value matches, skip it — the descendant inherits the same
+    // value automatically. Always keep on root so the cascade has a baseline.
+    if (!isRoot && parentComputed && INHERITED_PROPS.has(prop)) {
+      const parentVal = parentComputed.getPropertyValue(prop);
+      if (parentVal === value) continue;
+    }
+
     // Shorten colors
     if (prop.includes('color') || prop === 'background-color') {
       value = rgbToHex(value);
@@ -1257,31 +1477,66 @@ function getCompactStyles(el, isRoot = false) {
     shared[prop] = value;
   }
 
+  // Floating-label fix (horizontal): when an absolute/fixed element has BOTH
+  // a pixel left and a pixel right offset, the right offset was measured
+  // against the original parent's width. In the export the parent may render
+  // at a different width (different font, narrower iframe), and the right
+  // offset ends up pulling the label across the input. Drop the right offset
+  // and let the element flow from `left` constrained by max-width.
+  if ((positionValue === 'absolute' || positionValue === 'fixed') &&
+      shared['left'] && shared['right'] &&
+      /\d+(\.\d+)?px$/.test(shared['left']) &&
+      /\d+(\.\d+)?px$/.test(shared['right']) &&
+      parseFloat(shared['right']) > 0) {
+    delete shared['right'];
+  }
+  // Same fix on the vertical axis: an absolute child with both pixel top and
+  // pixel bottom stretches when the parent grows (which it does in the export
+  // because Tier 3 turned `height` into `min-height`). For example, a toggle
+  // handle styled `top: 0; bottom: 0.444px` to vertically centre a 20×20
+  // circle inside a 24-tall track becomes a tall pill once the track row
+  // grows to fit a wrapped subtitle. Drop the bottom offset so the captured
+  // `min-height` controls the size.
+  if ((positionValue === 'absolute' || positionValue === 'fixed') &&
+      shared['top'] && shared['bottom'] &&
+      /\d+(\.\d+)?px$/.test(shared['top']) &&
+      /\d+(\.\d+)?px$/.test(shared['bottom']) &&
+      parseFloat(shared['bottom']) > 0) {
+    delete shared['bottom'];
+  }
+
   // Process INLINE properties (Dimensions - Manual Layout Logic)
   // We use offsetWidth/offsetHeight (Border-Box) instead of computed width (Content-Box)
   // This solves the shrinking issue where padding was subtracted twice.
   
   const display = computed.getPropertyValue('display');
-  const isInline = display === 'inline'; // Inline elements (span, a) ignore width/height
-  
-  if (!isInline && display !== 'none') {
+  const isInline = display === 'inline'; // Inline non-replaced elements (span, a) ignore width/height
+  const isMediaTag = ['img', 'video', 'canvas', 'svg', 'iframe', 'input', 'textarea', 'select'].includes(tagName);
+
+  // Replaced media elements (img/svg/input/etc.) DO honour width/height
+  // even when their computed display is `inline`. Skipping them dropped the
+  // captured pixel dimensions for inline header logos and similar replaced
+  // elements, which then rendered at their intrinsic max-width.
+  if (display !== 'none' && (!isInline || isMediaTag)) {
       const width = el.offsetWidth;
       const height = el.offsetHeight;
-      const isMedia = ['img', 'video', 'canvas', 'svg', 'iframe', 'input', 'textarea', 'select'].includes(tagName);
+      const isMedia = isMediaTag;
       // Tags that should be allowed to expand to fit text (Fluid Strategy)
       const FLUID_TAGS = ['a', 'button', 'span', 'label', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'summary', 'cite', 'li', 'td', 'th', 'strong', 'em', 'b', 'i', 'mark', 'q', 'small', 'sub', 'sup'];
       const isFluid = FLUID_TAGS.includes(tagName);
 
-      // Width Handling
+      // Width Handling — small UI controls (toggles, badges, pill chips,
+      // banners) are pixel-perfect on the source page. Soft `max-width: 100%`
+      // without a `min-width` floor lets them stretch with their flex/grid
+      // parents in our export, breaking the toggle into a square and the
+      // banner into a 4-line stretch. So we lock both width and min-width
+      // for inner structural divs, leaving only the root with max-width:100%
+      // so the export iframe can still shrink the outermost wrapper to fit.
       if (width > 0) {
           if (isMedia) {
-              // Media (img/video/iframe/input/etc.): keep the displayed pixel size.
               inline['width'] = `${width}px`;
               inline['min-width'] = `${width}px`;
           } else if (!isFluid) {
-              // Structural (div/section/etc.): start at displayed pixel width.
-              // For root selections, allow shrinking to fit the export iframe;
-              // inner structural divs keep min-width so flex children don't collapse.
               inline['width'] = `${width}px`;
               if (isRoot) {
                   inline['max-width'] = '100%';
@@ -1289,26 +1544,89 @@ function getCompactStyles(el, isRoot = false) {
                   inline['min-width'] = `${width}px`;
               }
           } else {
-              // FLUID STRATEGY: For text elements, use min-width + auto.
-              // This fixes the text overflow issue.
+              // Fluid (text elements): minimum content width hint, otherwise auto.
               inline['min-width'] = `${width}px`;
               inline['flex-basis'] = 'auto';
               inline['width'] = 'auto';
           }
       }
-      
-      // Height Handling
+
+      // Height Handling — three-way split:
+      //   - Media: lock both height and min-height (intrinsic asset size).
+      //   - Non-fluid divs that EXPLICITLY clip overflow: lock both, so a
+      //     76 px banner with `overflow: hidden` stays 76 px and clips text
+      //     that doesn't fit (matches the source design intent).
+      //   - Everything else: min-height only, so containers can GROW to
+      //     accommodate text that wraps to extra lines under our system-
+      //     font fallback. Without this, deep parents (e.g. a 20 px row
+      //     wrapping a heading h2 that wraps to 40 px) clip the text and
+      //     the overflow leaks into sibling rows below it (the Price
+      //     Tracking title overlap and OneKeyCash bottom-clip cases).
       if (height > 0) {
-          if (isMedia || !isFluid) {
-              // STRICT STRATEGY
+          if (isMedia) {
               inline['height'] = `${height}px`;
               inline['min-height'] = `${height}px`;
+          } else if (!isFluid) {
+              const ov = computed.getPropertyValue('overflow');
+              const ovX = computed.getPropertyValue('overflow-x');
+              const ovY = computed.getPropertyValue('overflow-y');
+              const clipsContent = /\b(?:hidden|clip|scroll|auto)\b/.test(`${ov} ${ovX} ${ovY}`);
+              if (clipsContent) {
+                  inline['height'] = `${height}px`;
+                  inline['min-height'] = `${height}px`;
+              } else {
+                  inline['min-height'] = `${height}px`;
+              }
           } else {
-             // FLUID STRATEGY
-             inline['min-height'] = `${height}px`;
-             inline['height'] = 'auto'; 
+              inline['min-height'] = `${height}px`;
           }
       }
+  }
+
+  // R4 — promote consistent child margin-inline to parent column-gap.
+  // When a flex container has 2+ children that all share the same non-zero
+  // `margin-left` and `margin-right`, replace those margins with a `gap` /
+  // `column-gap` on the parent. Same total spacing, but the child class no
+  // longer carries margin-inline (so it can be re-used in other contexts)
+  // and the captured CSS is closer to how the design was probably authored.
+  // (Common pattern: date-selector chips, tag clouds, etc.) Only kicks in
+  // when the parent doesn't already define a non-zero gap.
+  {
+    const display = computed.getPropertyValue('display');
+    if (display === 'flex' || display === 'inline-flex') {
+      const existingGap = shared['gap'];
+      const existingColGap = shared['column-gap'];
+      const gapAlreadySet = (existingGap && existingGap !== 'normal' && existingGap !== '0px')
+                         || (existingColGap && existingColGap !== 'normal' && existingColGap !== '0px');
+      if (!gapAlreadySet) {
+        const eligibleChildren = Array.from(el.children).filter(c => c.nodeType === 1);
+        if (eligibleChildren.length >= 2) {
+          let firstML = null, firstMR = null;
+          let consistent = true;
+          for (const child of eligibleChildren) {
+            const childCs = window.getComputedStyle(child);
+            const ml = parseFloat(childCs.marginLeft) || 0;
+            const mr = parseFloat(childCs.marginRight) || 0;
+            if (firstML === null) {
+              firstML = ml;
+              firstMR = mr;
+            } else if (firstML !== ml || firstMR !== mr) {
+              consistent = false;
+              break;
+            }
+          }
+          if (consistent && firstML !== null && (firstML > 0 || firstMR > 0)) {
+            // Adjacent children's margins sum visually: chip1 right-margin +
+            // chip2 left-margin = visible gap between them.
+            const promotedGap = firstMR + firstML;
+            shared['column-gap'] = `${promotedGap}px`;
+            for (const child of eligibleChildren) {
+              _skipMarginInlineSet.add(child);
+            }
+          }
+        }
+      }
+    }
   }
 
   // For root, get inherited background
@@ -1339,7 +1657,12 @@ function getCompactStyles(el, isRoot = false) {
 // --- Build semantic structure recursively ---
 function buildStructure(el, isRoot = false) {
   // Skip extension UI elements from export
-  if (el.id === 'web-replica-overlay' || el.id === 'vibeclone-indicator' || el.id === 'web-replica-helper-style') {
+  // Drop any element this extension itself injected into the page (selection
+  // overlay, helper stylesheet, mode-indicator banner). The previous explicit
+  // list missed the indicator (`VibeExtract-indicator`, while the filter was
+  // looking for the stale `vibeclone-indicator`), so when a user used
+  // Cmd/Ctrl+Shift+X to extract <body> our own UI bled into the export.
+  if (el.id && /^(web-replica-|VibeExtract-)/.test(el.id)) {
     return null;
   }
 
@@ -1372,33 +1695,53 @@ function buildStructure(el, isRoot = false) {
     svgClone.querySelectorAll('.web-replica-hover, .web-replica-selected').forEach(node => {
       node.classList.remove('web-replica-hover', 'web-replica-selected');
     });
+    // Strip the original SVG's class attribute so styling comes from our
+    // captured shared style only — the original page's CSS class is gone.
+    svgClone.removeAttribute('class');
 
-    // Get computed dimensions and add inline styles to ensure SVG is visible
-    // Use originalEl for computed styles since clones aren't in the DOM
+    // Capture FULL shared styles for the SVG (position, top/left/right/bottom,
+    // margin, padding, transform, z-index, etc.) so field icons that relied
+    // on `.uitk-field-icon { position: absolute; left: 12px; top: 14px }`
+    // continue to render in the right spot.
+    const originalParentForSvg = originalEl.parentElement;
+    const parentComputedForSvg = (!isRoot && originalParentForSvg && originalParentForSvg.nodeType === Node.ELEMENT_NODE)
+      ? window.getComputedStyle(originalParentForSvg)
+      : null;
+    const svgStyles = getCompactStyles(originalEl, isRoot, parentComputedForSvg);
+
+    // Always also pin width / height / fill inline so the SVG renders at the
+    // displayed pixel dimensions regardless of what its parent's flex
+    // algorithm decides. Merge with whatever inline `style` the SVG already
+    // had on the page (which sometimes contains user-select / transform).
     const computed = window.getComputedStyle(originalEl);
     const width = computed.width;
     const height = computed.height;
     const fill = computed.fill;
-
-    // Add inline styles if not already present
     let existingStyle = svgClone.getAttribute('style') || '';
-    if (width && width !== 'auto' && !existingStyle.includes('width')) {
-      existingStyle += `width: ${width}; `;
+    if (existingStyle && !existingStyle.endsWith(';')) existingStyle += ';';
+    if (width && width !== 'auto' && !/\bwidth\s*:/.test(existingStyle)) {
+      existingStyle += `width: ${width};`;
     }
-    if (height && height !== 'auto' && !existingStyle.includes('height')) {
-      existingStyle += `height: ${height}; `;
+    if (height && height !== 'auto' && !/\bheight\s*:/.test(existingStyle)) {
+      existingStyle += `height: ${height};`;
     }
-    if (fill && fill !== 'none' && !existingStyle.includes('fill')) {
-      existingStyle += `fill: ${fill}; `;
+    if (fill && fill !== 'none' && !/\bfill\s*:/.test(existingStyle)) {
+      existingStyle += `fill: ${fill};`;
     }
     if (existingStyle) {
-      svgClone.setAttribute('style', existingStyle.trim());
+      svgClone.setAttribute('style', existingStyle.replace(/^;+/, '').trim());
     }
 
-    return {
-      tag: 'svg',
-      svg: svgClone.outerHTML
-    };
+    const node = { tag: 'svg', svg: svgClone.outerHTML };
+    if (svgStyles && svgStyles.shared) {
+      node.svgStyle = getOrCreateStyleName(svgStyles.shared);
+    }
+    if (svgStyles && svgStyles.inline) {
+      node.svgInline = Object.entries(svgStyles.inline)
+        .map(([prop, val]) => `${prop}: ${val}`)
+        .join('; ');
+    }
+    return node;
   }
 
   // Use originalEl for class manipulation and computed styles (clones aren't in DOM)
@@ -1452,8 +1795,15 @@ function buildStructure(el, isRoot = false) {
   }
 
   // Get compact styles (returns { shared, inline })
-  // Note: originalEl was declared at function start for visibility check
-  const styleResult = getCompactStyles(originalEl, isRoot);
+  // Note: originalEl was declared at function start for visibility check.
+  // Pass the original parent's computed style so inherited text properties
+  // (font-family, color, line-height, white-space, …) only get re-stated on
+  // descendants whose value diverges from the parent's resolved value.
+  const originalParent = originalEl.parentElement;
+  const parentComputed = (!isRoot && originalParent && originalParent.nodeType === Node.ELEMENT_NODE)
+    ? window.getComputedStyle(originalParent)
+    : null;
+  const styleResult = getCompactStyles(originalEl, isRoot, parentComputed);
   if (styleResult) {
     // Shared styles go into deduplicated CSS class
     if (styleResult.shared) {
@@ -1543,11 +1893,17 @@ function buildStructure(el, isRoot = false) {
         const hasChildren = childNode.orderedContent?.length > 0 || childNode.children?.length > 0;
         const hasSvg = childNode.svg;
         const hasImage = childNode.src;
-        const hasPseudoBg = childNode.pseudoBg;
+        // The legacy `pseudoBg` field hasn't been written since Tier 2 — keep it
+        // for backwards compat with any cached tree, but the live signal is
+        // `pseudoClass`, which points at a registered ::before/::after rule.
+        // Without this, every empty <span> that exists *only* to render a
+        // ::before decoration (filter checkboxes, toggle handles, divider
+        // accents) gets dropped and its .pN rule orphaned.
+        const hasPseudo = childNode.pseudoClass || childNode.pseudoBg;
 
         // Skip empty <span> elements with no content - these are typically overlays
         // But preserve divs, inputs, buttons, and elements with backgrounds
-        const isEmptySpan = childNode.tag === 'span' && !hasText && !hasChildren && !hasSvg && !hasImage && !hasPseudoBg;
+        const isEmptySpan = childNode.tag === 'span' && !hasText && !hasChildren && !hasSvg && !hasImage && !hasPseudo;
 
         if (isEmptySpan) {
           if (_exportDiag) _exportDiag.emptySpansSkipped++;
@@ -1581,6 +1937,23 @@ function buildStructure(el, isRoot = false) {
 
   if (el.type && (tagName === 'input' || tagName === 'button')) node.type = el.type;
   if (el.value && (tagName === 'input' || tagName === 'textarea')) node.value = el.value;
+
+  // Capture boolean HTML attributes when set on the original DOM element. Without
+  // these, <details> always renders collapsed (chart hidden), checkboxes always
+  // render unchecked, disabled controls render enabled, and pre-selected
+  // <option>s lose their selection. We read the IDL property because that
+  // reflects the live state, including any user interaction or JS-set value.
+  if (tagName === 'details' && el.open) node.open = true;
+  if ((tagName === 'input' || tagName === 'option') && el.checked) node.checked = true;
+  if ((tagName === 'option') && el.selected) node.selected = true;
+  if ((tagName === 'input' || tagName === 'textarea' || tagName === 'select' ||
+       tagName === 'button' || tagName === 'option' || tagName === 'fieldset') &&
+      el.disabled) node.disabled = true;
+  if ((tagName === 'input' || tagName === 'textarea') && el.readOnly) node.readonly = true;
+  if ((tagName === 'input' || tagName === 'textarea' || tagName === 'select') &&
+      el.required) node.required = true;
+  if (tagName === 'select' && el.multiple) node.multiple = true;
+  if (el.hasAttribute && el.hasAttribute('hidden')) node.hidden = true;
 
   // Capture aria-label for accessibility
   if (el.getAttribute('aria-label')) node.ariaLabel = el.getAttribute('aria-label');
@@ -1701,9 +2074,32 @@ function structureToHtml(node, indent = 0) {
   const pad = '  '.repeat(indent);
   const tag = node.tag;
 
-  // SVG - output the preserved outerHTML directly
+  // SVG - output the preserved outerHTML, but inject the captured shared
+  // class and any inline-only props (typically width/height/min-* from the
+  // dimension capture) into the <svg> tag so position/margin/transform/etc.
+  // from the original CSS class survive.
   if (node.svg) {
-    return `${pad}${node.svg}`;
+    let svgHtml = node.svg;
+    if (node.svgStyle) {
+      // Insert class="..." right after the opening <svg
+      if (/<svg\b[^>]*\bclass=/.test(svgHtml)) {
+        svgHtml = svgHtml.replace(/(<svg\b[^>]*\bclass=)"([^"]*)"/, `$1"$2 ${node.svgStyle}"`);
+      } else {
+        svgHtml = svgHtml.replace(/<svg\b/, `<svg class="${node.svgStyle}"`);
+      }
+    }
+    if (node.svgInline) {
+      // Append our inline style props to any existing style="..." on the svg
+      if (/<svg\b[^>]*\bstyle=/.test(svgHtml)) {
+        svgHtml = svgHtml.replace(/(<svg\b[^>]*\bstyle=)"([^"]*)"/, (m, pre, existing) => {
+          const trimmed = existing.replace(/;\s*$/, '');
+          return `${pre}"${trimmed ? trimmed + '; ' : ''}${node.svgInline}"`;
+        });
+      } else {
+        svgHtml = svgHtml.replace(/<svg\b/, `<svg style="${node.svgInline}"`);
+      }
+    }
+    return `${pad}${svgHtml}`;
   }
 
   // Build attributes: class (shared styles) + style (inline dimensions)
@@ -1728,19 +2124,27 @@ function structureToHtml(node, indent = 0) {
   if (classes.length > 0) {
     attrs += ` class="${classes.join(' ')}"`;
   }
-  // Convert height to min-height in inline styles to allow content expansion
-  // Also add pseudo-element styles for elements with pseudo backgrounds
   let inlineStyleParts = [];
   if (node.inlineStyle) {
     inlineStyleParts.push(node.inlineStyle);
   }
-  // Add pseudo-element styles (for avatar backgrounds etc.)
-  if (node.pseudoBg) inlineStyleParts.push(`background-color: ${node.pseudoBg}`);
-  if (node.pseudoRadius) inlineStyleParts.push(`border-radius: ${node.pseudoRadius}`);
 
   if (inlineStyleParts.length > 0) {
     attrs += ` style="${inlineStyleParts.join('; ')}"`;
   }
+
+  // Boolean HTML attributes — emitted as bare tokens (`open`, `checked`, ...)
+  // so <details>, checkboxes, radios, disabled controls, pre-selected options
+  // render in the same state they had on the original page.
+  let boolAttrs = '';
+  if (node.open) boolAttrs += ' open';
+  if (node.checked) boolAttrs += ' checked';
+  if (node.selected) boolAttrs += ' selected';
+  if (node.disabled) boolAttrs += ' disabled';
+  if (node.readonly) boolAttrs += ' readonly';
+  if (node.required) boolAttrs += ' required';
+  if (node.multiple) boolAttrs += ' multiple';
+  if (node.hidden) boolAttrs += ' hidden';
 
   // Self-closing tags
   if (['img', 'input', 'br', 'hr'].includes(tag)) {
@@ -1751,8 +2155,14 @@ function structureToHtml(node, indent = 0) {
     const placeholder = node.placeholder || node.ariaLabel;
     if (placeholder) attrs += ` placeholder="${escapeHtml(placeholder)}"`;
     if (node.value) attrs += ` value="${escapeHtml(node.value)}"`;
-    // For inputs, override tiny widths to show placeholder properly and ensure flex-grow
-    if (tag === 'input') {
+    // For TEXT inputs only, override tiny widths to show placeholder properly.
+    // Don't touch checkbox/radio/range/etc. — they need their captured size.
+    const isTextInput = tag === 'input' && (
+      !node.type ||
+      ['text', 'search', 'email', 'password', 'url', 'tel', 'number',
+       'date', 'time', 'datetime-local', 'month', 'week'].includes(node.type)
+    );
+    if (isTextInput) {
       const hasSmallWidth = node.inlineStyle && (node.inlineStyle.includes('width: 1px') || node.inlineStyle.includes('width: 0'));
       if (hasSmallWidth || !node.inlineStyle) {
         // Remove existing style if present and add proper width
@@ -1760,7 +2170,7 @@ function structureToHtml(node, indent = 0) {
         attrs += ` style="width: 100%; min-width: 0; flex-grow: 1;"`;
       }
     }
-    return `${pad}<${tag}${attrs}>`;
+    return `${pad}<${tag}${attrs}${boolAttrs}>`;
   }
 
   // Textarea needs placeholder and value
@@ -1768,30 +2178,26 @@ function structureToHtml(node, indent = 0) {
     const placeholder = node.placeholder || node.ariaLabel;
     if (placeholder) attrs += ` placeholder="${escapeHtml(placeholder)}"`;
     const content = node.value || node.text || '';
-    return `${pad}<${tag}${attrs}>${escapeHtml(content)}</${tag}>`;
+    return `${pad}<${tag}${attrs}${boolAttrs}>${escapeHtml(content)}</${tag}>`;
   }
 
   if (node.href) attrs += ` href="${node.href}"`;
   if (node.ariaLabel) attrs += ` aria-label="${node.ariaLabel}"`;
+  attrs += boolAttrs;
 
   // No children and just text - don't apply fixed width/height that could cause wrapping/clipping
   if (!node.children && node.text) {
     // Build inline styles for text elements
     let stylesParts = [];
 
-    // Use inline styles as-is, trusting getCompactStyles logic
     if (node.inlineStyle) {
       stylesParts.push(node.inlineStyle);
     }
 
-    // Add pseudo-element styles for avatar circles
-    if (node.pseudoBg) stylesParts.push(`background-color: ${node.pseudoBg}`);
-    if (node.pseudoRadius) stylesParts.push(`border-radius: ${node.pseudoRadius}`);
-    if (node.pseudoColor) stylesParts.push(`color: ${node.pseudoColor}`);
-    if (node.pseudoWidth) stylesParts.push(`width: ${node.pseudoWidth}`);
-    if (node.pseudoHeight) stylesParts.push(`height: ${node.pseudoHeight}`);
-    // Center text in avatar circles
-    if (node.fromPseudo && node.pseudoBg) {
+    // Center text in avatar circles whose visual background lives on a real
+    // ::before pseudo class (Tier 2). Without these flex centring rules the
+    // letter would sit at the top-left of the avatar shape.
+    if (node.fromPseudo && node.pseudoClass) {
       stylesParts.push('display: flex');
       stylesParts.push('align-items: center');
       stylesParts.push('justify-content: center');
@@ -1812,6 +2218,7 @@ function structureToHtml(node, indent = 0) {
     if (finalStyle) attrs += ` style="${finalStyle}"`;
     if (node.href) attrs += ` href="${node.href}"`;
     if (node.ariaLabel) attrs += ` aria-label="${node.ariaLabel}"`;
+    attrs += boolAttrs;
     return `${pad}<${tag}${attrs}>${node.text}</${tag}>`;
   }
 
@@ -2084,6 +2491,14 @@ function buildExport() {
     if (node.placeholder) attrs.push(`placeholder="${node.placeholder}"`);
     if (node.value) attrs.push(`value="${node.value}"`);
     if (node.ariaLabel) attrs.push(`aria-label="${node.ariaLabel}"`);
+    if (node.open) attrs.push(`open`);
+    if (node.checked) attrs.push(`checked`);
+    if (node.selected) attrs.push(`selected`);
+    if (node.disabled) attrs.push(`disabled`);
+    if (node.readonly) attrs.push(`readonly`);
+    if (node.required) attrs.push(`required`);
+    if (node.multiple) attrs.push(`multiple`);
+    if (node.hidden) attrs.push(`hidden`);
     if (node.isIcon) attrs.push(`icon`);
     if (attrs.length) toon += ` (${attrs.join(' ')})`;
 
@@ -2252,13 +2667,33 @@ li { list-style: none; background: inherit; color: inherit; }
 /* Ensure all elements inherit box-sizing and prevent overflow issues */
 *, *::before, *::after { box-sizing: border-box; }
 img, video, svg, canvas { max-width: 100%; }
-/* Fix button/input/link resets - inherit colors from parent */
+/* Fix button/input/link resets - inherit colors from parent.
+   Scope the input reset to *text-like* inputs: checkbox/radio/range/color/file
+   need their UA chrome to be visible at all, so we leave those alone. */
 button { background: transparent; border: none; cursor: pointer; color: inherit; padding: 0; }
-input { background: transparent; border: none; outline: none; color: inherit; min-width: 0; }
+/* Browsers don't inherit font-family/size/weight on <input> by default — the
+   UA stylesheet pins each control to its own. That makes the rendered value
+   text in our export ("Las Vegas, NV (LAS-All Airports)") show up at the UA
+   default ~13 px medium-Arial instead of the captured Centra No2 16 px 400.
+   Force inheritance for both text and form-control inputs. */
+input { font: inherit; letter-spacing: inherit; }
+input:where(:not([type]), [type="text"], [type="search"], [type="email"], [type="password"], [type="url"], [type="tel"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]) { background: transparent; border: none; outline: none; color: inherit; min-width: 0; }
 input::placeholder { color: inherit; opacity: 0.5; }
+/* Strip the UA-default <select> chrome so a page's custom SVG chevron
+   doesn't get layered on top of the native triangle (two arrows). */
+select { appearance: none; -webkit-appearance: none; -moz-appearance: none; background: transparent; border: none; outline: none; color: inherit; padding: 0; }
+select::-ms-expand { display: none; }
 a { color: inherit; text-decoration: inherit; }
 /* Ensure proper inline display */
 span { display: inline; }
+/* Reset UA-default chrome that otherwise paints rogue borders/padding around
+   <fieldset> (groove border + padding around every filter section), <legend>
+   (built-in side padding), and <hr> (1px inset border on left/right whenever
+   the page only overrides top). Captured class rules still win because of
+   class > tag specificity. */
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+legend { padding: 0; }
+hr { border: 0; padding: 0; margin: 0; height: 0; color: inherit; background: transparent; }
 /* Flex container fixes */
 /* [style*="display: flex"], [style*="display:flex"] { min-width: 0; } */
 /* Icon font styles - using !important to override captured styles */
@@ -2303,13 +2738,52 @@ ${bodyHtml}
   _exportDiag.styleCount = styleRegistry.size;
   _exportDiag.pseudoStyleCount = pseudoStyleRegistry.size;
   _exportDiag.hoverStyleCount = hoverStyleRegistry.size;
+
+  // Primary font diagnostic — find the most-frequently-declared first font
+  // across captured styles, and flag whether we'll auto-load it from Google
+  // Fonts. When a proprietary font (Centra No2, Adobe Typekit, etc.) is the
+  // primary, the export silently falls back to the system stack and text
+  // metrics shift, which causes the "looks overflowed in the export but not
+  // on the original" symptom.
+  const fontCounts = new Map();
+  styleRegistry.forEach((_name, styleJson) => {
+    try {
+      const obj = JSON.parse(styleJson);
+      if (obj['font-family']) {
+        const first = obj['font-family'].split(',')[0].trim().replace(/["']/g, '');
+        const lo = first.toLowerCase();
+        if (['sans-serif', 'serif', 'monospace', 'cursive', 'fantasy',
+             '-apple-system', 'blinkmacsystemfont', 'system-ui',
+             'inherit', 'initial'].includes(lo)) return;
+        if (lo.includes('icon') || lo.includes('material') || lo.includes('fontawesome')) return;
+        fontCounts.set(first, (fontCounts.get(first) || 0) + 1);
+      }
+    } catch (e) {}
+  });
+  let primaryFont = null;
+  let primaryFontCount = 0;
+  fontCounts.forEach((count, font) => {
+    if (count > primaryFontCount) { primaryFont = font; primaryFontCount = count; }
+  });
+  _exportDiag.primaryFont = primaryFont;
+  _exportDiag.primaryFontWillLoad = primaryFont
+    ? Array.from(detectedFonts).some(f => f.toLowerCase() === primaryFont.toLowerCase())
+    : false;
+
   const diagnostics = _exportDiag;
   _exportDiag = null;
+
+  // Detect @font-face rules used by the captured styles. The actual binary
+  // fetch happens later in background.js where CORS isn't a concern; here
+  // we just hand the URL list and metadata down.
+  const fontFaces = detectFontFaces();
+  diagnostics.detectedFontCount = fontFaces.length;
 
   return {
     toon,  // TOON format for LLMs (more token-efficient)
     html,
-    diagnostics
+    diagnostics,
+    fontFaces,  // [{ family, weight, style, format, url }]
   };
 }
 

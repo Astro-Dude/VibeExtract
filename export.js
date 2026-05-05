@@ -1,7 +1,8 @@
 // ── State ──
-let htmlContent = '';
+let htmlContent = '';        // Original captured HTML (no @font-face injected)
 let toonContent = '';
 let sourceUrl = '';
+let fontFaces = [];          // [{ family, weight, style, format, url, base64?, ok? }]
 
 // ── Elements ──
 const tabs = document.querySelectorAll('.tab');
@@ -10,10 +11,13 @@ const toast = document.getElementById('toast');
 const toastText = document.getElementById('toast-text');
 
 // ── Load data from storage ──
-chrome.storage.local.get(['exportHTML', 'exportTOON', 'exportSourceURL', 'exportDiagnostics'], (data) => {
+chrome.storage.local.get([
+  'exportHTML', 'exportTOON', 'exportSourceURL', 'exportDiagnostics', 'exportFontFaces'
+], (data) => {
   htmlContent = data.exportHTML || '';
   toonContent = data.exportTOON || '';
   sourceUrl = data.exportSourceURL || '';
+  fontFaces = Array.isArray(data.exportFontFaces) ? data.exportFontFaces : [];
   const diagnostics = data.exportDiagnostics || null;
 
   // Show source url
@@ -21,10 +25,22 @@ chrome.storage.local.get(['exportHTML', 'exportTOON', 'exportSourceURL', 'export
     document.getElementById('source-url').textContent = sourceUrl;
   }
 
+  // Stitch the bundled-fonts count into the diagnostics object so the warn
+  // pill collapses ("font fallback") when we successfully fetched the font.
+  if (diagnostics) {
+    diagnostics.bundledFontCount = fontFaces.filter(f => f.ok).length;
+    diagnostics.failedFontCount = fontFaces.filter(f => f.ok === false).length;
+  }
   renderDiagnostics(diagnostics);
 
-  // Populate code views
-  document.getElementById('html-code').textContent = htmlContent;
+  // Populate code views — show the *download* HTML (relative font paths)
+  // so users copying the textarea get a portable file. Preview uses a
+  // separate version with inline data: URIs since `<iframe srcdoc>` has no
+  // base URL for relative paths to resolve against.
+  const downloadHtml = htmlWithFontFaces(htmlContent, 'relative');
+  const previewHtml = htmlWithFontFaces(htmlContent, 'inline');
+
+  document.getElementById('html-code').textContent = downloadHtml;
   document.getElementById('toon-code').textContent = toonContent;
 
   // Detect primary font from the exported CSS
@@ -32,7 +48,7 @@ chrome.storage.local.get(['exportHTML', 'exportTOON', 'exportSourceURL', 'export
   const fontLabel = primaryFont ? primaryFont : 'System default';
 
   // Size + font info
-  setMeta('html-meta', htmlContent.length, fontLabel);
+  setMeta('html-meta', downloadHtml.length, fontLabel);
   setMeta('toon-meta', toonContent.length, fontLabel);
 
   // Preview iframe — auto-resize to content height
@@ -50,11 +66,49 @@ chrome.storage.local.get(['exportHTML', 'exportTOON', 'exportSourceURL', 'export
       // cross-origin fallback — keep min-height
     }
   });
-  iframe.srcdoc = htmlContent;
+  iframe.srcdoc = previewHtml;
 
   // Clean up storage after loading
-  chrome.storage.local.remove(['exportHTML', 'exportTOON', 'exportSourceURL', 'exportDiagnostics']);
+  chrome.storage.local.remove([
+    'exportHTML', 'exportTOON', 'exportSourceURL', 'exportDiagnostics', 'exportFontFaces'
+  ]);
 });
+
+// Build the CSS @font-face block. Mode `inline` embeds woff2 binaries as
+// data: URIs (works in srcdoc preview, no external files needed). Mode
+// `relative` references sibling files like `./preview-CentraNo2-400.woff2`
+// (smaller HTML, but the user must keep the saved files together).
+function buildFontFaceBlock(faces, mode, fileNameFor) {
+  let css = '';
+  for (const face of faces) {
+    if (!face.ok || !face.base64) continue;
+    let src;
+    if (mode === 'inline') {
+      const mime = `font/${face.format === 'truetype' ? 'ttf' : face.format === 'opentype' ? 'otf' : face.format}`;
+      src = `url('data:${mime};base64,${face.base64}') format('${face.format}')`;
+    } else {
+      const filename = fileNameFor(face);
+      src = `url('./${filename}') format('${face.format}')`;
+    }
+    css += `@font-face { font-family: '${face.family}'; src: ${src}; font-weight: ${face.weight}; font-style: ${face.style}; font-display: swap; }\n`;
+  }
+  return css;
+}
+
+// Inject the @font-face block into the export HTML right after its
+// `<style>` opening tag so captured classes can resolve their `font-family`
+// to the bundled font instead of the system fallback.
+function htmlWithFontFaces(html, mode) {
+  const block = buildFontFaceBlock(fontFaces, mode, fontFileName);
+  if (!block) return html;
+  return html.replace(/(<style\b[^>]*>)/, `$1\n${block}`);
+}
+
+function fontFileName(face) {
+  const safeFam = face.family.replace(/[^A-Za-z0-9]/g, '');
+  const styleSuffix = face.style && face.style !== 'normal' ? `-${face.style}` : '';
+  return `preview-${safeFam}-${face.weight}${styleSuffix}.${face.format === 'truetype' ? 'ttf' : face.format === 'opentype' ? 'otf' : face.format}`;
+}
 
 function renderDiagnostics(d) {
   const wrap = document.getElementById('diag');
@@ -99,6 +153,27 @@ function renderDiagnostics(d) {
     summary.appendChild(ps);
   }
 
+  // Font status pill: show "N bundled" when we successfully fetched font
+  // binaries; otherwise fall back to the legacy "font fallback: <name>"
+  // warning when the primary font isn't loadable.
+  if (d.bundledFontCount > 0) {
+    const fp = document.createElement('span');
+    fp.className = 'diag-pill';
+    fp.textContent = `${d.bundledFontCount} font${d.bundledFontCount === 1 ? '' : 's'} bundled`;
+    summary.appendChild(fp);
+  } else if (d.primaryFont && !d.primaryFontWillLoad) {
+    const fp = document.createElement('span');
+    fp.className = 'diag-pill warn';
+    fp.textContent = `font fallback: ${d.primaryFont}`;
+    summary.appendChild(fp);
+  }
+  if (d.failedFontCount > 0) {
+    const fp = document.createElement('span');
+    fp.className = 'diag-pill warn';
+    fp.textContent = `${d.failedFontCount} font fetch failed`;
+    summary.appendChild(fp);
+  }
+
   // Body: list each selection
   const body = document.getElementById('diag-body');
   body.innerHTML = '';
@@ -108,6 +183,20 @@ function renderDiagnostics(d) {
     note.className = 'diag-row';
     note.style.color = '#fbbf24';
     note.innerHTML = `<span class="meta">Filtered out ${d.filteredCount} hidden node${d.filteredCount === 1 ? '' : 's'} and ${d.emptySpansSkipped} empty span${d.emptySpansSkipped === 1 ? '' : 's'} from descendants. Use Alt+Click for exact targeting if you want them included.</span>`;
+    body.appendChild(note);
+  }
+
+  if (d.bundledFontCount > 0) {
+    const note = document.createElement('div');
+    note.className = 'diag-row';
+    note.style.color = '#a1a1aa';
+    note.innerHTML = `<span class="meta">Detected and bundled <strong>${d.bundledFontCount}</strong> @font-face binar${d.bundledFontCount === 1 ? 'y' : 'ies'} from the page. The Save .html action also writes the woff2 file${d.bundledFontCount === 1 ? '' : 's'} alongside the HTML so text renders with the original font when you open the saved file.</span>`;
+    body.appendChild(note);
+  } else if (d.primaryFont && !d.primaryFontWillLoad) {
+    const note = document.createElement('div');
+    note.className = 'diag-row';
+    note.style.color = '#fbbf24';
+    note.innerHTML = `<span class="meta">Primary font <strong>${d.primaryFont}</strong> is not on Google Fonts and isn't being auto-loaded — the export will fall back to the system stack and text widths may differ from the original. Add the font manually if precise metrics matter.</span>`;
     body.appendChild(note);
   }
 
@@ -164,7 +253,9 @@ tabs.forEach((tab) => {
 // ── Copy buttons (inside code panels) ──
 document.querySelectorAll('.copy-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
-    const text = btn.dataset.copy === 'html' ? htmlContent : toonContent;
+    const text = btn.dataset.copy === 'html'
+      ? htmlWithFontFaces(htmlContent, 'relative')
+      : toonContent;
     navigator.clipboard.writeText(text).then(() => {
       btn.textContent = 'Copied';
       setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
@@ -183,9 +274,13 @@ document.getElementById('dl-both').addEventListener('click', () => {
 
 function downloadFile(type) {
   const isHTML = type === 'html';
-  const content = isHTML ? htmlContent : toonContent;
+  // For the saved HTML use the relative-path @font-face block; the woff2
+  // files are written as siblings below.
+  const content = isHTML ? htmlWithFontFaces(htmlContent, 'relative') : toonContent;
   const filename = isHTML ? 'preview.html' : 'component.toon';
   const mime = isHTML ? 'text/html' : 'application/octet-stream';
+
+  if (isHTML) saveFontSiblings();
 
   // Use chrome downloads API so we can get the real file path
   const blob = new Blob([content], { type: mime });
@@ -218,6 +313,35 @@ function downloadFile(type) {
     });
   };
   reader.readAsDataURL(blob);
+}
+
+// Save each fetched font binary alongside the .html download. The HTML's
+// @font-face rules use relative `./preview-...woff2` paths, so as long as
+// these siblings land in the same folder the saved page renders with the
+// real font even when opened offline.
+function saveFontSiblings() {
+  for (const face of fontFaces) {
+    if (!face.ok || !face.base64) continue;
+    try {
+      const binary = atob(face.base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const mime = `font/${face.format === 'truetype' ? 'ttf' : face.format === 'opentype' ? 'otf' : face.format}`;
+      const blob = new Blob([bytes], { type: mime });
+      const reader = new FileReader();
+      reader.onload = () => {
+        chrome.downloads.download({
+          url: reader.result,
+          filename: fontFileName(face),
+          saveAs: false,
+          // overwrite so re-exports replace previous bundles instead of
+          // proliferating preview-CentraNo2-400 (1).woff2 forever
+          conflictAction: 'overwrite'
+        });
+      };
+      reader.readAsDataURL(blob);
+    } catch (_) {}
+  }
 }
 
 // ── Toast ──
