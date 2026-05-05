@@ -296,14 +296,22 @@ exportBtn.addEventListener("click", () => {
         return;
       }
 
-      // Store export data and open the export page in a new tab
-      chrome.storage.local.set({
-        exportHTML: response.html,
-        exportTOON: response.toon,
-        exportSourceURL: tab.url || '',
-        exportDiagnostics: response.diagnostics || null
-      }, () => {
-        chrome.tabs.create({ url: chrome.runtime.getURL('export.html') });
+      // Hand the font URLs to the background worker so it can fetch the
+      // binaries (CORS works there) before we stash everything for the
+      // export tab to consume.
+      chrome.runtime.sendMessage({
+        type: 'PREFETCH_FONTS',
+        fontFaces: response.fontFaces || []
+      }, (fetched) => {
+        chrome.storage.local.set({
+          exportHTML: response.html,
+          exportTOON: response.toon,
+          exportSourceURL: tab.url || '',
+          exportDiagnostics: response.diagnostics || null,
+          exportFontFaces: fetched && fetched.fontFaces ? fetched.fontFaces : []
+        }, () => {
+          chrome.tabs.create({ url: chrome.runtime.getURL('export.html') });
+        });
       });
 
       setStatus("Opening export page...", true);
