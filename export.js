@@ -33,6 +33,19 @@ chrome.storage.local.get([
   }
   renderDiagnostics(diagnostics);
 
+  // Reveal the "Download fonts" button only when we actually have bundled
+  // font binaries to ship. The label includes the count so the user knows
+  // how many files will be inside the zip.
+  const fontsBtn = document.getElementById('dl-fonts');
+  const fontsLabel = document.getElementById('dl-fonts-label');
+  const okFonts = fontFaces.filter(f => f.ok && f.base64);
+  if (okFonts.length > 0) {
+    fontsBtn.hidden = false;
+    if (fontsLabel) {
+      fontsLabel.textContent = `Download fonts (${okFonts.length})`;
+    }
+  }
+
   // Populate code views — show the *download* HTML (relative font paths)
   // so users copying the textarea get a portable file. Preview uses a
   // separate version with inline data: URIs since `<iframe srcdoc>` has no
@@ -190,7 +203,7 @@ function renderDiagnostics(d) {
     const note = document.createElement('div');
     note.className = 'diag-row';
     note.style.color = '#a1a1aa';
-    note.innerHTML = `<span class="meta">Detected and bundled <strong>${d.bundledFontCount}</strong> @font-face binar${d.bundledFontCount === 1 ? 'y' : 'ies'} from the page. The Save .html action also writes the woff2 file${d.bundledFontCount === 1 ? '' : 's'} alongside the HTML so text renders with the original font when you open the saved file.</span>`;
+    note.innerHTML = `<span class="meta">Detected and bundled <strong>${d.bundledFontCount}</strong> @font-face binar${d.bundledFontCount === 1 ? 'y' : 'ies'} from the page. Use the <strong>Download fonts</strong> button to grab them as one zip; unzip it next to the saved .html so the page can render with the original font when opened offline.</span>`;
     body.appendChild(note);
   } else if (d.primaryFont && !d.primaryFontWillLoad) {
     const note = document.createElement('div');
@@ -266,6 +279,7 @@ document.querySelectorAll('.copy-btn').forEach((btn) => {
 // ── Downloads ──
 document.getElementById('dl-html').addEventListener('click', () => downloadFile('html'));
 document.getElementById('dl-toon').addEventListener('click', () => downloadFile('toon'));
+document.getElementById('dl-fonts').addEventListener('click', () => downloadFontsZip());
 document.getElementById('dl-both').addEventListener('click', () => {
   downloadFile('toon');
   // small delay so chrome doesn't swallow the second download
@@ -275,12 +289,11 @@ document.getElementById('dl-both').addEventListener('click', () => {
 function downloadFile(type) {
   const isHTML = type === 'html';
   // For the saved HTML use the relative-path @font-face block; the woff2
-  // files are written as siblings below.
+  // files come down as one separate "Download fonts" zip the user can
+  // unzip alongside this HTML so we don't fire N parallel font downloads.
   const content = isHTML ? htmlWithFontFaces(htmlContent, 'relative') : toonContent;
   const filename = isHTML ? 'preview.html' : 'component.toon';
   const mime = isHTML ? 'text/html' : 'application/octet-stream';
-
-  if (isHTML) saveFontSiblings();
 
   // Use chrome downloads API so we can get the real file path
   const blob = new Blob([content], { type: mime });
@@ -315,33 +328,163 @@ function downloadFile(type) {
   reader.readAsDataURL(blob);
 }
 
-// Save each fetched font binary alongside the .html download. The HTML's
-// @font-face rules use relative `./preview-...woff2` paths, so as long as
-// these siblings land in the same folder the saved page renders with the
-// real font even when opened offline.
-function saveFontSiblings() {
-  for (const face of fontFaces) {
-    if (!face.ok || !face.base64) continue;
-    try {
-      const binary = atob(face.base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const mime = `font/${face.format === 'truetype' ? 'ttf' : face.format === 'opentype' ? 'otf' : face.format}`;
-      const blob = new Blob([bytes], { type: mime });
-      const reader = new FileReader();
-      reader.onload = () => {
-        chrome.downloads.download({
-          url: reader.result,
-          filename: fontFileName(face),
-          saveAs: false,
-          // overwrite so re-exports replace previous bundles instead of
-          // proliferating preview-CentraNo2-400 (1).woff2 forever
-          conflictAction: 'overwrite'
-        });
-      };
-      reader.readAsDataURL(blob);
-    } catch (_) {}
+// Build a single .zip containing every fetched font binary and trigger
+// one download for it. The zip's entries match the relative `./preview-…`
+// paths in the saved HTML's @font-face block, so unzipping alongside the
+// saved HTML makes the page render with the real font.
+function downloadFontsZip() {
+  const ok = fontFaces.filter(f => f.ok && f.base64);
+  if (ok.length === 0) {
+    showToast('No bundled fonts to download');
+    return;
   }
+  const entries = ok.map(face => ({
+    name: fontFileName(face),
+    data: base64ToBytes(face.base64),
+  }));
+  const zipBytes = buildZip(entries);
+  const blob = new Blob([zipBytes], { type: 'application/zip' });
+  const reader = new FileReader();
+  reader.onload = () => {
+    chrome.downloads.download({
+      url: reader.result,
+      filename: 'preview-fonts.zip',
+      saveAs: false,
+      conflictAction: 'overwrite'
+    }, (downloadId) => {
+      if (!downloadId) {
+        showToast('Font zip download failed');
+        return;
+      }
+      const listener = (delta) => {
+        if (delta.id === downloadId && delta.state && delta.state.current === 'complete') {
+          chrome.downloads.onChanged.removeListener(listener);
+          chrome.downloads.search({ id: downloadId }, (results) => {
+            const path = results && results[0] && results[0].filename;
+            if (path) {
+              copyToClipboard(path).then(
+                () => showToast(`Saved ${ok.length} font${ok.length === 1 ? '' : 's'} — path copied`),
+                () => showToast(`Saved ${ok.length} font${ok.length === 1 ? '' : 's'} to ${path}`)
+              );
+            } else {
+              showToast(`Saved ${ok.length} font${ok.length === 1 ? '' : 's'}`);
+            }
+          });
+        }
+      };
+      chrome.downloads.onChanged.addListener(listener);
+    });
+  };
+  reader.readAsDataURL(blob);
+}
+
+function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// Minimal in-browser ZIP encoder (STORED, no compression). Enough to bundle
+// a handful of font binaries; saves us shipping a JSZip dependency.
+function buildZip(entries) {
+  const enc = new TextEncoder();
+  const localChunks = [];
+  const centralChunks = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const nameBytes = enc.encode(entry.name);
+    const data = entry.data;
+    const crc = crc32(data);
+    const size = data.length;
+
+    // Local file header (30 bytes + name)
+    const local = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);          // version needed
+    lv.setUint16(6, 0, true);           // flags
+    lv.setUint16(8, 0, true);           // method (stored)
+    lv.setUint16(10, 0, true);          // mtime
+    lv.setUint16(12, 0, true);          // mdate
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, size, true);
+    lv.setUint32(22, size, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);          // extra length
+    local.set(nameBytes, 30);
+    localChunks.push(local, data);
+
+    // Central directory entry (46 bytes + name)
+    const central = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);          // version made by
+    cv.setUint16(6, 20, true);          // version needed
+    cv.setUint16(8, 0, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint16(12, 0, true);
+    cv.setUint16(14, 0, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, size, true);
+    cv.setUint32(24, size, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint16(30, 0, true);
+    cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true);
+    cv.setUint16(36, 0, true);
+    cv.setUint32(38, 0, true);
+    cv.setUint32(42, offset, true);     // local header offset
+    central.set(nameBytes, 46);
+    centralChunks.push(central);
+
+    offset += local.length + size;
+  }
+
+  const centralStart = offset;
+  let centralSize = 0;
+  for (const c of centralChunks) centralSize += c.length;
+
+  // End-of-central-directory record (22 bytes)
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(4, 0, true);
+  ev.setUint16(6, 0, true);
+  ev.setUint16(8, entries.length, true);
+  ev.setUint16(10, entries.length, true);
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, centralStart, true);
+  ev.setUint16(20, 0, true);
+
+  let total = offset + centralSize + eocd.length;
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const chunk of localChunks) { out.set(chunk, pos); pos += chunk.length; }
+  for (const chunk of centralChunks) { out.set(chunk, pos); pos += chunk.length; }
+  out.set(eocd, pos);
+  return out;
+}
+
+// Standard CRC32/PKZIP polynomial 0xedb88320, table-based.
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[i] = c;
+  }
+  return table;
+})();
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) {
+    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ bytes[i]) & 0xff];
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 // ── Toast ──
