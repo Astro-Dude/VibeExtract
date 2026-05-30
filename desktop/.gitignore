@@ -1,5 +1,10 @@
-target/
-node_modules/
-dist/
 .DS_Store
-*.log
+**/.DS_Store
+**/Cargo.lock
+**/target/
+*-output.html
+*-output.toon
+*-output.png
+combo-output.*
+native-output.*
+desktop/app/src-tauri/gen/
