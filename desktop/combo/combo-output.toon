@@ -1,0 +1,24 @@
+
+
+## Styles
+.s1: display: flex; padding-right: 24px; padding-left: 24px; min-width: auto; min-height: auto; flex-direction: column; flex-wrap: nowrap; justify-content: normal; align-items: center; align-content: normal; gap: normal; justify-items: center; color: #ffffff; font-family: "Mona Sans", "Mona Sans Fallback", -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; font-size: 16px; font-weight: 400; line-height: 24px; text-align: center; white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: manual; tab-size: 8; text-indent: 0px; -webkit-font-smoothing: antialiased; scrollbar-width: auto; scrollbar-color: auto; background-color: #000000
+.s2: display: grid; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: 80px 48px; grid-template-columns: 33px 33px 33px 33px 33px 33px 33px 33px 33px 33px 33px 33px; grid-template-rows: 212.234px
+.s3: display: block; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; grid-column: auto / span 12; grid-area: auto / auto / auto / span 12
+.s4: display: flex; flex-direction: column; flex-wrap: nowrap; justify-content: center; align-items: center; align-content: normal; gap: 0px
+.s5: display: block; min-width: auto; min-height: auto; max-width: 924px; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; font-family: "Mona Sans", MonaSansFallback, -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; font-size: 64px; font-weight: 425; line-height: 69.12px; letter-spacing: -2.24px
+.s6: display: block; margin-top: 20px; min-width: auto; min-height: auto; max-width: 600px; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; font-family: "Mona Sans", MonaSansFallback, -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; font-size: 18px; line-height: 27px; letter-spacing: 0.18px
+.s7: display: flex; flex-direction: column; flex-wrap: nowrap; justify-content: center; align-items: center; align-content: normal; gap: normal; row-gap: normal; column-gap: normal; padding-right: 24px; padding-left: 24px; position: fixed
+
+## Structure
+div.s7 {
+  section.s1[width: 972px; max-width: 100%; min-height: 212px] {
+    div.s2[width: 924px; min-width: 924px; min-height: 212px] {
+      div.s3[width: 924px; min-width: 924px; min-height: 212px] {
+        div.s4[width: 924px; min-width: 924px; min-height: 212px] {
+          h1.s5[min-width: 924px; flex-basis: auto; width: auto; min-height: 138px] "The future of building happens together"
+          p.s6[min-width: 600px; flex-basis: auto; width: auto; min-height: 54px] "Tools and trends evolve, but collaboration endures. With GitHub, developers, agents, and code come together on one platform."
+        }
+      }
+    }
+  }
+}

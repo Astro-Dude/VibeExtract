@@ -1,0 +1,128 @@
+
+
+## Styles
+.s1: display: block; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; color: #1f2328; font-family: "Mona Sans", MonaSansFallback, -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; font-size: 16px; font-weight: 400; line-height: 24px; text-align: start; white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: manual; tab-size: 8; text-indent: 0px; scrollbar-width: auto; scrollbar-color: auto; background-color: #0d1117
+.s2: display: flex; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal
+.s3: display: list-item; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal
+.s4: display: block; position: relative; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; top: 0px; right: 0px; bottom: 0px; left: 0px
+.s5: display: flex; padding-top: 8px; padding-right: 8px; padding-bottom: 8px; padding-left: 8px; flex-direction: row; flex-wrap: nowrap; justify-content: space-between; align-items: center; align-content: normal; gap: normal; background-position: 0px 0px; color: #ffffff; text-align: center; white-space: nowrap; cursor: pointer
+.s6: display: block; margin-left: 4px; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; opacity: 0.5; vertical-align: text-bottom; transform: matrix(0, 1, -1, 0, 0, 0)
+.s7: display: flex; padding-top: 8px; padding-right: 8px; padding-bottom: 8px; padding-left: 8px; flex-direction: row; flex-wrap: nowrap; justify-content: space-between; align-items: center; align-content: normal; gap: normal; background-position: 0px 0px; color: #ffffff; opacity: 0.75; text-align: center; white-space: nowrap; cursor: pointer
+.s8: display: block; margin-left: 4px; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; opacity: 0.5; vertical-align: text-bottom; transform: matrix(0, 1, -1, 0, 0, 1.06436)
+.s9: display: block; position: absolute; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; top: 40px; right: -342.211px; bottom: -255px; left: 0px; background-color: #ffffff; opacity: 0.532182; border-radius: 6px; box-shadow: rgba(209, 217, 224, 0.25) 0px 0px 0px 1px, rgba(37, 41, 46, 0.04) 0px 6px 12px -3px, rgba(37, 41, 46, 0.12) 0px 6px 18px 0px; overflow: hidden; overflow-x: hidden; overflow-y: hidden; transform: matrix(0.995322, 0, 0, 0.995322, 0, -5.21505)
+.s10: display: grid; padding-top: 28px; padding-right: 28px; padding-bottom: 28px; padding-left: 28px; flex-direction: column; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: 24px; grid-template-columns: 173.469px 200.625px; grid-template-rows: 199px; grid-auto-flow: column
+.s11: display: flex; max-width: 220px; flex-direction: column; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: 24px
+.s12: display: block; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; color: #58635b; font-family: "Mona Sans Mono", monospace; font-size: 12px; line-height: 18px; text-transform: uppercase; letter-spacing: 0.5px
+.s13: display: flex; min-width: auto; min-height: auto; flex-direction: column; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: 20px
+.s14: display: flex; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: center; align-content: normal; gap: 4px; color: #000000; font-size: 14px; font-weight: 500; line-height: 21px; cursor: pointer
+.s15: display: grid; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: 0px 8px; grid-template-columns: 16px 149.469px; grid-template-rows: 21px 18px
+.s16: display: block; min-width: auto; min-height: auto; max-width: 16px; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; align-self: center; grid-column: 1; grid-row: 1; grid-area: 1 / 1; color: #58635b; vertical-align: text-bottom
+.s17: display: block; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; grid-column: 2; grid-row: 1; grid-area: 1 / 2
+.s18: display: block; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; grid-column: span 2; grid-row: 2; grid-area: 2 / span 2; color: #58635b; font-size: 12px; font-weight: 400; line-height: 18px
+.s19: display: grid; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: 0px 8px; grid-template-columns: 16px 176.625px; grid-template-rows: 21px 18px
+.s20: display: grid; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: 0px 8px; grid-template-columns: 16px 133.516px; grid-template-rows: 21px 18px
+.s21: display: grid; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: 0px 8px; grid-template-columns: 16px 145.336px; grid-template-rows: 21px 18px
+.s22: display: flex; padding-top: 8px; padding-right: 8px; padding-bottom: 8px; padding-left: 8px; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: center; align-content: normal; gap: 4px; color: #ffffff; white-space: nowrap; cursor: pointer
+.s23: display: block; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; row-gap: normal; column-gap: normal
+
+## Structure
+div.s23 {
+  nav.s1[width: 635px; max-width: 100%; min-height: 40px] (aria-label="Global") {
+    ul.s2[width: 635px; min-width: 635px; min-height: 40px] {
+      li.s3[min-width: 101px; flex-basis: auto; width: auto; min-height: 40px] {
+        div.s4[width: 101px; min-width: 101px; min-height: 40px] {
+          button.s5[min-width: 101px; flex-basis: auto; width: auto; min-height: 40px] (type="button") {
+            SVG: <svg data-component="Octicon" aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom;width: 16px;height: 16px;fill: rgb(255, 255, 255);"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg>
+          }
+        }
+      }
+      li.s3[min-width: 106px; flex-basis: auto; width: auto; min-height: 40px] {
+        div.s4[width: 106px; min-width: 106px; min-height: 40px] {
+          button.s5[min-width: 106px; flex-basis: auto; width: auto; min-height: 40px] (type="button") {
+            SVG: <svg data-component="Octicon" aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom;width: 16px;height: 16px;fill: rgb(255, 255, 255);"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg>
+          }
+        }
+      }
+      li.s3[min-width: 115px; flex-basis: auto; width: auto; min-height: 40px] {
+        div.s4[width: 115px; min-width: 115px; min-height: 40px] {
+          button.s5[min-width: 115px; flex-basis: auto; width: auto; min-height: 40px] (type="button") {
+            SVG: <svg data-component="Octicon" aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom;width: 16px;height: 16px;fill: rgb(255, 255, 255);"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg>
+          }
+        }
+      }
+      li.s3[min-width: 134px; flex-basis: auto; width: auto; min-height: 40px] {
+        div.s4[width: 134px; min-width: 134px; min-height: 40px] {
+          button.s5[min-width: 134px; flex-basis: auto; width: auto; min-height: 40px] (type="button") {
+            SVG: <svg data-component="Octicon" aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom;width: 16px;height: 16px;fill: rgb(255, 255, 255);"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg>
+          }
+        }
+      }
+      li.s3[min-width: 112px; flex-basis: auto; width: auto; min-height: 40px] {
+        div.s4[width: 112px; min-width: 112px; min-height: 40px] {
+          button.s7[min-width: 112px; flex-basis: auto; width: auto; min-height: 40px] (type="button") {
+            SVG: <svg data-component="Octicon" aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom;width: 16px;height: 16px;fill: rgb(255, 255, 255);"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg>
+          }
+          div.s9[width: 454px; min-width: 454px; height: 255px; min-height: 255px] {
+            ul.s10[width: 454px; min-width: 454px; min-height: 255px] {
+              li.s3[min-width: 173px; flex-basis: auto; width: auto; min-height: 199px] {
+                div.s11[width: 173px; min-width: 173px; min-height: 199px] {
+                  span.s12[min-width: 173px; flex-basis: auto; width: auto; min-height: 18px] "ENTERPRISE SOLUTIONS"
+                  ul.s13[width: 173px; min-width: 173px; min-height: 39px] {
+                    li.s3[min-width: 173px; flex-basis: auto; width: auto; min-height: 39px] {
+                      a.s14[min-width: 173px; flex-basis: auto; width: auto; min-height: 39px] (href="https://github.com/enterprise") {
+                        div.s15[width: 173px; min-width: 173px; min-height: 39px] {
+                          SVG: <svg data-component="Octicon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="24" height="24" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom;width: 16px;height: 21px;fill: rgb(88, 99, 91);"><path d="M11.063 1.456a1.749 1.749 0 0 1 1.874 0l8.383 5.316a1.751 1.751 0 0 1 0 2.956l-8.383 5.316a1.749 1.749 0 0 1-1.874 0L2.68 9.728a1.751 1.751 0 0 1 0-2.956Zm1.071 1.267a.25.25 0 0 0-.268 0L3.483 8.039a.25.25 0 0 0 0 .422l8.383 5.316a.25.25 0 0 0 .268 0l8.383-5.316a.25.25 0 0 0 0-.422Z"></path><path d="M1.867 12.324a.75.75 0 0 1 1.035-.232l8.964 5.685a.25.25 0 0 0 .268 0l8.964-5.685a.75.75 0 0 1 .804 1.267l-8.965 5.685a1.749 1.749 0 0 1-1.874 0l-8.965-5.685a.75.75 0 0 1-.231-1.035Z"></path><path d="M1.867 16.324a.75.75 0 0 1 1.035-.232l8.964 5.685a.25.25 0 0 0 .268 0l8.964-5.685a.75.75 0 0 1 .804 1.267l-8.965 5.685a1.749 1.749 0 0 1-1.874 0l-8.965-5.685a.75.75 0 0 1-.231-1.035Z"></path></svg>
+                          span.s17[min-width: 149px; flex-basis: auto; width: auto; min-height: 21px] "Enterprise platform"
+                          span.s18[min-width: 173px; flex-basis: auto; width: auto; min-height: 18px] "AI-powered developer platform"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              li.s3[min-width: 201px; flex-basis: auto; width: auto; min-height: 199px] {
+                div.s11[width: 201px; min-width: 201px; min-height: 199px] {
+                  span.s12[min-width: 201px; flex-basis: auto; width: auto; min-height: 18px] "AVAILABLE ADD-ONS"
+                  ul.s13[width: 201px; min-width: 201px; min-height: 157px] {
+                    li.s3[min-width: 201px; flex-basis: auto; width: auto; min-height: 39px] {
+                      a.s14[min-width: 201px; flex-basis: auto; width: auto; min-height: 39px] (href="https://github.com/security/advanced-security") {
+                        div.s19[width: 201px; min-width: 201px; min-height: 39px] {
+                          SVG: <svg data-component="Octicon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="24" height="24" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom;width: 16px;height: 21px;fill: rgb(88, 99, 91);"><path d="M16.53 9.78a.75.75 0 0 0-1.06-1.06L11 13.19l-1.97-1.97a.75.75 0 0 0-1.06 1.06l2.5 2.5a.75.75 0 0 0 1.06 0l5-5Z"></path><path d="m12.54.637 8.25 2.675A1.75 1.75 0 0 1 22 4.976V10c0 6.19-3.771 10.704-9.401 12.83a1.704 1.704 0 0 1-1.198 0C5.77 20.705 2 16.19 2 10V4.976c0-.758.489-1.43 1.21-1.664L11.46.637a1.748 1.748 0 0 1 1.08 0Zm-.617 1.426-8.25 2.676a.249.249 0 0 0-.173.237V10c0 5.46 3.28 9.483 8.43 11.426a.199.199 0 0 0 .14 0C17.22 19.483 20.5 15.461 20.5 10V4.976a.25.25 0 0 0-.173-.237l-8.25-2.676a.253.253 0 0 0-.154 0Z"></path></svg>
+                          span.s17[min-width: 177px; flex-basis: auto; width: auto; min-height: 21px] "GitHub Advanced Security"
+                          span.s18[min-width: 201px; flex-basis: auto; width: auto; min-height: 18px] "Enterprise-grade security features"
+                        }
+                      }
+                    }
+                    li.s3[min-width: 201px; flex-basis: auto; width: auto; min-height: 39px] {
+                      a.s14[min-width: 201px; flex-basis: auto; width: auto; min-height: 39px] (href="https://github.com/features/copilot/copilot-business") {
+                        div.s20[width: 158px; min-width: 158px; min-height: 39px] {
+                          SVG: <svg data-component="Octicon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="24" height="24" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom;width: 16px;height: 21px;fill: rgb(88, 99, 91);"><path d="M23.922 16.992c-.861 1.495-5.859 5.023-11.922 5.023-6.063 0-11.061-3.528-11.922-5.023A.641.641 0 0 1 0 16.736v-2.869a.841.841 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.414-1.055.644-1.517a10.195 10.195 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.397-.406.89-.717 1.474-.952 1.399-1.136 3.392-2.093 6.122-2.093 2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.656a.832.832 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256ZM12.172 11h-.344a4.323 4.323 0 0 1-.355.508C10.703 12.455 9.555 13 7.965 13c-1.725 0-2.989-.359-3.782-1.259a2.005 2.005 0 0 1-.085-.104L4 11.741v6.585c1.435.779 4.514 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.323 4.323 0 0 1-.355-.508h-.016.016Zm.641-2.935c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1.44.878-2.497Z"></path><path d="M14.5 14.25a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Zm-5 0a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Z"></path></svg>
+                          span.s17[min-width: 134px; flex-basis: auto; width: auto; min-height: 21px] "Copilot for Business"
+                          span.s18[min-width: 158px; flex-basis: auto; width: auto; min-height: 18px] "Enterprise-grade AI features"
+                        }
+                      }
+                    }
+                    li.s3[min-width: 201px; flex-basis: auto; width: auto; min-height: 39px] {
+                      a.s14[min-width: 201px; flex-basis: auto; width: auto; min-height: 39px] (href="https://github.com/premium-support") {
+                        div.s21[width: 169px; min-width: 169px; min-height: 39px] {
+                          SVG: <svg data-component="Octicon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="24" height="24" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom;width: 16px;height: 21px;fill: rgb(88, 99, 91);"><path d="M1.75 1h12.5c.966 0 1.75.784 1.75 1.75v9.5A1.75 1.75 0 0 1 14.25 14H8.061l-2.574 2.573A1.458 1.458 0 0 1 3 15.543V14H1.75A1.75 1.75 0 0 1 0 12.25v-9.5C0 1.784.784 1 1.75 1ZM1.5 2.75v9.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h6.5a.25.25 0 0 0 .25-.25v-9.5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Z"></path><path d="M22.5 8.75a.25.25 0 0 0-.25-.25h-3.5a.75.75 0 0 1 0-1.5h3.5c.966 0 1.75.784 1.75 1.75v9.5A1.75 1.75 0 0 1 22.25 20H21v1.543a1.457 1.457 0 0 1-2.487 1.03L15.939 20H10.75A1.75 1.75 0 0 1 9 18.25v-1.465a.75.75 0 0 1 1.5 0v1.465c0 .138.112.25.25.25h5.5a.75.75 0 0 1 .53.22l2.72 2.72v-2.19a.75.75 0 0 1 .75-.75h2a.25.25 0 0 0 .25-.25v-9.5Z"></path></svg>
+                          span.s17[min-width: 145px; flex-basis: auto; width: auto; min-height: 21px] "Premium Support"
+                          span.s18[min-width: 169px; flex-basis: auto; width: auto; min-height: 18px] "Enterprise-grade 24/7 support"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      li.s3[min-width: 68px; flex-basis: auto; width: auto; min-height: 40px] {
+        a.s22[min-width: 68px; flex-basis: auto; width: auto; min-height: 40px] (href="https://github.com/pricing") {
+          span.s17[min-width: 52px; flex-basis: auto; width: auto; min-height: 24px] "Pricing"
+        }
+      }
+    }
+  }
+}

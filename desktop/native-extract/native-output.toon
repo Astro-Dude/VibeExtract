@@ -1,0 +1,33 @@
+# VibeExtract — Native macOS Capture
+
+## Palette
+.c1: #1e2023
+.c2: #f8f8f8
+.c3: #717274
+.c4: #474749
+.c5: #ff9200
+
+## Structure
+AXGroup pos=(270,465) size=(230x354) bg=#1e2023 #CalculatorKeypadView (group) {
+  AXScrollArea pos=(280,498) size=(210x42) bg=#1e2023 (scroll area)
+  AXButton "Delete" pos=(280,545) size=(48x48) bg=#f8f8f8 #Delete (button)
+  AXButton "Clear" pos=(334,545) size=(48x48) bg=#717274 #Clear (button)
+  AXButton "Per cent" pos=(388,545) size=(48x48) bg=#f8f8f8 #Percent (button)
+  AXButton "Divide" pos=(442,545) size=(48x48) bg=#fffaf2 #Divide (button)
+  AXButton "7" pos=(280,599) size=(48x48) bg=#f6f6f6 #Seven (button)
+  AXButton "8" pos=(334,599) size=(48x48) bg=#f6f6f6 #Eight (button)
+  AXButton "9" pos=(388,599) size=(48x48) bg=#474749 #Nine (button)
+  AXButton "Multiply" pos=(442,599) size=(48x48) bg=#fffaf2 #Multiply (button)
+  AXButton "4" pos=(280,653) size=(48x48) bg=#474749 #Four (button)
+  AXButton "5" pos=(334,653) size=(48x48) bg=#474749 #Five (button)
+  AXButton "6" pos=(388,653) size=(48x48) bg=#474749 #Six (button)
+  AXButton "Subtract" pos=(442,653) size=(48x48) bg=#fffaf2 #Subtract (button)
+  AXButton "1" pos=(280,707) size=(48x48) bg=#474749 #One (button)
+  AXButton "2" pos=(334,707) size=(48x48) bg=#474749 #Two (button)
+  AXButton "3" pos=(388,707) size=(48x48) bg=#f6f6f6 #Three (button)
+  AXButton "Add" pos=(442,707) size=(48x48) bg=#fffaf2 #Add (button)
+  AXButton "Change Sign" pos=(280,761) size=(48x48) bg=#f6f6f6 #Negate (button)
+  AXButton "0" pos=(334,761) size=(48x48) bg=#474749 #Zero (button)
+  AXButton "Point" pos=(388,761) size=(48x48) bg=#474749 #Decimal (button)
+  AXButton "Equals" pos=(442,761) size=(48x48) bg=#ff9200 #Equals (button)
+}

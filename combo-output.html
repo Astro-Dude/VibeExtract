@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Component Preview</title>
+  <link href="https://fonts.googleapis.com/css2?family=Mona+Sans:wght@400;500;600;700&family=Mona+Sans+Fallback:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+/* Reset base styles */
+html, body { margin: 0; padding: 0; }
+
+body { padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; box-sizing: border-box; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-size: 14px; line-height: 1.5; }
+/* Reset list styles - inherit colors from parent */
+ul, ol { list-style: none; margin: 0; padding: 0; background: inherit; color: inherit; }
+li { list-style: none; background: inherit; color: inherit; }
+/* Ensure all elements inherit box-sizing and prevent overflow issues */
+*, *::before, *::after { box-sizing: border-box; }
+img, video, svg, canvas { max-width: 100%; }
+/* Fix button/input/link resets - inherit colors from parent.
+   Scope the input reset to *text-like* inputs: checkbox/radio/range/color/file
+   need their UA chrome to be visible at all, so we leave those alone. */
+button { background: transparent; border: none; cursor: pointer; color: inherit; padding: 0; }
+/* Browsers don't inherit font-family/size/weight on <input> by default — the
+   UA stylesheet pins each control to its own. That makes the rendered value
+   text in our export ("Las Vegas, NV (LAS-All Airports)") show up at the UA
+   default ~13 px medium-Arial instead of the captured Centra No2 16 px 400.
+   Force inheritance for both text and form-control inputs. */
+input { font: inherit; letter-spacing: inherit; }
+input:where(:not([type]), [type="text"], [type="search"], [type="email"], [type="password"], [type="url"], [type="tel"], [type="number"], [type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]) { background: transparent; border: none; outline: none; color: inherit; min-width: 0; }
+input::placeholder { color: inherit; opacity: 0.5; }
+/* Strip the UA-default <select> chrome so a page's custom SVG chevron
+   doesn't get layered on top of the native triangle (two arrows). */
+select { appearance: none; -webkit-appearance: none; -moz-appearance: none; background: transparent; border: none; outline: none; color: inherit; padding: 0; }
+select::-ms-expand { display: none; }
+a { color: inherit; text-decoration: inherit; }
+/* Ensure proper inline display */
+span { display: inline; }
+/* Reset UA-default chrome that otherwise paints rogue borders/padding around
+   <fieldset> (groove border + padding around every filter section), <legend>
+   (built-in side padding), and <hr> (1px inset border on left/right whenever
+   the page only overrides top). Captured class rules still win because of
+   class > tag specificity. */
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+legend { padding: 0; }
+hr { border: 0; padding: 0; margin: 0; height: 0; color: inherit; background: transparent; }
+/* Flex container fixes */
+/* [style*="display: flex"], [style*="display:flex"] { min-width: 0; } */
+/* Icon font styles - using !important to override captured styles */
+.material-icons {
+  font-family: 'Material Icons', 'Google Material Icons' !important;
+  font-weight: normal !important;
+  font-style: normal !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  white-space: nowrap !important;
+  word-wrap: normal !important;
+  direction: ltr !important;
+  -webkit-font-feature-settings: 'liga' !important;
+  font-feature-settings: 'liga' !important;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  -moz-osx-font-smoothing: grayscale;
+}
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined' !important;
+  font-weight: normal !important;
+  font-style: normal !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  white-space: nowrap !important;
+  word-wrap: normal !important;
+  direction: ltr !important;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  -moz-osx-font-smoothing: grayscale;
+}
+/* Captured component styles */
+.s1 { display: flex; padding-right: 24px; padding-left: 24px; min-width: auto; min-height: auto; flex-direction: column; flex-wrap: nowrap; justify-content: normal; align-items: center; align-content: normal; gap: normal; justify-items: center; color: #ffffff; font-family: "Mona Sans", "Mona Sans Fallback", -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; font-size: 16px; font-weight: 400; line-height: 24px; text-align: center; white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: manual; tab-size: 8; text-indent: 0px; -webkit-font-smoothing: antialiased; scrollbar-width: auto; scrollbar-color: auto; background-color: #000000; }
+.s2 { display: grid; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: 80px 48px; grid-template-columns: 33px 33px 33px 33px 33px 33px 33px 33px 33px 33px 33px 33px; grid-template-rows: 212.234px; }
+.s3 { display: block; min-width: auto; min-height: auto; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; grid-column: auto / span 12; grid-area: auto / auto / auto / span 12; }
+.s4 { display: flex; flex-direction: column; flex-wrap: nowrap; justify-content: center; align-items: center; align-content: normal; gap: 0px; }
+.s5 { display: block; min-width: auto; min-height: auto; max-width: 924px; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; font-family: "Mona Sans", MonaSansFallback, -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; font-size: 64px; font-weight: 425; line-height: 69.12px; letter-spacing: -2.24px; }
+.s6 { display: block; margin-top: 20px; min-width: auto; min-height: auto; max-width: 600px; flex-direction: row; flex-wrap: nowrap; justify-content: normal; align-items: normal; align-content: normal; gap: normal; font-family: "Mona Sans", MonaSansFallback, -apple-system, "system-ui", "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; font-size: 18px; line-height: 27px; letter-spacing: 0.18px; }
+.s7 { display: flex; flex-direction: column; flex-wrap: nowrap; justify-content: center; align-items: center; align-content: normal; gap: normal; row-gap: normal; column-gap: normal; padding-right: 24px; padding-left: 24px; position: fixed; }
+
+  </style>
+</head>
+<body>
+<div class="s7">
+  <section class="s1" style="width: 972px; max-width: 100%; min-height: 212px">
+    <div class="s2" style="width: 924px; min-width: 924px; min-height: 212px">
+      <div class="s3" style="width: 924px; min-width: 924px; min-height: 212px">
+        <div class="s4" style="width: 924px; min-width: 924px; min-height: 212px">
+          <h1 class="s5" style="min-width: 924px; flex-basis: auto; width: auto; min-height: 138px">
+            The future of building happens together
+          </h1>
+          <p class="s6" style="min-width: 600px; flex-basis: auto; width: auto; min-height: 54px">
+            Tools and trends evolve, but collaboration endures. With GitHub, developers, agents, and code come together on one platform.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

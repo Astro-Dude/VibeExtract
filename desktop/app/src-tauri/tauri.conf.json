@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VibeExtract Desktop",
+  "version": "0.1.0",
+  "identifier": "com.scaler.vibeextract.desktop",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "VibeExtract Desktop",
+        "width": 960,
+        "height": 720,
+        "resizable": true,
+        "minWidth": 480,
+        "minHeight": 360,
+        "url": "index.html"
+      },
+      {
+        "label": "overlay",
+        "title": "VibeExtract Overlay",
+        "url": "overlay.html",
+        "width": 1440,
+        "height": 900,
+        "x": 0,
+        "y": 0,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "resizable": false,
+        "visible": false,
+        "shadow": false,
+        "acceptFirstMouse": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "DeveloperTool",
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {}
+}
