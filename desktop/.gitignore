@@ -1,0 +1,10 @@
+.DS_Store
+**/.DS_Store
+**/Cargo.lock
+**/target/
+*-output.html
+*-output.toon
+*-output.png
+combo-output.*
+native-output.*
+desktop/app/src-tauri/gen/
