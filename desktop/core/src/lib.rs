@@ -37,8 +37,17 @@ pub mod pe_windows;
 
 pub mod asar;
 pub mod dotnet_xaml;
+pub mod electron_relaunch;
 pub mod framework_detect;
+pub mod settings;
+
+// Cross-platform visual verifier + on-screen window enumeration. Used by the
+// embedded MCP server to drive the automated UI-replication loop.
+pub mod image_diff;
+pub mod windows_list;
 
 pub use dispatcher::{extract, ExtractError, Strategy};
+pub use image_diff::{compare_images, DiffReport};
 pub use output::CaptureResult;
 pub use picker::{pick_under_cursor, PickedElement};
+pub use windows_list::{list_windows, WindowInfo};

@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "vibe-extract": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--headless",
+        "--isolated",
+        "--output-dir",
+        "/Users/anishkanase/Documents/VibeExtract/.replica-output"
+      ]
+    }
+  }
+}

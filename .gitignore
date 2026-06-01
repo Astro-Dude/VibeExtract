@@ -1,0 +1,26 @@
+# OS junk
+.DS_Store
+**/.DS_Store
+
+# Rust build artifacts
+**/target/
+**/Cargo.lock
+
+# Tauri generated files
+desktop/app/src-tauri/gen/
+
+# Node
+**/node_modules/
+
+# VibeExtract replication output (logs, screenshots, scratch artifacts)
+.replica-output/
+.replicate-ui/
+replica-*.png
+*-output.html
+*-output.toon
+*-output.png
+combo-output.*
+native-output.*
+
+# Claude Code local settings (shared commands/skills stay committable)
+# .claude/settings.local.json

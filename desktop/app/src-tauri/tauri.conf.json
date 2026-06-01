@@ -37,6 +37,21 @@
         "visible": false,
         "shadow": false,
         "acceptFirstMouse": true
+      },
+      {
+        "label": "relaunch-dialog",
+        "title": "Restart in debug mode?",
+        "url": "relaunch-dialog.html",
+        "width": 560,
+        "height": 320,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": true,
+        "center": true
       }
     ],
     "security": {

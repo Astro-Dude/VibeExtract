@@ -16,11 +16,26 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-use vibe_extract_core::{capture::ScreenPoint, dispatcher, picker::PickedElement};
+use vibe_extract_core::{
+    capture::ScreenPoint,
+    dispatcher::{self, ExtractError},
+    electron_relaunch,
+    picker::PickedElement,
+    settings::{self, ElectronRelaunchPref, VibeExtractSettings},
+};
+
+/// Embedded MCP server exposing native inspection + screenshots + a visual
+/// diff verifier to Claude for automated UI replication.
+mod mcp;
 
 /// `contentScript.js` embedded at compile time. Path is relative to *this*
 /// source file (src/lib.rs): 4 levels up to repo root.
 const CONTENT_SCRIPT: &str = include_str!("../../../../contentScript.js");
+
+/// `assetHarvester.js` embedded at compile time (same repo-root path rule as
+/// `CONTENT_SCRIPT`). Driven by the `extract_assets` MCP tool via CDP to pull
+/// pixel-perfect real fonts/icons/images out of a running Electron renderer.
+const ASSET_HARVESTER: &str = include_str!("../../../../assetHarvester.js");
 
 /// Where capture outputs are written.
 struct OutputDir(PathBuf);
@@ -33,6 +48,12 @@ struct RegisteredHotkeys(Mutex<Vec<Shortcut>>);
 #[derive(Default)]
 struct PickSession {
     active: bool,
+    /// True from the moment we decide to start pick mode until start_pick_mode
+    /// either succeeds (`active = true`) or errors out. Prevents a rapid
+    /// double-press of ⌘⇧E (or ⌘⇧S) from spawning two concurrent
+    /// start_pick_mode flows, which would otherwise double-register Esc/↑/↓
+    /// shortcuts, double-install the CGEventTap, and race over `target_pid`.
+    starting: bool,
     selected: Vec<PickedElement>,
     // The pid of the first selected element — subsequent shift-clicks must
     // match this pid (same-app constraint per the plan).
@@ -56,6 +77,42 @@ struct PickSessionState(Arc<Mutex<PickSession>>);
 /// Dropping the handle removes the tap, so clicks reach apps normally again.
 #[derive(Default)]
 struct EventTapState(Mutex<Option<vibe_extract_core::event_tap_macos::TapHandle>>);
+
+/// Holds the data + response channel for an open relaunch-dialog modal.
+/// Set when the dialog opens, taken when the user clicks Restart or Cancel.
+#[derive(Default)]
+struct RelaunchDialogState(Mutex<Option<RelaunchDialogPending>>);
+
+struct RelaunchDialogPending {
+    info: RelaunchDialogInfo,
+    tx: tokio::sync::oneshot::Sender<RelaunchDialogChoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RelaunchDialogInfo {
+    bundle_id: String,
+    display_name: String,
+    known: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RelaunchDialogChoice {
+    accept: bool,
+    /// "Don't ask again" — meaning depends on the user's accept choice:
+    ///   accept=true  + dont_ask=true → save AlwaysYes for this bundle
+    ///   accept=false + dont_ask=true → save AlwaysNo for this bundle
+    dont_ask: bool,
+}
+
+/// Single-flight guard so a rapid double ⌘⇧E doesn't kick off two relaunches.
+#[derive(Default)]
+struct RelaunchInProgressState(Mutex<bool>);
+
+/// Single-flight guard so rapid ⌘⇧E presses don't spawn multiple concurrent
+/// dispatch runs (each one tries CDP which can take up to 15s). The user
+/// pressing the key 5x in a row should result in ONE export attempt, not 5.
+#[derive(Default)]
+struct ExportInProgressState(Mutex<bool>);
 
 /// Tracks the pid of the most recently frontmost app that wasn't us. Updated
 /// continuously by a background poller — this is what we use as the "target"
@@ -386,7 +443,10 @@ async fn start_pick_mode(app: AppHandle) -> Result<(), String> {
     }
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    // Reset session state.
+    // Reset session state. CRITICAL: clear `last_hover` too — a stale
+    // PickedElement from a prior session (often VibeExtract's own AXMenuBar
+    // due to Apple's global hit-test behavior, see ax_macos.rs notes) will
+    // otherwise be returned by the first overlay_click of the new session.
     {
         let state = app.state::<PickSessionState>();
         let mut s = state.0.lock().unwrap();
@@ -395,6 +455,7 @@ async fn start_pick_mode(app: AppHandle) -> Result<(), String> {
         s.locked_pid = None;
         s.woken_pids.clear();
         s.target_pid = target_pid;
+        s.last_hover = None;
     }
 
     // Show the overlay window, size it to the primary monitor.
@@ -446,6 +507,14 @@ async fn start_pick_mode(app: AppHandle) -> Result<(), String> {
         let app_for_tap = app.clone();
         let tap_result = vibe_extract_core::event_tap_macos::install_mouse_down_tap(
             move |x: f64, y: f64, shift: bool| {
+                // macOS dispatches synthetic mouseDown events at exact (0,0)
+                // during system focus changes and app relaunches. Filter these
+                // — they don't correspond to any real user click and would
+                // otherwise pollute the selection state.
+                if x.abs() < 1.0 && y.abs() < 1.0 {
+                    log::debug!("event_tap: ignoring synthetic (0,0) click");
+                    return;
+                }
                 log::info!("event_tap: mouseDown at ({:.0},{:.0}) shift={}", x, y, shift);
                 // Spawn a tokio task that runs the same logic as overlay_click.
                 let app_inner = app_for_tap.clone();
@@ -478,6 +547,23 @@ async fn start_pick_mode(app: AppHandle) -> Result<(), String> {
     // Spawn the hover-tracking task.
     spawn_hover_task(app.clone());
 
+    // Register Esc and ↑/↓ as temporary global shortcuts. Esc cancels pick
+    // mode; ↑/↓ walk the AX ancestry of the currently hovered element so the
+    // user can select a larger / smaller region than Apple's AX hit-test
+    // returns by default. Unregistered in stop_pick_mode so we don't steal
+    // these keys from other apps while VibeExtract isn't actively picking.
+    let pick_keys = [
+        (Shortcut::new(None, Code::Escape), "Esc"),
+        (Shortcut::new(None, Code::ArrowUp), "ArrowUp"),
+        (Shortcut::new(None, Code::ArrowDown), "ArrowDown"),
+    ];
+    for (s, name) in pick_keys.iter() {
+        match app.global_shortcut().register(s.clone()) {
+            Ok(_) => log::info!("registered {} shortcut (pick-mode-scoped)", name),
+            Err(e) => log::warn!("failed to register {} shortcut: {}", name, e),
+        }
+    }
+
     Ok(())
 }
 
@@ -505,6 +591,19 @@ async fn stop_pick_mode(app: AppHandle) -> Result<(), String> {
         let _ = overlay.emit("overlay-hide", ());
         let _ = overlay.hide();
         let _ = overlay.set_ignore_cursor_events(true);
+    }
+    // Unregister the pick-mode-scoped shortcuts. Use `unregister` per key
+    // so we don't kill the ⌘⇧S/E/X bindings via unregister_all.
+    let pick_keys = [
+        (Shortcut::new(None, Code::Escape), "Esc"),
+        (Shortcut::new(None, Code::ArrowUp), "ArrowUp"),
+        (Shortcut::new(None, Code::ArrowDown), "ArrowDown"),
+    ];
+    for (s, name) in pick_keys.iter() {
+        match app.global_shortcut().unregister(s.clone()) {
+            Ok(_) => log::debug!("unregistered {} shortcut", name),
+            Err(e) => log::debug!("unregister {}: {} (likely never registered)", name, e),
+        }
     }
     let _ = app.emit("pick-mode-changed", false);
     Ok(())
@@ -537,12 +636,44 @@ async fn overlay_click(
     // outlining the moment the user clicked — matches the web extension's
     // `hoverElement` approach. Falls back to a fresh hit-test only if no
     // hover was cached (e.g. first frame after pick mode starts).
+    //
+    // BUT: validate the cached element's pid first. The hover task already
+    // filters foreign-pid hits, but belt-and-suspenders here catches any
+    // edge case where a stale or wrong-app cache slipped through. Without
+    // this guard, a click would commit VibeExtract's own AXMenuBar when
+    // Apple's global hit-test leaked one in.
+    let our_pid_local: i32 = std::process::id() as i32;
     let pick_result: Result<PickedElement, String> = {
         let cached_hover = {
             let s = app.state::<PickSessionState>();
             let guard = s.0.lock().unwrap();
             guard.last_hover.clone()
         };
+        let cached_hover = cached_hover.filter(|hover| {
+            if hover.pid == our_pid_local {
+                log::warn!(
+                    "overlay_click: rejecting cached hover from our own pid={} role={}",
+                    hover.pid, hover.role
+                );
+                return false;
+            }
+            if let Some(want) = target_pid_opt {
+                if hover.pid != want {
+                    log::warn!(
+                        "overlay_click: rejecting cached hover from pid={} (want target_pid={})",
+                        hover.pid, want
+                    );
+                    return false;
+                }
+            }
+            // Note: we used to reject AXMenuBar/AXMenuBarItem/AXApplication
+            // here too, but Apple's AX hit-test routinely returns those for
+            // Slack/Electron content even mid-screen, leaving the user
+            // unable to click anything. Accept them — the dispatcher will
+            // gracefully fall through to the screenshot fallback when the
+            // AX subtree is empty.
+            true
+        });
         match cached_hover {
             Some(hover) => {
                 log::info!(
@@ -572,6 +703,21 @@ async fn overlay_click(
 
     let mut picked = match pick_result {
         Ok(p) => {
+            // Only reject if the click somehow landed in VibeExtract's own
+            // process — that would never produce useful output. Accept
+            // AXMenuBar/AXApplication: the dispatcher's screenshot fallback
+            // will produce a meaningful result even when AX is too shallow.
+            if p.pid == our_pid_local {
+                log::warn!(
+                    "overlay_click: rejecting fresh-hit from our own pid={} role={}",
+                    p.pid, p.role
+                );
+                let _ = app.emit(
+                    "toast",
+                    "Cursor is over VibeExtract itself — click on the target app.",
+                );
+                return Err("fresh hit was our own process".into());
+            }
             log::info!(
                 "overlay_click pick succeeded: role={} name=\"{}\" pid={}",
                 p.role, p.name, p.pid
@@ -675,6 +821,30 @@ async fn overlay_click(
 
 #[tauri::command]
 async fn export_selection(app: AppHandle) -> Result<ExportPayload, String> {
+    // Single-flight: refuse if another export is already in flight. The CDP
+    // path can take up to 15s; without this guard, the user spamming ⌘⇧E
+    // spawns N concurrent dispatchers and the UI never settles.
+    {
+        let guard_state = app.state::<ExportInProgressState>();
+        let mut g = guard_state.0.lock().unwrap();
+        if *g {
+            return Err(
+                "an export is already in progress — give it a moment to finish".into(),
+            );
+        }
+        *g = true;
+    }
+    // RAII drop so the flag clears no matter how we exit (Ok, Err, panic).
+    struct ExportGuard<'a>(&'a AppHandle);
+    impl<'a> Drop for ExportGuard<'a> {
+        fn drop(&mut self) {
+            if let Some(s) = self.0.try_state::<ExportInProgressState>() {
+                *s.0.lock().unwrap() = false;
+            }
+        }
+    }
+    let _export_guard = ExportGuard(&app);
+
     let (selected, _) = {
         let state = app.state::<PickSessionState>();
         let s = state.0.lock().unwrap();
@@ -699,12 +869,78 @@ async fn export_selection(app: AppHandle) -> Result<ExportPayload, String> {
         selected.len()
     );
 
-    let result = dispatcher::extract_multi(&selected, CONTENT_SCRIPT, &out_dir)
-        .await
-        .map_err(|e| e.to_string())?;
+    let first_attempt = dispatcher::extract_multi(&selected, CONTENT_SCRIPT, &out_dir).await;
+    let result = match first_attempt {
+        Ok(r) => r,
+        Err(ExtractError::ElectronNeedsRelaunch {
+            bundle_id,
+            display_name,
+            ..
+        }) => {
+            match handle_electron_relaunch_flow(&app, bundle_id, display_name.clone()).await {
+                RelaunchOutcome::RelaunchedRearmed => {
+                    // User must re-pick now; we return early with a friendly
+                    // sentinel error so the toast in the main window explains.
+                    return Err(format!(
+                        "{} restarted in debug mode — re-pick your element then press ⌘⇧E",
+                        display_name
+                    ));
+                }
+                RelaunchOutcome::UseAxFallback => {
+                    // Re-run with skip_relaunch=true so the dispatcher does
+                    // the AX path instead of looping back to us.
+                    let r = dispatcher::extract_multi_with_opts(
+                        &selected,
+                        CONTENT_SCRIPT,
+                        &out_dir,
+                        true,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    // The AX path on Electron almost always degrades to
+                    // screenshot-only (shallow tree). Tell the user clearly
+                    // so they know their pixel-perfect option is still one
+                    // dialog away. We use `display_name` captured at the
+                    // start of this match arm.
+                    if r.strategy.contains("screenshot_only") {
+                        let _ = app.emit(
+                            "toast",
+                            format!(
+                                "{}'s AX tree was empty — only a screenshot was captured. For real DOM, accept the restart prompt or set 'Always' in Settings → Electron Apps.",
+                                display_name
+                            ),
+                        );
+                    }
+                    r
+                }
+            }
+        }
+        Err(e) => return Err(e.to_string()),
+    };
 
-    // Tear down pick mode after a successful export.
-    let _ = stop_pick_mode(app.clone()).await;
+    // SOFT reset: keep pick mode active (overlay visible, event tap installed,
+    // Esc still bound) so the user can immediately click another element and
+    // press ⌘⇧E again without re-arming. Clear `selected` so their next click
+    // starts a fresh pick instead of accumulating onto the previous one.
+    // Re-show the overlay because export_selection hid it before extracting.
+    {
+        let state = app.state::<PickSessionState>();
+        let mut s = state.0.lock().unwrap();
+        s.selected.clear();
+        s.locked_pid = None;
+        s.last_hover = None;
+    }
+    let _ = app.emit("selection-count-changed", 0);
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let active = app
+            .try_state::<PickSessionState>()
+            .map(|s| s.0.lock().unwrap().active)
+            .unwrap_or(false);
+        if active {
+            let _ = overlay.show();
+            let _ = overlay.set_ignore_cursor_events(true);
+        }
+    }
 
     let summary = selected
         .iter()
@@ -727,9 +963,30 @@ async fn export_selection(app: AppHandle) -> Result<ExportPayload, String> {
 #[tauri::command]
 async fn extract_frontmost_window_cmd(app: AppHandle) -> Result<ExportPayload, String> {
     let out_dir = app.state::<OutputDir>().inner().0.clone();
-    let result = dispatcher::extract_frontmost_window(CONTENT_SCRIPT, &out_dir)
-        .await
-        .map_err(|e| e.to_string())?;
+    let first_attempt = dispatcher::extract_frontmost_window(CONTENT_SCRIPT, &out_dir).await;
+    let result = match first_attempt {
+        Ok(r) => r,
+        Err(ExtractError::ElectronNeedsRelaunch {
+            bundle_id,
+            display_name,
+            ..
+        }) => match handle_electron_relaunch_flow(&app, bundle_id, display_name.clone()).await {
+            RelaunchOutcome::RelaunchedRearmed => {
+                return Err(format!(
+                    "{} restarted in debug mode — re-pick your element then press ⌘⇧E",
+                    display_name
+                ));
+            }
+            RelaunchOutcome::UseAxFallback => dispatcher::extract_frontmost_window_with_opts(
+                CONTENT_SCRIPT,
+                &out_dir,
+                true,
+            )
+            .await
+            .map_err(|e| e.to_string())?,
+        },
+        Err(e) => return Err(e.to_string()),
+    };
     Ok(ExportPayload {
         strategy: result.strategy,
         fidelity: result.fidelity,
@@ -740,6 +997,483 @@ async fn extract_frontmost_window_cmd(app: AppHandle) -> Result<ExportPayload, S
         picked_summary: "entire frontmost window".into(),
         count: 1,
     })
+}
+
+// =============================================================================
+// Electron auto-relaunch orchestration
+// =============================================================================
+//
+// When the dispatcher returns `ExtractError::ElectronNeedsRelaunch`, the Tauri
+// layer is responsible for the user-facing flow: read the per-app preference,
+// optionally pop the modal, quit-and-relaunch via `electron_relaunch`, and re-
+// arm pick mode so the user can re-pick at the now-open debug port.
+
+#[derive(Debug, Clone, Copy)]
+enum RelaunchOutcome {
+    /// Relaunched successfully and pick mode is now armed — user must re-pick.
+    /// No CaptureResult this round.
+    RelaunchedRearmed,
+    /// User declined OR pref was AlwaysNo OR relaunch failed. Caller should
+    /// re-run extract_* with `skip_relaunch=true` to get the AX fallback.
+    UseAxFallback,
+}
+
+async fn handle_electron_relaunch_flow(
+    app: &AppHandle,
+    bundle_id: String,
+    display_name: String,
+) -> RelaunchOutcome {
+    // Single-flight guard.
+    {
+        let guard_state = app.state::<RelaunchInProgressState>();
+        let mut g = guard_state.0.lock().unwrap();
+        if *g {
+            let _ = app.emit(
+                "toast",
+                format!("Already relaunching {} — please wait…", display_name),
+            );
+            return RelaunchOutcome::UseAxFallback;
+        }
+        *g = true;
+    }
+    // Make sure we drop the guard no matter how we exit.
+    struct Guard<'a>(&'a AppHandle);
+    impl<'a> Drop for Guard<'a> {
+        fn drop(&mut self) {
+            if let Some(s) = self.0.try_state::<RelaunchInProgressState>() {
+                *s.0.lock().unwrap() = false;
+            }
+        }
+    }
+    let _guard = Guard(app);
+
+    // CRITICAL: tear down the active pick-mode plumbing (event tap, overlay,
+    // Esc shortcut) BEFORE showing the dialog. Otherwise the global mouse tap
+    // captures every click on the dialog itself, the user can't interact
+    // properly, and spurious AX hits poison the selection state. We
+    // deliberately PRESERVE `selected` and `locked_pid` — they're the
+    // user's original picks, which the AX-fallback path needs intact if the
+    // user cancels.
+    {
+        let state = app.state::<PickSessionState>();
+        let mut s = state.0.lock().unwrap();
+        s.active = false;
+        s.last_hover = None;
+        // intentional: do NOT clear selected, locked_pid, or woken_pids
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let tap_state = app.state::<EventTapState>();
+        let mut guard = tap_state.0.lock().unwrap();
+        if guard.is_some() {
+            drop(guard.take());
+            log::info!("event_tap: dropped for relaunch dialog");
+        }
+    }
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = overlay.set_ignore_cursor_events(true);
+        let _ = overlay.hide();
+    }
+    // Same pick-mode shortcut set as start/stop_pick_mode — drop them all so
+    // they don't fire while the dialog is up.
+    for s in [
+        Shortcut::new(None, Code::Escape),
+        Shortcut::new(None, Code::ArrowUp),
+        Shortcut::new(None, Code::ArrowDown),
+    ] {
+        let _ = app.global_shortcut().unregister(s);
+    }
+    let _ = app.emit("pick-mode-changed", false);
+
+    let pref = settings::get_electron_pref(&bundle_id);
+    log::info!(
+        "electron_relaunch: bundle={} display={} pref={:?}",
+        bundle_id, display_name, pref
+    );
+
+    let proceed = match pref {
+        ElectronRelaunchPref::AlwaysNo => false,
+        ElectronRelaunchPref::AlwaysYes => true,
+        ElectronRelaunchPref::Ask => {
+            let known = electron_relaunch::lookup_known(&bundle_id).is_some();
+            let info = RelaunchDialogInfo {
+                bundle_id: bundle_id.clone(),
+                display_name: display_name.clone(),
+                known,
+            };
+            match show_relaunch_dialog(app, info).await {
+                Some(choice) => {
+                    if choice.dont_ask {
+                        let pref = if choice.accept {
+                            ElectronRelaunchPref::AlwaysYes
+                        } else {
+                            ElectronRelaunchPref::AlwaysNo
+                        };
+                        if let Err(e) = settings::set_electron_pref(&bundle_id, pref) {
+                            log::warn!("settings save failed: {}", e);
+                        }
+                    }
+                    choice.accept
+                }
+                None => {
+                    // Dialog window failed to open. Treat as cancel.
+                    false
+                }
+            }
+        }
+    };
+
+    if !proceed {
+        return RelaunchOutcome::UseAxFallback;
+    }
+
+    // Build the RelaunchTarget. Known apps use the static AppleScript aliases;
+    // unknown apps use display_name as both the alias and AppleScript target.
+    let target = match electron_relaunch::make_target(Some(&bundle_id), &display_name) {
+        Ok(t) => t,
+        Err(e) => {
+            log::warn!("make_target failed: {}", e);
+            let _ = app.emit("toast", format!("Can't relaunch {}: {}", display_name, e));
+            return RelaunchOutcome::UseAxFallback;
+        }
+    };
+
+    // Emit the dialog's listener can pick up — the dialog stays open in
+    // progress view while this runs. `forward_to_dialog` is closed over so
+    // both the dialog and the main window see the same progress stream.
+    let app_for_progress = app.clone();
+    let result = electron_relaunch::quit_and_relaunch(&target, move |p| {
+        let _ = app_for_progress.emit("electron-relaunch-progress", p);
+    })
+    .await;
+
+    // Whether the relaunch succeeded or failed, we're done with the dialog —
+    // hide it so the user sees either the toast (success → "re-pick") or
+    // the failure toast unobstructed. A brief delay on success keeps the
+    // "Ready" checkmark visible for a beat instead of snapping shut.
+    if result.is_ok() {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    if let Some(win) = app.get_webview_window("relaunch-dialog") {
+        let _ = win.hide();
+    }
+
+    match result {
+        Ok(port) => {
+            log::info!(
+                "electron_relaunch: success — {} now on debug port {}",
+                display_name, port
+            );
+            let _ = app.emit(
+                "toast",
+                format!(
+                    "{} is ready — press ⌘⇧S then re-pick your element",
+                    display_name
+                ),
+            );
+            // Auto-arm pick mode so the user can immediately re-pick.
+            // Small delay so the toast has time to render and the app has a
+            // moment to finish drawing its window.
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let app_for_pick = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = start_pick_mode(app_for_pick).await {
+                    log::warn!("auto start_pick_mode after relaunch failed: {}", e);
+                }
+            });
+            RelaunchOutcome::RelaunchedRearmed
+        }
+        Err(e) => {
+            log::warn!("electron_relaunch failed: {}", e);
+            let _ = app.emit(
+                "toast",
+                format!("Couldn't restart {}: {} — using AX path", display_name, e),
+            );
+            RelaunchOutcome::UseAxFallback
+        }
+    }
+}
+
+/// Open the relaunch-dialog modal, return the user's choice (or `None` if the
+/// dialog window couldn't be opened).
+async fn show_relaunch_dialog(
+    app: &AppHandle,
+    info: RelaunchDialogInfo,
+) -> Option<RelaunchDialogChoice> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let state = app.state::<RelaunchDialogState>();
+        let mut g = state.0.lock().unwrap();
+        // If a dialog is already up (shouldn't happen due to single-flight,
+        // but guard anyway) reject the previous request.
+        if let Some(prev) = g.take() {
+            let _ = prev.tx.send(RelaunchDialogChoice {
+                accept: false,
+                dont_ask: false,
+            });
+        }
+        *g = Some(RelaunchDialogPending {
+            info: info.clone(),
+            tx,
+        });
+    }
+    let Some(win) = app.get_webview_window("relaunch-dialog") else {
+        log::warn!("relaunch-dialog window not found");
+        return None;
+    };
+    let _ = win.show();
+    let _ = win.set_focus();
+    let _ = win.center();
+    // The dialog window was created at app launch (visible: false) so its JS
+    // already ran ONCE before any state existed. Tauri doesn't re-run scripts
+    // on subsequent show()s, so we can't rely on the script's initial load()
+    // to populate the title/question. Instead emit an event the dialog's
+    // (persistent) listener picks up to refresh its UI.
+    let _ = win.emit("relaunch-dialog-show", &info);
+
+    // Wait for the user's response. 60s budget — more than enough for them to
+    // read a one-line question and click a button. If they walk away we
+    // default to cancel.
+    match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+        Ok(Ok(choice)) => Some(choice),
+        _ => {
+            // Clean up state on timeout.
+            let state = app.state::<RelaunchDialogState>();
+            *state.0.lock().unwrap() = None;
+            let _ = win.hide();
+            None
+        }
+    }
+}
+
+#[tauri::command]
+async fn get_relaunch_dialog_info(app: AppHandle) -> Result<RelaunchDialogInfo, String> {
+    let state = app.state::<RelaunchDialogState>();
+    let g = state.0.lock().unwrap();
+    match g.as_ref() {
+        Some(p) => Ok(p.info.clone()),
+        None => Err("no pending relaunch dialog".into()),
+    }
+}
+
+#[tauri::command]
+async fn relaunch_dialog_response(
+    app: AppHandle,
+    accept: bool,
+    dont_ask: bool,
+) -> Result<(), String> {
+    let pending = {
+        let state = app.state::<RelaunchDialogState>();
+        let mut g = state.0.lock().unwrap();
+        g.take()
+    };
+    // Hide the dialog only if the user CANCELLED — otherwise keep it open so
+    // it can display the restart progress (spinner + phase + elapsed). The
+    // dialog is hidden later by `handle_electron_relaunch_flow` once
+    // `quit_and_relaunch` returns.
+    if !accept {
+        if let Some(win) = app.get_webview_window("relaunch-dialog") {
+            let _ = win.hide();
+        }
+    }
+    if let Some(p) = pending {
+        let _ = p.tx.send(RelaunchDialogChoice { accept, dont_ask });
+        Ok(())
+    } else {
+        Err("no pending relaunch dialog".into())
+    }
+}
+
+#[tauri::command]
+async fn get_settings_cmd() -> Result<VibeExtractSettings, String> {
+    Ok(settings::load())
+}
+
+#[tauri::command]
+async fn set_electron_pref_cmd(bundle_id: String, pref: String) -> Result<(), String> {
+    let parsed = match pref.as_str() {
+        "ask" => ElectronRelaunchPref::Ask,
+        "always_yes" => ElectronRelaunchPref::AlwaysYes,
+        "always_no" => ElectronRelaunchPref::AlwaysNo,
+        other => return Err(format!("unknown pref '{}'", other)),
+    };
+    settings::set_electron_pref(&bundle_id, parsed).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn known_electron_apps() -> Vec<KnownAppLite> {
+    electron_relaunch::KNOWN_ELECTRON_APPS
+        .iter()
+        .map(|k| KnownAppLite {
+            bundle_id: k.bundle_id.to_string(),
+            display_name: k.display_name.to_string(),
+        })
+        .collect()
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct KnownAppLite {
+    bundle_id: String,
+    display_name: String,
+}
+
+/// Walk up (parent) or down (deepest descendant under cursor) the AX
+/// ancestry of the currently hovered element. Updates `last_hover` and emits
+/// the new outline to the overlay so the user immediately sees the bigger /
+/// smaller region. Bound to ↑ / ↓ while pick mode is active.
+#[cfg(target_os = "macos")]
+async fn walk_hover_ancestry(app: AppHandle, go_up: bool) -> Result<(), String> {
+    // Snapshot the current hover so we don't hold the mutex across AX FFI.
+    let (target_pid_opt, current) = {
+        let state = app.state::<PickSessionState>();
+        let s = state.0.lock().unwrap();
+        if !s.active {
+            return Err("pick mode not active".into());
+        }
+        (s.target_pid, s.last_hover.clone())
+    };
+    let Some(current) = current else {
+        return Err("no hovered element to walk from".into());
+    };
+    let our_pid = std::process::id() as i32;
+
+    // All AX work in a sync block so the (non-Send) AxElement handles drop
+    // before any .await.
+    let new_picked = {
+        // Re-acquire an AX handle for the current element. We have its bounds
+        // — hit-test at the center of the bounds via the target app's tree.
+        let center = current.bounds.center();
+        let cur_el = if let Some(pid) = target_pid_opt {
+            vibe_extract_core::ax_macos::element_at_in_app(center, pid)
+        } else {
+            vibe_extract_core::ax_macos::element_at(center)
+        };
+        let Some(cur_el) = cur_el else {
+            return Err("couldn't re-acquire AX handle for current hover".into());
+        };
+
+        if go_up {
+            // Walk to the immediate parent. Reject if it leaves the target
+            // app (e.g. parent is system root) or if the bounds are bogus.
+            let Some(parent) = cur_el.parent() else {
+                return Err("already at AX root — can't go higher".into());
+            };
+            let role = parent.str_attr("AXRole").unwrap_or_default();
+            let bounds = match parent.rect() {
+                Some(b) if b.w >= 1.0 && b.h >= 1.0 => b,
+                _ => {
+                    return Err(format!(
+                        "parent {} has no usable bounds — staying at current",
+                        role
+                    ))
+                }
+            };
+            let pid = parent.pid().unwrap_or(-1);
+            if pid == our_pid {
+                return Err("parent is in our own process — refusing to walk".into());
+            }
+            let name = parent
+                .str_attr("AXTitle")
+                .or_else(|| parent.str_attr("AXDescription"))
+                .or_else(|| parent.str_attr("AXLabel"))
+                .or_else(|| parent.str_attr("AXValue"))
+                .unwrap_or_default();
+            PickedElement {
+                role,
+                subrole: parent.str_attr("AXSubrole").filter(|s| !s.is_empty()),
+                name,
+                identifier: parent.str_attr("AXIdentifier").filter(|s| !s.is_empty()),
+                bounds,
+                pid,
+                app_path: vibe_extract_core::ax_macos::pid_to_path(pid),
+                window_title: None,
+                window_bounds: parent.enclosing_window().and_then(|w| w.rect()),
+            }
+        } else {
+            // Walk DOWN: find the deepest descendant under the cursor (or the
+            // bounds center if cursor isn't over the element anymore).
+            let pt = {
+                let c = vibe_extract_core::ax_macos::current_cursor();
+                if c.x >= current.bounds.x
+                    && c.x <= current.bounds.x + current.bounds.w
+                    && c.y >= current.bounds.y
+                    && c.y <= current.bounds.y + current.bounds.h
+                {
+                    c
+                } else {
+                    current.bounds.center()
+                }
+            };
+            let deeper = vibe_extract_core::ax_macos::deepen_at(cur_el, pt);
+            let role = deeper.str_attr("AXRole").unwrap_or_default();
+            let bounds = match deeper.rect() {
+                Some(b) if b.w >= 1.0 && b.h >= 1.0 => b,
+                _ => return Err(format!("child {} has no bounds", role)),
+            };
+            if bounds.w >= current.bounds.w && bounds.h >= current.bounds.h {
+                // No real deeper element — same or bigger. Nothing to go to.
+                return Err("no deeper element under cursor".into());
+            }
+            let pid = deeper.pid().unwrap_or(-1);
+            let name = deeper
+                .str_attr("AXTitle")
+                .or_else(|| deeper.str_attr("AXDescription"))
+                .or_else(|| deeper.str_attr("AXLabel"))
+                .or_else(|| deeper.str_attr("AXValue"))
+                .unwrap_or_default();
+            PickedElement {
+                role,
+                subrole: deeper.str_attr("AXSubrole").filter(|s| !s.is_empty()),
+                name,
+                identifier: deeper.str_attr("AXIdentifier").filter(|s| !s.is_empty()),
+                bounds,
+                pid,
+                app_path: vibe_extract_core::ax_macos::pid_to_path(pid),
+                window_title: None,
+                window_bounds: deeper.enclosing_window().and_then(|w| w.rect()),
+            }
+        }
+    };
+
+    log::info!(
+        "walk_hover_ancestry({}): now {} \"{}\" bounds={}x{}",
+        if go_up { "up" } else { "down" },
+        new_picked.role,
+        new_picked.name,
+        new_picked.bounds.w,
+        new_picked.bounds.h
+    );
+
+    // Push the new element into last_hover so the very next click commits it.
+    // Also push an outline event so the overlay redraws immediately.
+    {
+        let state = app.state::<PickSessionState>();
+        let mut s = state.0.lock().unwrap();
+        s.last_hover = Some(new_picked.clone());
+    }
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let payload = OverlayHoverPayload {
+            bounds: Some(OverlayBounds {
+                x: new_picked.bounds.x,
+                y: new_picked.bounds.y,
+                w: new_picked.bounds.w,
+                h: new_picked.bounds.h,
+            }),
+            role: new_picked.role.clone(),
+            name: new_picked.name.clone(),
+            cursor: OverlayCursor {
+                x: vibe_extract_core::ax_macos::current_cursor().x,
+                y: vibe_extract_core::ax_macos::current_cursor().y,
+            },
+        };
+        let _ = overlay.emit("overlay-hover", payload);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn walk_hover_ancestry(_app: AppHandle, _go_up: bool) -> Result<(), String> {
+    Err("walk_hover_ancestry only implemented on macOS".into())
 }
 
 #[tauri::command]
@@ -786,6 +1520,41 @@ fn spawn_hover_task(app: AppHandle) {
                         Some(pid) => vibe_extract_core::ax_macos::element_at_in_app(pt, pid),
                         None => vibe_extract_core::ax_macos::element_at_excluding(pt, our_pid),
                     };
+                    // Apple's AXUIElementCopyElementAtPosition is a GLOBAL hit-test:
+                    // even though we passed `AXUIElementCreateApplication(target_pid)`,
+                    // if the cursor is over a foreign app's window (e.g. our own
+                    // overlay) it can return that foreign-process element. Reject
+                    // when the pid doesn't match the target.
+                    //
+                    // We DELIBERATELY ACCEPT AXMenuBar/AXApplication results even
+                    // mid-screen. Slack's Electron AX tree is so shallow that
+                    // Apple often returns these as the only valid hit. Rejecting
+                    // them leaves `last_hover` empty and every subsequent click
+                    // fails. Accepting means the dispatcher runs its full ladder
+                    // (CDP → AX walk → screenshot fallback) — at worst the user
+                    // gets a captured screenshot with a clear "AX too shallow"
+                    // banner, which is FAR better than silent failure.
+                    let hit_result = hit_result.and_then(|el| {
+                        let elem_pid = el.pid().unwrap_or(-1);
+                        match target_pid_opt {
+                            Some(want) if elem_pid != want => {
+                                log::warn!(
+                                    "hover: discarded foreign-pid hit — target_pid={} got pid={} role={:?}",
+                                    want, elem_pid, el.str_attr("AXRole")
+                                );
+                                return None;
+                            }
+                            _ if elem_pid == our_pid => {
+                                log::warn!(
+                                    "hover: discarded self-pid hit — pid={} (our own process)",
+                                    elem_pid
+                                );
+                                return None;
+                            }
+                            _ => {}
+                        }
+                        Some(el)
+                    });
                     match hit_result {
                         Some(initial) => {
                             let el = vibe_extract_core::ax_macos::deepen_at(initial, pt);
@@ -800,6 +1569,16 @@ fn spawn_hover_task(app: AppHandle) {
                                 .unwrap_or_default();
                             let identifier = el.str_attr("AXIdentifier").filter(|s| !s.is_empty());
                             let bounds = el.rect();
+                            // Resolve app_path + enclosing-window info so the
+                            // dispatcher can detect Electron and run the CDP
+                            // path. Without these, framework=Unknown and we
+                            // silently fall through to AX — exactly the bug
+                            // that left Slack captures as empty boxes.
+                            let app_path = vibe_extract_core::ax_macos::pid_to_path(pid);
+                            let (window_bounds, window_title) = match el.enclosing_window() {
+                                Some(win) => (win.rect(), win.str_attr("AXTitle")),
+                                None => (None, None),
+                            };
                             let (needs_wake, _) = {
                                 let mut s = state.lock().unwrap();
                                 let needs = if pid > 0 && !s.woken_pids.contains(&pid) {
@@ -818,9 +1597,9 @@ fn spawn_hover_task(app: AppHandle) {
                                         identifier: identifier.clone(),
                                         bounds: b,
                                         pid,
-                                        app_path: None,
-                                        window_title: None,
-                                        window_bounds: None,
+                                        app_path,
+                                        window_title,
+                                        window_bounds,
                                     });
                                 }
                                 (needs, ())
@@ -839,8 +1618,15 @@ fn spawn_hover_task(app: AppHandle) {
                             (Some(payload), if needs_wake { Some(pid) } else { None })
                         }
                         None => {
-                            // Even when no element found, send cursor so the
-                            // crosshair still follows the mouse.
+                            // No valid AX element under cursor — clear the stale
+                            // cache so a later click doesn't commit something from
+                            // a previous tick (e.g. a menu bar we already filtered
+                            // out, but that had been cached on an earlier tick).
+                            {
+                                let mut s = state.lock().unwrap();
+                                s.last_hover = None;
+                            }
+                            // Send cursor so the crosshair still follows the mouse.
                             let cursor_only = OverlayHoverPayload {
                                 bounds: None,
                                 role: String::new(),
@@ -863,6 +1649,17 @@ fn spawn_hover_task(app: AppHandle) {
                         Some(p) => vibe_extract_core::ax_macos::element_at_in_app(pt2, p),
                         None => vibe_extract_core::ax_macos::element_at_excluding(pt2, our_pid),
                     };
+                    // Same pid filter as the first-pass hit-test above. We
+                    // intentionally accept AXMenuBar/AXApplication so the
+                    // dispatcher can do its best with whatever Slack gave us.
+                    let hit_result2 = hit_result2.and_then(|el| {
+                        let elem_pid = el.pid().unwrap_or(-1);
+                        match target_pid_opt2 {
+                            Some(want) if elem_pid != want => None,
+                            _ if elem_pid == our_pid => None,
+                            _ => Some(el),
+                        }
+                    });
                     let payload_after = {
                         match hit_result2 {
                             Some(initial) => {
@@ -935,30 +1732,148 @@ pub fn run() {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
                         if combo.contains("KeyS") {
-                            let active = app
-                                .try_state::<PickSessionState>()
-                                .map(|s| s.0.lock().unwrap().active)
-                                .unwrap_or(false);
-                            if active {
-                                let _ = stop_pick_mode(app).await;
+                            // ⌘⇧S has ONE semantic: arm a fresh selection on
+                            // the current target app. No toggle-off behaviour
+                            // — that's what Esc is for. If pick mode is
+                            // already active (e.g. after a post-export soft
+                            // reset), tear it down silently first, then start
+                            // fresh. The atomic `starting` flag prevents
+                            // rapid double-presses from racing.
+                            let (was_active, claimed_starting) = {
+                                let Some(s) = app.try_state::<PickSessionState>() else {
+                                    return;
+                                };
+                                let mut g = s.0.lock().unwrap();
+                                if g.starting {
+                                    // Another start is in flight — ignore.
+                                    (false, false)
+                                } else {
+                                    g.starting = true;
+                                    (g.active, true)
+                                }
+                            };
+                            if !claimed_starting {
+                                log::debug!("⌘⇧S ignored — start already in progress");
                             } else {
-                                if let Err(e) = start_pick_mode(app).await {
+                                if was_active {
+                                    // Silently tear down the stale session
+                                    // without raising the main window — the
+                                    // user wants pick mode on, not the main
+                                    // window forward.
+                                    log::info!("⌘⇧S: stopping stale pick mode before fresh arm");
+                                    let _ = stop_pick_mode(app.clone()).await;
+                                }
+                                let result = start_pick_mode(app.clone()).await;
+                                if let Some(s) = app.try_state::<PickSessionState>() {
+                                    s.0.lock().unwrap().starting = false;
+                                }
+                                if let Err(e) = result {
                                     log::warn!("start_pick_mode failed: {}", e);
                                 }
                             }
                         } else if combo.contains("KeyE") {
+                            // Snapshot session state + claim the `starting`
+                            // slot atomically so a rapid double ⌘⇧E doesn't
+                            // race two auto-starts.
+                            let (was_active, has_selection, claimed_starting) = {
+                                let Some(s) = app.try_state::<PickSessionState>() else {
+                                    return;
+                                };
+                                let mut g = s.0.lock().unwrap();
+                                let active = g.active;
+                                let has_sel = !g.selected.is_empty();
+                                let want_start = !active && !has_sel && !g.starting;
+                                if want_start {
+                                    g.starting = true;
+                                }
+                                (active, has_sel, want_start)
+                            };
+
+                            // SAFETY NET: if pick mode is off AND there's no
+                            // selection to export, ⌘⇧E acts as ⌘⇧S — starts a
+                            // pick session. This makes the app work even if
+                            // ⌘⇧S is shadowed by another app's shortcut
+                            // (common with Bartender, Magnet, Rectangle, or
+                            // macOS Accessibility settings that bind ⌘⇧S).
+                            // The user can then click an element and press
+                            // ⌘⇧E again to actually export.
+                            if claimed_starting {
+                                log::info!(
+                                    "⌘⇧E with no pick mode and no selection — auto-starting pick mode"
+                                );
+                                let result = start_pick_mode(app.clone()).await;
+                                // Always clear `starting` so a future failed
+                                // start doesn't permanently lock us out.
+                                if let Some(s) = app.try_state::<PickSessionState>() {
+                                    s.0.lock().unwrap().starting = false;
+                                }
+                                match result {
+                                    Ok(()) => {
+                                        let _ = app.emit(
+                                            "toast",
+                                            "Pick mode armed — click an element, then press ⌘⇧E again to capture.",
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::warn!("auto start_pick_mode failed: {}", e);
+                                        let _ = app.emit(
+                                            "toast",
+                                            format!(
+                                                "Couldn't start pick mode: {} — click on the target app first, then retry.",
+                                                e
+                                            ),
+                                        );
+                                    }
+                                }
+                                return; // exit this turn — user needs to click + press ⌘⇧E again
+                            }
+                            if !was_active && !has_selection {
+                                // Another auto-start is already in flight.
+                                // Tell the user to wait instead of silently
+                                // dropping the keypress.
+                                let _ = app.emit(
+                                    "toast",
+                                    "Pick mode is already starting — give it a moment, then click.",
+                                );
+                                return;
+                            }
+
                             match export_selection(app.clone()).await {
                                 Ok(payload) => {
                                     let _ = app.emit("export-result", payload);
+                                    // ALWAYS raise the main window after a
+                                    // successful capture — symmetric with
+                                    // Esc. The user explicitly pressed ⌘⇧E
+                                    // to capture, so they expect to see what
+                                    // they got. Pick mode stays armed
+                                    // (overlay + event tap still installed)
+                                    // so they can ⌘+Tab back and pick again.
                                     raise_main_window(&app);
+                                    if was_active {
+                                        let _ = app.emit(
+                                            "toast",
+                                            "✓ Captured — pick mode is still on; click again or press Esc to end",
+                                        );
+                                    }
                                 }
                                 Err(e) => {
                                     log::warn!("export failed: {}", e);
+                                    // Clear the stale result so the user
+                                    // doesn't see the previous capture as if
+                                    // it were the new one.
+                                    let _ = app.emit("export-cleared", ());
+                                    let hint = if was_active {
+                                        "Hover over an element first, then click before pressing ⌘⇧E."
+                                    } else {
+                                        "Press ⌘⇧E again to start picking, click an element, then ⌘⇧E to capture."
+                                    };
                                     let _ = app.emit(
                                         "toast",
-                                        format!("Export failed: {} — select at least one element with Cmd+Shift+S then click on it.", e),
+                                        format!("Export failed: {} — {}", e, hint),
                                     );
-                                    raise_main_window(&app);
+                                    if !was_active {
+                                        raise_main_window(&app);
+                                    }
                                 }
                             }
                         } else if combo.contains("KeyX") {
@@ -973,6 +1888,24 @@ pub fn run() {
                                     raise_main_window(&app);
                                 }
                             }
+                        } else if combo.contains("Escape") {
+                            // Esc is only registered while pick mode is active.
+                            // Tear down the session AND raise the main window
+                            // so the user immediately sees the latest captured
+                            // result instead of staring at their target app.
+                            let _ = stop_pick_mode(app.clone()).await;
+                            raise_main_window(&app);
+                        } else if combo.contains("ArrowUp")
+                            || combo.contains("ArrowDown")
+                        {
+                            // Parent / child walk during pick mode. Updates
+                            // `last_hover` to the new element so the next click
+                            // (or the current outline) reflects the broader
+                            // ancestor (Up) or the deeper child (Down).
+                            let go_up = combo.contains("ArrowUp");
+                            if let Err(e) = walk_hover_ancestry(app.clone(), go_up).await {
+                                log::debug!("walk_hover_ancestry: {}", e);
+                            }
                         }
                     });
                 })
@@ -986,6 +1919,10 @@ pub fn run() {
         .manage(LastForeignAppState::default())
         .manage(EventTapState::default())
         .manage(RegisteredHotkeys::default())
+        .manage(RelaunchDialogState::default())
+        .manage(RelaunchInProgressState::default())
+        .manage(ExportInProgressState::default())
+        .manage(mcp::McpServerState::default())
         .invoke_handler(tauri::generate_handler![
             check_ax_permission,
             request_ax_permission,
@@ -995,6 +1932,13 @@ pub fn run() {
             export_selection,
             extract_frontmost_window_cmd,
             save_to_disk,
+            get_relaunch_dialog_info,
+            relaunch_dialog_response,
+            get_settings_cmd,
+            set_electron_pref_cmd,
+            known_electron_apps,
+            mcp::mcp_status,
+            mcp::mcp_toggle,
         ])
         .setup(|app| {
             // Three hotkeys: Cmd+Shift+S / E / X.
@@ -1072,6 +2016,18 @@ pub fn run() {
                     }
                 }
             });
+
+            // Optional: auto-start the MCP server (for headless/E2E testing or
+            // users who always want it on). Off unless VIBE_MCP_AUTOSTART is set.
+            if std::env::var_os("VIBE_MCP_AUTOSTART").is_some() {
+                let h = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match mcp::start(h).await {
+                        Ok(s) => log::info!("MCP auto-started: {:?}", s.url),
+                        Err(e) => log::error!("MCP auto-start failed: {e}"),
+                    }
+                });
+            }
 
             Ok(())
         })

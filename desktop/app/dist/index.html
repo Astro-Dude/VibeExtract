@@ -251,6 +251,51 @@
     .sidebar .row .v.granted { color: var(--success); }
     .sidebar .row .v.denied  { color: var(--error); }
 
+    /* Electron-apps list ----------------------------------------- */
+    .electron-apps-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .electron-app-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--surface-1);
+      border: 1px solid var(--border-soft);
+      border-radius: 10px;
+      font-size: 12.5px;
+    }
+    .electron-app-row .name { color: var(--text); flex: 1; }
+    .electron-pref-segmented {
+      display: inline-flex;
+      gap: 0;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border-soft);
+      border-radius: 8px;
+      padding: 2px;
+    }
+    .electron-pref-segmented button {
+      all: unset;
+      cursor: pointer;
+      padding: 3px 8px;
+      font-size: 10.5px;
+      font-weight: 500;
+      letter-spacing: 0.2px;
+      color: var(--text-muted);
+      border-radius: 6px;
+      transition: all 120ms ease;
+    }
+    .electron-pref-segmented button:hover { color: var(--text-dim); }
+    .electron-pref-segmented button.on {
+      background: linear-gradient(135deg, var(--royal), var(--sky));
+      color: #061021;
+      font-weight: 600;
+      box-shadow: 0 1px 3px rgba(56,189,248,0.3);
+    }
+
     /* ───────────────────────────────────────────────────────────
        Buttons (gradient + glass)
        ─────────────────────────────────────────────────────────── */
@@ -663,9 +708,12 @@
 
       <section>
         <h2>Shortcuts</h2>
-        <div class="hk-row"><span class="desc">Start / stop picking</span><span class="key">⌘⇧S</span></div>
-        <div class="hk-row"><span class="desc">Export selection</span><span class="key">⌘⇧E</span></div>
-        <div class="hk-row"><span class="desc">Cancel pick mode</span><span class="key">Esc</span></div>
+        <div class="hk-row"><span class="desc">Start picking (or just press ⌘⇧E)</span><span class="key">⌘⇧S</span></div>
+        <div class="hk-row"><span class="desc">Arm if idle, else capture</span><span class="key">⌘⇧E</span></div>
+        <div class="hk-row"><span class="desc">Grab larger area (parent)</span><span class="key">↑</span></div>
+        <div class="hk-row"><span class="desc">Grab smaller area (child)</span><span class="key">↓</span></div>
+        <div class="hk-row"><span class="desc">Add to selection</span><span class="key">⇧+Click</span></div>
+        <div class="hk-row"><span class="desc">End pick mode + view results</span><span class="key">Esc</span></div>
       </section>
 
       <section>
@@ -677,6 +725,27 @@
         <h2>Status</h2>
         <div class="row"><span>AX permission</span><span class="v" id="ax-status">checking…</span></div>
         <div class="row"><span>Last strategy</span><span class="v" id="last-capture">—</span></div>
+      </section>
+
+      <section>
+        <h2>Electron Apps</h2>
+        <div class="row" style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px; display: block; line-height: 1.4;">
+          When you ⌘⇧E on these, VibeExtract can restart them in debug mode for pixel-perfect capture.
+        </div>
+        <div id="electron-apps-list" class="electron-apps-list">
+          <!-- Filled by JS -->
+        </div>
+      </section>
+
+      <section>
+        <h2>MCP Server (for Claude)</h2>
+        <div class="row" style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px; display: block; line-height: 1.4;">
+          Lets Claude drive AX inspection, screenshots, and visual diffing for automated UI replication. Off by default.
+        </div>
+        <div class="row"><span>Status</span><span class="v" id="mcp-status">off</span></div>
+        <div class="row" id="mcp-url-row" style="display:none;"><span>URL</span><span class="v" id="mcp-url" style="font-size:11px;">—</span></div>
+        <button id="mcp-toggle" class="secondary">Start MCP server</button>
+        <button id="mcp-copy" class="secondary" style="display:none;">Copy connect command</button>
       </section>
     </aside>
 
@@ -826,6 +895,22 @@
       renderResult(event.payload);
     });
 
+    listen('export-cleared', () => {
+      // The backend signals that the last export attempt FAILED and the user
+      // should not see stale data from a previous capture. Wipe the result
+      // panel back to the empty state.
+      lastResult = null;
+      $('result-view').style.display = 'none';
+      $('empty-state').style.display = 'flex';
+      $('preview-iframe').srcdoc = '';
+      $('html-code').textContent = '';
+      $('toon-code').textContent = '';
+      $('diagnostics-list').innerHTML = '';
+      $('strategy-badge').textContent = 'native_ax';
+      $('strategy-badge').className = 'strategy';
+      $('picked-info').textContent = '—';
+    });
+
     listen('toast', (event) => {
       toast(event.payload || '', { warn: true, ms: 5000 });
     });
@@ -896,9 +981,116 @@
       } catch (e) { toast(`Save failed: ${e}`, { warn: true, ms: 4500 }); }
     });
 
+    // --- Electron-apps settings ---------------------------------------------
+    async function refreshElectronApps() {
+      const list = $('electron-apps-list');
+      if (!list) return;
+      try {
+        const [apps, settingsObj] = await Promise.all([
+          invoke('known_electron_apps'),
+          invoke('get_settings_cmd'),
+        ]);
+        const prefs = (settingsObj && settingsObj.electron_relaunch) || {};
+        list.innerHTML = '';
+        for (const app of apps) {
+          const current = prefs[app.bundle_id] || 'ask';
+          const row = document.createElement('div');
+          row.className = 'electron-app-row';
+          row.innerHTML = `
+            <span class="name">${escapeText(app.display_name)}</span>
+            <span class="electron-pref-segmented" data-bundle="${escapeText(app.bundle_id)}">
+              <button data-pref="ask" title="Ask each time">Ask</button>
+              <button data-pref="always_yes" title="Always restart in debug mode">Always</button>
+              <button data-pref="always_no" title="Never restart — always use AX path">Never</button>
+            </span>
+          `;
+          const seg = row.querySelector('.electron-pref-segmented');
+          for (const btn of seg.querySelectorAll('button')) {
+            if (btn.dataset.pref === current) btn.classList.add('on');
+            btn.addEventListener('click', async () => {
+              try {
+                await invoke('set_electron_pref_cmd', { bundleId: app.bundle_id, pref: btn.dataset.pref });
+                for (const b of seg.querySelectorAll('button')) b.classList.remove('on');
+                btn.classList.add('on');
+                toast(`${app.display_name}: ${btn.textContent.toLowerCase()}`);
+              } catch (e) {
+                toast(`Save failed: ${e}`, { warn: true });
+              }
+            });
+          }
+          list.appendChild(row);
+        }
+      } catch (e) {
+        list.innerHTML = `<div class="row"><span style="color: var(--error)">Settings unavailable</span></div>`;
+        console.warn('refreshElectronApps failed:', e);
+      }
+    }
+
+    function escapeText(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // --- Relaunch progress spinner ------------------------------------------
+    listen('electron-relaunch-progress', (event) => {
+      const p = event.payload || {};
+      if (p.phase === 'quitting') {
+        toast('Quitting app — saving any drafts…', { ms: 3000 });
+      } else if (p.phase === 'launching') {
+        toast(`Relaunching with --remote-debugging-port=${p.port}…`, { ms: 3000 });
+      } else if (p.phase === 'waiting') {
+        // Only emit periodically to avoid spamming.
+        if (Math.floor((p.elapsed_ms || 0) / 1000) % 2 === 0 && p.elapsed_ms > 800) {
+          toast(`Waiting for debug port ${p.port}… (${Math.floor(p.elapsed_ms/1000)}s)`, { ms: 1500 });
+        }
+      } else if (p.phase === 'ready') {
+        toast('Debug port is up — re-pick your element', { ms: 3000 });
+      }
+    });
+
     refreshUI();
     refreshPermission();
+    refreshElectronApps();
     setInterval(refreshPermission, 5000);
+
+    // --- MCP server panel (for Claude / automated UI replication) ---
+    (function initMcpPanel() {
+      const statusEl = document.getElementById('mcp-status');
+      const urlRow = document.getElementById('mcp-url-row');
+      const urlEl = document.getElementById('mcp-url');
+      const toggleBtn = document.getElementById('mcp-toggle');
+      const copyBtn = document.getElementById('mcp-copy');
+      if (!toggleBtn) return;
+      let current = { running: false, url: null };
+
+      function render(s) {
+        current = s || { running: false, url: null };
+        statusEl.textContent = current.running ? 'running' : 'off';
+        toggleBtn.textContent = current.running ? 'Stop MCP server' : 'Start MCP server';
+        const show = current.running && current.url;
+        urlEl.textContent = show ? current.url : '—';
+        urlRow.style.display = show ? '' : 'none';
+        copyBtn.style.display = show ? '' : 'none';
+      }
+
+      toggleBtn.addEventListener('click', async () => {
+        toggleBtn.disabled = true;
+        try { render(await invoke('mcp_toggle')); }
+        catch (e) { statusEl.textContent = 'error: ' + e; }
+        finally { toggleBtn.disabled = false; }
+      });
+
+      copyBtn.addEventListener('click', async () => {
+        if (!current.url) return;
+        const cmd = 'claude mcp add --transport http vibe-extract ' + current.url;
+        try {
+          await navigator.clipboard.writeText(cmd);
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => (copyBtn.textContent = 'Copy connect command'), 1500);
+        } catch (e) { console.warn('clipboard', e); }
+      });
+
+      invoke('mcp_status').then(render).catch((e) => console.warn('mcp_status', e));
+    })();
   </script>
 </body>
 </html>
