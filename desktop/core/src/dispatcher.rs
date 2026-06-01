@@ -33,7 +33,7 @@ use crate::capture::PickedElement;
 use crate::framework_detect::{detect, Framework};
 use crate::output::CaptureResult;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,16 +53,46 @@ pub enum ExtractError {
     NoAxPermission,
     #[error("no extractor succeeded; last error: {0}")]
     AllStrategiesFailed(String),
+    /// Surfaced when an Electron app is frontmost but has no CDP debug port
+    /// open. The orchestration layer (Tauri shell) is expected to catch this,
+    /// prompt the user to relaunch, and either:
+    ///   a) call `extract_*` again with `skip_relaunch=true` after the
+    ///      relaunch lands, OR
+    ///   b) call `extract_*` with `skip_relaunch=true` if the user cancels
+    ///      so the AX path runs instead.
+    /// The library never quits or relaunches apps on its own — that requires
+    /// user confirmation that only the UI layer can collect.
+    #[error("Electron app needs to restart with --remote-debugging-port")]
+    ElectronNeedsRelaunch {
+        bundle_id: String,
+        display_name: String,
+        pid: i32,
+        app_path: PathBuf,
+    },
     #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 
 /// Run the dispatcher. `content_script` is the verbatim contents of the
 /// browser extension's `contentScript.js` (read by the caller and passed in).
+///
+/// `skip_relaunch` suppresses the `ElectronNeedsRelaunch` early-return, which
+/// the orchestration layer sets to `true` after the user has either accepted
+/// (and the app is back up with a debug port) or declined the relaunch
+/// dialog. Default callers use [`extract`] which passes `false`.
 pub async fn extract(
     picked: &PickedElement,
     content_script: &str,
     out_dir: &Path,
+) -> Result<CaptureResult, ExtractError> {
+    extract_with_opts(picked, content_script, out_dir, false).await
+}
+
+pub async fn extract_with_opts(
+    picked: &PickedElement,
+    content_script: &str,
+    out_dir: &Path,
+    skip_relaunch: bool,
 ) -> Result<CaptureResult, ExtractError> {
     let app_path = picked
         .app_path
@@ -74,12 +104,20 @@ pub async fn extract(
         .map(detect)
         .unwrap_or(Framework::Unknown);
     log::info!(
-        "dispatcher: picked={} \"{}\", framework={:?}, app_path={:?}",
+        "dispatcher: picked={} \"{}\", framework={:?}, app_path={:?}, skip_relaunch={}",
         picked.role,
         picked.name,
         framework,
-        picked.app_path
+        picked.app_path,
+        skip_relaunch
     );
+
+    // Compute bundle_summary up front — both the relaunch path AND the
+    // macOS native path want it. Windows path doesn't use this yet.
+    #[cfg(target_os = "macos")]
+    let bundle_summary = app_path
+        .as_deref()
+        .and_then(|p| crate::bundle_macos::extract_bundle_summary(p).ok());
 
     let mut last_error = String::new();
 
@@ -127,7 +165,44 @@ pub async fn extract(
                 }
             }
         } else {
-            log::info!("strategy ② cdp: no debug port found; falling through");
+            log::info!(
+                "strategy ② cdp: no debug port found (skip_relaunch={})",
+                skip_relaunch
+            );
+            // No debug port. If the caller is willing to handle the relaunch
+            // flow (skip_relaunch=false), bubble up the typed signal so the
+            // UI layer can prompt the user. Otherwise fall through to the
+            // native path so they at least get the lower-fidelity capture.
+            #[cfg(target_os = "macos")]
+            if !skip_relaunch {
+                let bundle_id = bundle_summary
+                    .as_ref()
+                    .and_then(|b| b.bundle_id.clone());
+                let display_name = bundle_summary
+                    .as_ref()
+                    .and_then(|b| b.display_name.clone())
+                    .or_else(|| {
+                        // Synthesize from the .app folder name as a last resort
+                        // — useful for unknown Electron apps with no
+                        // CFBundleDisplayName/Name.
+                        app_path
+                            .as_deref()
+                            .and_then(crate::bundle_macos::bundle_root_for_executable)
+                            .and_then(|p| {
+                                p.file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .map(|s| s.to_string())
+                            })
+                    });
+                if let (Some(bid), Some(name)) = (bundle_id, display_name) {
+                    return Err(ExtractError::ElectronNeedsRelaunch {
+                        bundle_id: bid,
+                        display_name: name,
+                        pid: picked.pid,
+                        app_path: app_path.clone().unwrap_or_default(),
+                    });
+                }
+            }
         }
     }
 
@@ -143,10 +218,7 @@ pub async fn extract(
     // ── ④ macOS bundle resources + ⑥ AX (fused for native AppKit apps) ───
     #[cfg(target_os = "macos")]
     {
-        let bundle_summary = app_path
-            .as_deref()
-            .and_then(|p| crate::bundle_macos::extract_bundle_summary(p).ok());
-        match native_extract_macos(picked, out_dir, bundle_summary).await {
+        match native_extract_macos(picked, out_dir, bundle_summary.clone()).await {
             Ok(r) => return Ok(r),
             Err(e) => {
                 log::warn!("strategy ⑥ native_ax failed: {e}");
@@ -164,9 +236,10 @@ pub async fn extract(
 
     // ── ⑦ Screenshot-only fallback ────────────────────────────────────────
     log::warn!("all strategies failed; emitting screenshot-only fallback");
+    use base64::Engine as _;
     let mut fallback = CaptureResult::empty(
         "screenshot_only",
-        "Visual only — no structure recovered",
+        "Visual only — no DOM extracted (Electron AX is too shallow)",
     );
     let png_path = out_dir.join("native-output.png");
     if let Err(e) = crate::screenshot::capture_region(picked.bounds, &png_path) {
@@ -174,8 +247,51 @@ pub async fn extract(
             "{last_error}; screenshot: {e}"
         )));
     }
+    // Read the PNG back so the UI's Preview / Screenshot tab can actually
+    // show something. Without this the user sees a totally blank result
+    // panel — terrible UX even when the fallback "succeeded".
+    let png_b64 = std::fs::read(&png_path)
+        .map(|bytes| base64::engine::general_purpose::STANDARD.encode(&bytes))
+        .unwrap_or_default();
+    if !png_b64.is_empty() {
+        fallback.screenshot_png_b64 = Some(png_b64.clone());
+        // Emit a minimal HTML that just shows the screenshot — so Preview
+        // and HTML tabs don't render as totally empty. Includes a banner
+        // that explains why DOM extraction couldn't run.
+        fallback.html = format!(
+            r#"<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+html,body{{margin:0;padding:0;background:#0a1438;font-family:-apple-system,sans-serif;color:#f0f9ff;}}
+.banner{{position:fixed;top:0;left:0;right:0;padding:10px 16px;background:rgba(251,113,133,0.18);border-bottom:1px solid rgba(251,113,133,0.4);font-size:13px;line-height:1.5;}}
+.banner strong{{color:#fb7185;}}
+.shot{{margin-top:64px;padding:24px;text-align:center;}}
+.shot img{{max-width:100%;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.5);}}
+</style></head><body>
+<div class="banner"><strong>Screenshot-only capture.</strong> No DOM was extracted — this app's AX tree is too shallow for native extraction, and Chromium's debug port isn't open. Restart the app via the dialog (or set <em>Always</em> in Settings) for pixel-perfect HTML+CSS.</div>
+<div class="shot"><img src="data:image/png;base64,{png_b64}" alt="captured region"></div>
+</body></html>"#,
+            png_b64 = png_b64
+        );
+        // Minimal TOON so the TOON tab isn't empty either.
+        fallback.toon = format!(
+            "# VibeExtract — screenshot-only capture (no DOM)\n\nrole: {role}\nname: \"{name}\"\nbounds: {w}x{h} @ ({x},{y})\nframework: {framework:?}\npid: {pid}\n\n# Why empty?\n#   The app's AX tree didn't have walkable children, AND Chromium's debug\n#   port wasn't open. Use the relaunch dialog (or Always-restart in Settings)\n#   to get pixel-perfect HTML+CSS from Electron apps.\n",
+            role = picked.role,
+            name = picked.name,
+            w = picked.bounds.w,
+            h = picked.bounds.h,
+            x = picked.bounds.x,
+            y = picked.bounds.y,
+            framework = framework,
+            pid = picked.pid,
+        );
+    }
     fallback.diagnostics.push("All structural strategies failed.".into());
+    fallback.diagnostics.push(format!("Framework: {:?}, app_path: {:?}", framework, picked.app_path));
     fallback.diagnostics.push(format!("Last error: {last_error}"));
+    fallback.diagnostics.push(
+        "For Electron apps (Slack/Discord/VS Code/Notion/etc.): use the relaunch dialog \
+         when ⌘⇧E is pressed, or set the per-app preference to 'Always' in Settings."
+            .into(),
+    );
     Ok(fallback)
 }
 
@@ -189,13 +305,22 @@ pub async fn extract_multi(
     content_script: &str,
     out_dir: &Path,
 ) -> Result<CaptureResult, ExtractError> {
+    extract_multi_with_opts(picked_set, content_script, out_dir, false).await
+}
+
+pub async fn extract_multi_with_opts(
+    picked_set: &[PickedElement],
+    content_script: &str,
+    out_dir: &Path,
+    skip_relaunch: bool,
+) -> Result<CaptureResult, ExtractError> {
     if picked_set.is_empty() {
         return Err(ExtractError::AllStrategiesFailed(
             "no elements selected".into(),
         ));
     }
     if picked_set.len() == 1 {
-        return extract(&picked_set[0], content_script, out_dir).await;
+        return extract_with_opts(&picked_set[0], content_script, out_dir, skip_relaunch).await;
     }
 
     let mut per_element: Vec<(PickedElement, CaptureResult)> = Vec::new();
@@ -205,8 +330,12 @@ pub async fn extract_multi(
         // screenshot path collisions.
         let sub = out_dir.join(format!("elem-{}", i));
         let _ = std::fs::create_dir_all(&sub);
-        match extract(p, content_script, &sub).await {
+        match extract_with_opts(p, content_script, &sub, skip_relaunch).await {
             Ok(r) => per_element.push((p.clone(), r)),
+            // The Electron-needs-relaunch error MUST bubble up unchanged so
+            // the orchestration layer can run the dialog. If we swallowed it
+            // here the user would silently get the AX fallback.
+            Err(e @ ExtractError::ElectronNeedsRelaunch { .. }) => return Err(e),
             Err(e) => errors.push(format!("element {}: {}", i, e)),
         }
     }
@@ -331,6 +460,15 @@ pub async fn extract_frontmost_window(
     content_script: &str,
     out_dir: &Path,
 ) -> Result<CaptureResult, ExtractError> {
+    extract_frontmost_window_with_opts(content_script, out_dir, false).await
+}
+
+#[cfg(target_os = "macos")]
+pub async fn extract_frontmost_window_with_opts(
+    content_script: &str,
+    out_dir: &Path,
+    skip_relaunch: bool,
+) -> Result<CaptureResult, ExtractError> {
     use crate::ax_macos::{check_permission, current_cursor, element_at};
 
     if !check_permission(false) {
@@ -369,7 +507,18 @@ pub async fn extract_frontmost_window(
         }
     };
 
-    extract(&picked, content_script, out_dir).await
+    extract_with_opts(&picked, content_script, out_dir, skip_relaunch).await
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn extract_frontmost_window_with_opts(
+    _content_script: &str,
+    _out_dir: &Path,
+    _skip_relaunch: bool,
+) -> Result<CaptureResult, ExtractError> {
+    Err(ExtractError::AllStrategiesFailed(
+        "extract_frontmost_window not implemented on this platform yet".into(),
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -407,17 +556,43 @@ async fn native_extract_macos(
     out_dir: &std::path::Path,
     bundle: Option<crate::bundle_macos::BundleSummary>,
 ) -> anyhow::Result<CaptureResult> {
-    use crate::ax_macos::element_at;
+    use crate::ax_macos::{element_at, element_at_in_app};
+    use crate::capture::ScreenPoint;
     use crate::sampling::{collect_palette, fill_node_colors};
     use base64::Engine as _;
 
     std::fs::create_dir_all(out_dir)?;
 
-    // Re-pick at the element's center (already-known bounds) so we have a
-    // fresh handle to walk children.
-    let center = picked.bounds.center();
-    let root_el = element_at(center)
-        .ok_or_else(|| anyhow::anyhow!("re-pick at center failed"))?;
+    // Re-pick at multiple points in the bounds so we have a fresh AX handle
+    // to walk children. Apps move/redraw between pick time and export time,
+    // so a single point can miss; try center, top-left, top-right, and
+    // bottom-left before giving up.
+    let pid = picked.pid;
+    let try_points: [ScreenPoint; 4] = [
+        picked.bounds.center(),
+        ScreenPoint { x: picked.bounds.x + 5.0, y: picked.bounds.y + 5.0 },
+        ScreenPoint { x: picked.bounds.x + picked.bounds.w - 5.0, y: picked.bounds.y + 5.0 },
+        ScreenPoint { x: picked.bounds.x + 5.0, y: picked.bounds.y + picked.bounds.h - 5.0 },
+    ];
+    let root_el = try_points
+        .iter()
+        .find_map(|pt| {
+            // Prefer the in-app hit-test (scoped to the target pid) over the
+            // system-wide one. The in-app variant still has Apple's global
+            // leak behaviour, but it's cheaper and produces less garbage.
+            if pid > 0 {
+                if let Some(el) = element_at_in_app(*pt, pid) {
+                    return Some(el);
+                }
+            }
+            element_at(*pt)
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "re-pick at center+corners all failed (pid={}, bounds={:?})",
+                pid, picked.bounds
+            )
+        })?;
     let mut node = crate::ax_macos::walk_node(&root_el, 12);
 
     let png_path = out_dir.join("native-output.png");

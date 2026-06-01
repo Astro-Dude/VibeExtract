@@ -7,4 +7,4 @@
 *-output.png
 combo-output.*
 native-output.*
-desktop/app/src-tauri/gen/
+app/src-tauri/gen/

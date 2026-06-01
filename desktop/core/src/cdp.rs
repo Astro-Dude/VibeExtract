@@ -120,6 +120,10 @@ where
 ///
 /// `content_script` is the raw bytes of the extension's `contentScript.js`
 /// (read by the caller — keeps this function free of filesystem coupling).
+///
+/// Wrapped in a 15-second hard timeout. If anything stalls (Slack's CDP
+/// agent occasionally hangs Runtime.evaluate when injecting into Shadow-DOM
+/// pages), we fail fast instead of blocking the dispatcher forever.
 pub async fn extract_at_viewport(
     port: u16,
     target_index: usize,
@@ -127,8 +131,26 @@ pub async fn extract_at_viewport(
     viewport_y: f64,
     content_script: &str,
 ) -> Result<CaptureResult> {
+    let inner = extract_at_viewport_inner(port, target_index, viewport_x, viewport_y, content_script);
+    match tokio::time::timeout(Duration::from_secs(15), inner).await {
+        Ok(r) => r,
+        Err(_) => bail!("CDP extract_at_viewport timed out after 15s — Slack's CDP agent is unresponsive. Falling through to AX path."),
+    }
+}
+
+async fn extract_at_viewport_inner(
+    port: u16,
+    target_index: usize,
+    viewport_x: f64,
+    viewport_y: f64,
+    content_script: &str,
+) -> Result<CaptureResult> {
     let ws_url = discover_target(port, target_index).await?;
-    let (mut socket, _) = connect_async(&ws_url).await.context("CDP WS connect")?;
+    // tokio_tungstenite's connect_async has no default timeout. Wrap it.
+    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(3), connect_async(&ws_url))
+        .await
+        .map_err(|_| anyhow!("CDP WS connect timed out (3s)"))?
+        .context("CDP WS connect")?;
     let mut next_id: u64 = 0;
     let mut mk = |method: &str, params: Value| -> CdpCommand {
         next_id += 1;
@@ -241,16 +263,139 @@ pub async fn extract_at_viewport(
     })
 }
 
+/// Harvest pixel-perfect assets (fonts, icon glyphs, images) from a running
+/// Electron renderer via CDP. `harvester_js` must be a single expression that
+/// evaluates to a Promise resolving to a manifest object (see `assetHarvester.js`).
+/// After the in-page harvest, any image entry that lacks `base64` (a CORS-opaque
+/// CDN asset the page's `fetch` couldn't read) but carries a `rect` is filled in
+/// here via `Page.captureScreenshot` with that clip — rendered pixels, no auth.
+/// Wrapped in a 45s hard timeout (fetching several fonts/images is slower than
+/// the single-element `extract_at_viewport`).
+pub async fn harvest_assets(
+    port: u16,
+    target_index: usize,
+    harvester_js: &str,
+) -> Result<Value> {
+    let inner = harvest_assets_inner(port, target_index, harvester_js);
+    match tokio::time::timeout(Duration::from_secs(45), inner).await {
+        Ok(r) => r,
+        Err(_) => bail!("CDP harvest_assets timed out after 45s"),
+    }
+}
+
+async fn harvest_assets_inner(
+    port: u16,
+    target_index: usize,
+    harvester_js: &str,
+) -> Result<Value> {
+    let ws_url = discover_target(port, target_index).await?;
+    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(3), connect_async(&ws_url))
+        .await
+        .map_err(|_| anyhow!("CDP WS connect timed out (3s)"))?
+        .context("CDP WS connect")?;
+    let mut next_id: u64 = 0;
+    let mut mk = |method: &str, params: Value| -> CdpCommand {
+        next_id += 1;
+        CdpCommand {
+            id: next_id,
+            method: method.to_string(),
+            params,
+        }
+    };
+
+    call(&mut socket, mk("Runtime.enable", json!({}))).await?;
+    call(&mut socket, mk("Page.enable", json!({}))).await?;
+
+    let res = eval(
+        &mut socket,
+        mk(
+            "Runtime.evaluate",
+            json!({"expression": harvester_js, "awaitPromise": true, "returnByValue": true}),
+        ),
+    )
+    .await?;
+    let mut manifest = res
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .cloned()
+        .ok_or_else(|| anyhow!("asset harvester returned no value"))?;
+
+    let dpr = manifest.get("dpr").and_then(|v| v.as_f64()).unwrap_or(1.0).max(1.0);
+
+    // Fill in CORS-opaque images (no base64 from the page fetch) by capturing
+    // each element's clip — pixel-perfect rendered bytes, immune to auth/CORS.
+    if let Some(images) = manifest.get_mut("images").and_then(|v| v.as_array_mut()) {
+        for img in images.iter_mut() {
+            if img.get("base64").and_then(|v| v.as_str()).is_some() {
+                continue;
+            }
+            let rect = match img.get("rect").cloned() {
+                Some(r) => r,
+                None => continue,
+            };
+            let x = rect.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let y = rect.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let w = rect.get("w").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let h = rect.get("h").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            if w < 1.0 || h < 1.0 {
+                continue;
+            }
+            let shot = call(
+                &mut socket,
+                mk(
+                    "Page.captureScreenshot",
+                    json!({
+                        "format": "png",
+                        "captureBeyondViewport": true,
+                        "fromSurface": true,
+                        "clip": {"x": x, "y": y, "width": w, "height": h, "scale": dpr},
+                    }),
+                ),
+            )
+            .await;
+            match shot {
+                Ok(v) => {
+                    if let (Some(data), Some(obj)) =
+                        (v.get("data").and_then(|d| d.as_str()), img.as_object_mut())
+                    {
+                        obj.insert("base64".into(), Value::String(data.to_string()));
+                        obj.insert("mime".into(), Value::String("image/png".into()));
+                        obj.insert("via".into(), Value::String("captureScreenshot".into()));
+                    }
+                }
+                Err(e) => log::warn!("captureScreenshot clip failed: {e}"),
+            }
+        }
+    }
+
+    Ok(manifest)
+}
+
 /// Translate window-local coords (in points) to viewport-local CSS pixels by
 /// asking the page for `outerHeight - innerHeight`. Caller has already
-/// determined `window_local_y` etc. from AX bounds.
+/// determined `window_local_y` etc. from AX bounds. 5-second total timeout
+/// so it can't hang the dispatcher.
 pub async fn translate_via_metrics(
     port: u16,
     window_local_x: f64,
     window_local_y: f64,
 ) -> Result<(f64, f64)> {
+    let inner = translate_via_metrics_inner(port, window_local_x, window_local_y);
+    tokio::time::timeout(Duration::from_secs(5), inner)
+        .await
+        .map_err(|_| anyhow!("CDP translate_via_metrics timed out (5s)"))?
+}
+
+async fn translate_via_metrics_inner(
+    port: u16,
+    window_local_x: f64,
+    window_local_y: f64,
+) -> Result<(f64, f64)> {
     let ws_url = discover_target(port, 0).await?;
-    let (mut socket, _) = connect_async(&ws_url).await.context("CDP WS connect")?;
+    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(3), connect_async(&ws_url))
+        .await
+        .map_err(|_| anyhow!("CDP WS connect timed out (3s)"))?
+        .context("CDP WS connect")?;
     let mut next_id: u64 = 0;
     let mut mk = |method: &str, params: Value| -> CdpCommand {
         next_id += 1;
@@ -281,4 +426,34 @@ pub async fn translate_via_metrics(
     let inner_h = m.get("innerH").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let chrome_y = (outer_h - inner_h).max(0.0);
     Ok((window_local_x, window_local_y - chrome_y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Live integration test (ignored by default): drives the real
+    /// `harvest_assets` CDP path against a running Electron app on 9220–9230
+    /// using the repo's `assetHarvester.js`. Verifies fonts + inline SVG icons
+    /// + images come back, and that at least one image carries bytes (fetched
+    /// in-page or filled via the `Page.captureScreenshot` clip fallback).
+    /// Run with: `cargo test -p vibe-extract-core -- --ignored harvest_assets`.
+    #[tokio::test]
+    #[ignore]
+    async fn harvest_assets_against_live_electron() {
+        let port = discover_port().await.expect("no Chromium debug port on 9220-9230");
+        let js = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assetHarvester.js"))
+            .expect("read assetHarvester.js");
+        let m = harvest_assets(port, 0, &js).await.expect("harvest_assets failed");
+        let n = |k: &str| m.get(k).and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        eprintln!("harvested fonts={} svgIcons={} images={}", n("fonts"), n("svgIcons"), n("images"));
+        assert!(n("fonts") > 0, "expected at least one @font-face");
+        assert!(n("svgIcons") > 0 || n("icons") > 0, "expected at least one icon");
+        let with_bytes = m
+            .get("images")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter(|i| i.get("base64").and_then(|v| v.as_str()).is_some()).count())
+            .unwrap_or(0);
+        assert!(with_bytes > 0, "expected at least one image with bytes");
+    }
 }

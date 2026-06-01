@@ -213,6 +213,34 @@ impl AxElement {
         out
     }
 
+    /// Return this element's immediate parent via AXParent, or None at the
+    /// top of the AX tree (e.g. on AXApplication). Caller owns the returned
+    /// element.
+    pub fn parent(&self) -> Option<AxElement> {
+        let key_cf = CFString::new("AXParent");
+        let mut parent: CFTypeRef = std::ptr::null();
+        let err = unsafe {
+            AXUIElementCopyAttributeValue(self.0, key_cf.as_concrete_TypeRef(), &mut parent)
+        };
+        if err != K_AX_ERROR_SUCCESS || parent.is_null() {
+            return None;
+        }
+        Some(AxElement(parent as AXUIElementRef))
+    }
+
+    /// Copy an attribute that is itself an AX element (e.g. `AXMainWindow`,
+    /// `AXFocusedWindow`). Caller owns the returned element (released on drop).
+    pub fn element_attr(&self, key: &str) -> Option<AxElement> {
+        let key_cf = CFString::new(key);
+        let mut out: CFTypeRef = std::ptr::null();
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(self.0, key_cf.as_concrete_TypeRef(), &mut out) };
+        if err != K_AX_ERROR_SUCCESS || out.is_null() {
+            return None;
+        }
+        Some(AxElement(out as AXUIElementRef))
+    }
+
     pub fn enclosing_window(&self) -> Option<AxElement> {
         if let Some(role) = self.str_attr("AXRole") {
             if role == "AXWindow" {
@@ -620,7 +648,7 @@ extern "C" {
 
 const PROC_PIDPATHINFO_MAXSIZE: usize = 4 * 1024;
 
-fn pid_to_path(pid: i32) -> Option<String> {
+pub fn pid_to_path(pid: i32) -> Option<String> {
     if pid <= 0 {
         return None;
     }
@@ -706,4 +734,127 @@ fn capture_node(el: &AxElement, depth: u32, max_depth: u32) -> Node {
 
 pub fn count_nodes(n: &Node) -> usize {
     1 + n.children.iter().map(count_nodes).sum::<usize>()
+}
+
+// --- Root walks (app / window) -----------------------------------------------
+//
+// `walk_subtree`/`walk_node` above start from a hit-tested point or a live
+// element. The MCP server instead wants to walk from an app or window ROOT
+// (no cursor involved), so Claude can inventory a whole window's AX tree.
+
+/// How to pick which window of an app to walk.
+#[derive(Debug, Clone)]
+pub enum WindowSelector {
+    /// Index into the app's `AXWindows` array (front-to-back order).
+    Index(usize),
+    /// Exact `AXTitle` match.
+    Title(String),
+    /// The app's main/focused window (falls back to the first window).
+    Main,
+    /// Match the Core Graphics window id from [`crate::windows_list::list_windows`]
+    /// by reconciling its bounds against the AX windows (best-effort).
+    WindowId(u32),
+}
+
+/// Build an owned `AxElement` for an application's AX root by pid.
+fn app_element(pid: i32) -> Result<AxElement> {
+    if pid <= 0 {
+        bail!("invalid pid {pid}");
+    }
+    let app: AXUIElementRef = unsafe { AXUIElementCreateApplication(pid) };
+    if app.is_null() {
+        bail!("AXUIElementCreateApplication({pid}) returned null");
+    }
+    Ok(AxElement(app))
+}
+
+/// Walk the entire AX tree of an application from its root, to `max_depth`.
+/// Wakes the app's AX tree first (idempotent; needed for Electron).
+pub fn walk_app(pid: i32, max_depth: u32) -> Result<Node> {
+    if !check_permission(false) {
+        bail!("AX permission denied — grant Accessibility access in System Settings then retry.");
+    }
+    wake_app_ax(pid);
+    let app = app_element(pid)?;
+    Ok(walk_node(&app, max_depth))
+}
+
+/// Walk a single window of an application, selected by [`WindowSelector`].
+pub fn walk_window(pid: i32, sel: WindowSelector, max_depth: u32) -> Result<Node> {
+    if !check_permission(false) {
+        bail!("AX permission denied — grant Accessibility access in System Settings then retry.");
+    }
+    wake_app_ax(pid);
+    let app = app_element(pid)?;
+
+    // Main: prefer the app's main/focused window element directly — it doesn't
+    // depend on the AXWindows array being populated/ordered as expected.
+    if let WindowSelector::Main = sel {
+        if let Some(w) = app
+            .element_attr("AXMainWindow")
+            .or_else(|| app.element_attr("AXFocusedWindow"))
+        {
+            return Ok(walk_node(&w, max_depth));
+        }
+    }
+
+    let windows = app.array_attr("AXWindows");
+    if windows.is_empty() {
+        bail!("app pid {pid} exposes no AX windows (Electron may need waking, or none are open)");
+    }
+
+    let idx = match sel {
+        WindowSelector::Index(i) => i,
+        WindowSelector::Main => 0,
+        WindowSelector::Title(t) => windows
+            .iter()
+            .position(|w| w.str_attr("AXTitle").as_deref() == Some(t.as_str()))
+            .ok_or_else(|| anyhow!("no window titled {t:?} in pid {pid}"))?,
+        WindowSelector::WindowId(id) => {
+            // Reconcile the CG window id to an AX window via bounds matching.
+            match crate::windows_list::list_windows()
+                .into_iter()
+                .find(|w| w.window_id == id)
+            {
+                Some(target) => windows
+                    .iter()
+                    .position(|w| w.rect().map(|r| rect_close(&r, &target.bounds)).unwrap_or(false))
+                    .unwrap_or(0),
+                None => 0,
+            }
+        }
+    };
+
+    let chosen = windows
+        .into_iter()
+        .nth(idx)
+        .ok_or_else(|| anyhow!("window index {idx} out of range for pid {pid}"))?;
+    Ok(walk_node(&chosen, max_depth))
+}
+
+/// Loose rect equality (within 4pt) — AX vs CGWindowList bounds drift slightly.
+fn rect_close(a: &ScreenRect, b: &ScreenRect) -> bool {
+    (a.x - b.x).abs() < 4.0
+        && (a.y - b.y).abs() < 4.0
+        && (a.w - b.w).abs() < 4.0
+        && (a.h - b.h).abs() < 4.0
+}
+
+/// Walk the app's main window, screenshot it, sample a deduped color palette
+/// from the AX node centers. Reuses [`crate::sampling`] end-to-end.
+pub fn window_palette(pid: i32, max_depth: u32) -> Result<Vec<(u8, u8, u8)>> {
+    use base64::Engine as _;
+    let mut node = walk_window(pid, WindowSelector::Main, max_depth)?;
+    let root_bounds = node
+        .bounds
+        .ok_or_else(|| anyhow!("main window of pid {pid} has no bounds"))?;
+    let shot = crate::screenshot::capture_region_b64(root_bounds)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&shot.png_b64)
+        .map_err(|e| anyhow!("base64 decode: {e}"))?;
+    let img = image::load_from_memory(&bytes)?.into_rgba8();
+    crate::sampling::fill_node_colors(&mut node, &img, root_bounds);
+    let mut palette = Vec::new();
+    crate::sampling::collect_palette(&node, &mut palette);
+    Ok(palette)
 }
