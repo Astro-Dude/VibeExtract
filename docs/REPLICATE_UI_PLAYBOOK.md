@@ -177,10 +177,17 @@ the Acrobat Home replica is 0.965 absolute → **0.956** in flow (content 0.97, 
 — the dense-small-text rasterizer floor). Verify per region with `compare_images` and
 nudge `gap`/`margin`/`padding` until each region holds (target ≈0.96, floor ≥0.92).
 
-Reference models: **Slack `build.mjs`** (DOM-sourced) and **Acrobat `build.py`**
-(screenshot-sourced) — both nest + flow with the same shared map. *Follow-ups not yet
-converted:* `excel/build.py` (≈120 controls / ribbon groups — large rewrite) and Slack's 4
-remaining topbar absolute anchors; `postman/` has an `index.html` but no build script.
+Reference models (all nest + flow with the same shared map): **Slack `build.mjs`** (DOM-sourced),
+**Acrobat `build.py`** (screenshot-sourced, AX-opaque), and **Excel `build.py`** (AX-sourced, the
+densest — ~120 controls in 9 ribbon groups; `0.97` absolute → **`0.957`** in flow). Excel uses a
+tiny recursive renderer that turns each container's child x/y deltas into flow `margin-left/top`
+(reproducing exact positions with zero absolute), and is the canonical example of nested ribbon
+groups (`<section class="group …">` → row/col of rows) and the one sanctioned overlay (the A1
+cell-selection box inside `position:relative .gridcells`). *Two gotchas it surfaced:* a split
+menu-button's icon+caret must be wrapped in an `inline-flex` span or they stack vertically inside a
+flex-**column** group; and never reuse a CSS class name across regions (the ribbon `…group cells`
+collided with the grid `.cells` block → renamed to `.gridcells`). *Follow-ups not yet converted:*
+Slack's 4 remaining topbar absolute anchors; `postman/` has an `index.html` but no build script.
 
 ## The coordinate / scale contract (read this)
 

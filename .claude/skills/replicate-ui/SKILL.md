@@ -110,9 +110,10 @@ then `claude mcp add --transport http vibe-extract <url>`. See
    `gap`s fall inward) and **re-anchor long vertical lists per-section with an explicit
    `margin-top`** (so flex rounding resets per section instead of accumulating).
    Center text with the row container's `align-items:center` + leaf `line-height:1`
-   (font-metric-robust; avoids per-element vertical offsets). Reference models: Slack
-   `build.mjs` (DOM-sourced) and Acrobat `build.py` (screenshot-sourced) — both nest +
-   flow with the same shared map; see the playbook.
+   (font-metric-robust; avoids per-element vertical offsets). Reference models — Slack
+   `build.mjs` (DOM), Acrobat `build.py` (screenshot/AX-opaque), Excel `build.py` (AX, the
+   densest: 9 nested ribbon groups, a recursive x/y→margin renderer, one A1 overlay) — all
+   nest + flow with the same shared map; see the playbook.
 
 7. **Render.** Via the `playwright` MCP:
    - `browser_resize { width: point_w, height: point_h }`
