@@ -92,6 +92,56 @@ app and restart the MCP server after changing either.
 `@playwright/mcp` provides `browser_navigate`, `browser_resize`,
 `browser_take_screenshot`, etc.
 
+## Semantic, interactive markup (role → HTML element)
+
+A replica must not be one flat image or a wall of `<div>`s — **every control is an
+individual, real, focusable element**, chosen by its accessibility **role**. This is
+**platform-agnostic**: one shared map serves AX-sourced (desktop) *and* DOM-sourced
+(Electron) replicas — never special-case per app.
+
+- **`.replicate-ui/_shared/role-map.json`** — the single source of truth, keyed by
+  macOS **AX roles** and the equivalent **ARIA/DOM roles**. Each build script picks the
+  tag by the source node's role and fills it with the captured content (sprite icon,
+  inline SVG, text, value):
+
+  | role | element |
+  |---|---|
+  | `AXButton` / `button` | `<button>` |
+  | `AXMenuButton` | `<button aria-haspopup="menu">` |
+  | `AXCheckBox` (toggle) | `<button aria-pressed="…">` |
+  | radio in a tab group / `tab` | `<button role="tab" aria-selected="…">` |
+  | `AXRadioButton` | `<button role="radio">` |
+  | `AXComboBox` / `combobox` | `<div role="combobox" tabindex="0">` + `<input>` |
+  | `AXTextField` (`AXSearchField`) | `<input type="text|search">` |
+  | `AXTextArea` | `<input type="text">` |
+  | `AXSlider` / `slider` | `<div role="slider" tabindex="0">` |
+  | `AXStaticText` | `<span>` ·  `AXImage` | `<img>` |
+
+  The proprietary **icon artwork** (sprite PNG for AX apps, inline SVG for Electron)
+  goes **inside** the real control — the `<button>` is the semantic/interactive wrapper.
+
+- **Split buttons** (a `AXMenuButton`/anything with a dropdown chevron "v"): the action
+  and the caret are **separate components** — a plain `<button>` for the icon/action plus
+  its own `<button aria-haspopup="menu">` for the "v" (mirroring real Office:
+  `X` + `X Show More Options`). Never fuse an icon and its dropdown chevron into one
+  element. Combos likewise = `<input>` value + a separate caret.
+  - **Don't hardcode which buttons have a caret** (and never exclude by region/app).
+    Detect it: the caret is a small glyph on the **right edge** set off from the icon by
+    a clear background **gap** (see `detect_caret()` in `excel/build.py` — it reads the
+    sprite pixels). This splits `Undo`/`Borders`/… but correctly leaves a single-glyph
+    menu opener like the `⋯` overflow button whole (no gap → no split). For tall split
+    buttons whose label fills the columns, fall back to a right-edge caret overlay.
+
+- **`.replicate-ui/_shared/interactive.css`** — inlined by every generator. An
+  element/role-based reset (no UA chrome on `<button>`/`<input>`) so wrapping a sprite
+  in a real control is a **pixel no-op**, plus `cursor`/`:hover`/`:active`/`:focus-visible`
+  and `[aria-pressed=true]`. **No JS** (static clone): set `aria-selected`/`aria-pressed`
+  at build time.
+
+Reference implementations: `.replicate-ui/excel/build.py` (AX → role-driven `<button>`s,
+sprite inside) and `.replicate-ui/slack/build.mjs` (DOM containers → `<button>` /
+`role="tab"`, real SVG inside). Both consume the same `_shared/` map + css.
+
 ## The coordinate / scale contract (read this)
 
 - AX bounds and all screenshot inputs are **points**, top-left origin.

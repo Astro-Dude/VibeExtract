@@ -81,6 +81,20 @@ then `claude mcp add --transport http vibe-extract <url>`. See
    look-alike and a pixel match. A tiny generator script that reads the manifest
    and substitutes assets by name keeps this repeatable.
 
+   **Emit SEMANTIC, interactive markup — never one flat image or all `<div>`s.**
+   Every control is an *individual, real, focusable element* chosen by its
+   accessibility **role**, mapped through the shared, platform-agnostic
+   `.replicate-ui/_shared/role-map.json` (AX roles *and* ARIA/DOM roles → tag):
+   `AXButton`/`AXMenuButton`/`AXCheckBox` → `<button>` (with `aria-haspopup` /
+   `aria-pressed`); a radio in a tab group → `<button role="tab" aria-selected>`;
+   `AXComboBox` → `role="combobox"` + `<input>`; `AXTextField`/`AXSearchField` →
+   `<input type=text|search>`; `AXSlider` → `role="slider"`; `AXStaticText` →
+   `<span>`. The icon artwork (sprite PNG for AX apps, inline SVG for Electron)
+   goes **inside** the real control. Inline `.replicate-ui/_shared/interactive.css`
+   for the button/input reset (so wrapping is a pixel no-op) + hover/focus/active.
+   This is **platform-agnostic** — drive it from the role, never special-case per
+   app. Static clone: set `aria-selected`/`aria-pressed` at build time; no JS.
+
 7. **Render.** Via the `playwright` MCP:
    - `browser_resize { width: point_w, height: point_h }`
    - `browser_navigate { url: "file:///abs/path/to/replica.html" }`
