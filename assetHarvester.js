@@ -221,20 +221,53 @@
   // the header). So: only keep elements that are fully on-screen, laid out, and
   // topmost at their center; dedup by src keeping the LARGEST such occurrence.
   try {
+    // Online-status is rendered as SEPARATE overlay on the avatar: a `.c-presence`
+    // dot painted over the bottom-right corner, AND a notch CLIPPED out of the
+    // avatar image itself (clip-path: url(#mask__…-member)) for the dot to sit in.
+    // A screenshot-clip of the avatar's rect bakes BOTH into the photo, fusing
+    // status into the image. So hide the dots AND drop the notch clip-path → the
+    // capture is the clean full photo; the replica renders presence as its own
+    // component and rounds the avatar via CSS. (visibility:hidden / style
+    // overrides don't reflow — presence is absolutely positioned.)
+    try {
+      document.querySelectorAll(".c-presence, [data-qa='presence_indicator']")
+        .forEach((e) => { e.style.visibility = "hidden"; });
+      // The notch lives on the avatar WRAPPER (c-base_icon__width_only_container),
+      // not just the img — clear any mask clip-path across the whole avatar subtree.
+      document.querySelectorAll(".c-avatar, .c-avatar *, .c-base_icon, .c-base_icon__width_only_container").forEach((e) => {
+        let cp; try { cp = getComputedStyle(e).clipPath || ""; } catch (_) { return; }
+        if (cp.includes("url(") || cp.includes("mask")) {
+          e.style.setProperty("clip-path", "none", "important");
+          e.style.setProperty("-webkit-clip-path", "none", "important");
+        }
+      });
+    } catch (_) {}
     const vw = window.innerWidth, vh = window.innerHeight;
 
     // A meaningful label: nearest accessible name, else the enclosing row's
     // name (so a sidebar DM avatar reads "Naman Bhalla", not the generic
     // data-qa "channel-prefix-im-avatar").
+    const GENERIC = /avatar|prefix|presence|^image$|^icon$|channels?\s*and\s*direct\s*messages|^direct messages$|^starred$/i;
     const bestLabel = (el) => {
+      // The element's own data-qa is the most specific stable id (e.g.
+      // file_image_thumbnail_img) — unless it's a generic avatar token.
+      const ownDq = (el.getAttribute("data-qa") || "").trim();
+      if (ownDq && !GENERIC.test(ownDq)) return ownDq;
+      // Nearest accessible name — but skip generic CONTAINER labels (e.g. the
+      // sidebar list's "Channels and direct messages") so we don't overshoot.
       const named = el.closest("[aria-label]");
-      if (named) { const a = (named.getAttribute("aria-label") || "").trim(); if (a) return a; }
-      const row = el.closest("a,[role=listitem],button,[data-qa]");
+      if (named) { const a = (named.getAttribute("aria-label") || "").trim(); if (a && !GENERIC.test(a)) return a; }
+      // Sidebar DM/channel rows expose the person/channel name as TEXT (or in a
+      // `channel_sidebar_name…` data-qa), NOT an aria-label — resolve from the
+      // enclosing row so a DM avatar reads "Ishan", not the list container name.
+      const row = el.closest('[role="treeitem"],[data-qa^="channel_sidebar_name"],a[href]');
       if (row) {
-        const t = (row.getAttribute("data-qa") || row.textContent || "").replace(/\s+/g, " ").trim();
-        if (t) return t.slice(0, 48);
+        const t = (row.getAttribute("aria-label") || row.textContent || "").trim().replace(/\s+/g, " ");
+        if (t && !GENERIC.test(t)) return t.slice(0, 60);
       }
-      return el.getAttribute("alt") || el.getAttribute("title") || "image";
+      const dq = el.closest("[data-qa]");
+      if (dq) { const d = (dq.getAttribute("data-qa") || "").trim(); if (d && !GENERIC.test(d)) return d; }
+      return el.getAttribute("alt") || el.getAttribute("title") || ownDq || "image";
     };
 
     // On-screen, laid out, and not occluded by another element at its center.
@@ -250,16 +283,96 @@
       return top === el || el.contains(top) || top.contains(el);
     };
 
+    // Icons are often painted SMALLER than their box — a 20px background-image on
+    // a wide button, or an <img> with object-fit:contain. Capturing the element's
+    // full rect then grabs the glyph PLUS dead space (e.g. Slack's "Chat with
+    // Slackbot AI" button is ~120×20 with the icon only in the left square). So
+    // derive the actual PAINTED sub-rect from background-size/position (or an
+    // <img>'s object-fit/object-position) and clip to that. Falls back to the
+    // full rect for cover/fill/repeat/percent sizing (those genuinely fill the
+    // box), so ordinary avatars/images are unaffected.
+    const NUM = (v) => parseFloat(v);
+    const POS_KW = { left: 0, top: 0, center: 0.5, right: 1, bottom: 1 };
+    const parsePos = (posStr, freeX, freeY) => {
+      const p = String(posStr || "center center").trim().split(/\s+/);
+      const xs = p[0], ys = p.length > 1 ? p[1] : "center";
+      const res = (v, free) => {
+        if (v in POS_KW) return POS_KW[v] * free;
+        if (String(v).endsWith("%")) return (NUM(v) / 100) * free;
+        const n = NUM(v); return isFinite(n) ? n : 0.5 * free;
+      };
+      return [res(xs, freeX), res(ys, freeY)];
+    };
+    const paintedBox = (el, r, tag) => {
+      let cs; try { cs = getComputedStyle(el); } catch (_) { return r; }
+      let pw, ph, posStr;
+      if (tag === "bg") {
+        if ((cs.backgroundRepeat || "").split(",")[0].trim() !== "no-repeat") return r;
+        const size = (cs.backgroundSize || "").split(",")[0].trim();
+        if (!size || size === "cover" || size === "auto" || size === "contain" || size.includes("%")) return r;
+        const parts = size.split(/\s+/);
+        const w0 = NUM(parts[0]), h0 = parts[1] ? NUM(parts[1]) : NaN;
+        if (!isFinite(w0)) return r;
+        pw = w0; ph = isFinite(h0) ? h0 : w0;          // single value → assume square
+        posStr = (cs.backgroundPosition || "").split(",")[0].trim();
+      } else { // <img>
+        const fit = cs.objectFit;
+        if (fit !== "contain" && fit !== "none" && fit !== "scale-down") return r;
+        const nw = el.naturalWidth, nh = el.naturalHeight;
+        if (!nw || !nh) return r;
+        if (fit === "none") { pw = nw; ph = nh; }
+        else { const s = Math.min(r.width / nw, r.height / nh); pw = nw * s; ph = nh * s; }
+        posStr = cs.objectPosition;
+      }
+      // Only tighten when the paint is meaningfully smaller than the box.
+      if (!(pw >= 8 && ph >= 8) || (pw >= r.width - 1 && ph >= r.height - 1)) return r;
+      const [ox, oy] = parsePos(posStr, r.width - pw, r.height - ph);
+      const left = r.left + Math.max(0, ox), top = r.top + Math.max(0, oy);
+      return { left, top, width: pw, height: ph, right: left + pw, bottom: top + ph };
+    };
+
+    // Clamp a rect to what's actually VISIBLE — its intersection with every
+    // clipping (overflow != visible) ancestor. Slack's Slackbot button, for
+    // instance, is a 28×28 `overflow:hidden` button clipping a 120×20 sprite
+    // <img>; capturing the img's own rect grabs the whole sprite strip, but only
+    // the left square shows. Per-axis so a horizontal-only clip keeps full height.
+    const visibleRect = (el, r) => {
+      let L = r.left, T = r.top, R = r.right, B = r.bottom;
+      let p = el.parentElement;
+      while (p && p !== document.documentElement) {
+        let cs; try { cs = getComputedStyle(p); } catch (_) { break; }
+        const pr = p.getBoundingClientRect();
+        if (cs.overflowX !== "visible") { L = Math.max(L, pr.left); R = Math.min(R, pr.right); }
+        if (cs.overflowY !== "visible") { T = Math.max(T, pr.top); B = Math.min(B, pr.bottom); }
+        p = p.parentElement;
+      }
+      const w = R - L, h = B - T;
+      if (w < 8 || h < 8) return r;                              // clip too aggressive → keep
+      if (w >= r.width - 1 && h >= r.height - 1) return r;        // not actually clipped
+      return { left: L, top: T, width: w, height: h, right: R, bottom: B };
+    };
+
     const bySrc = new Map();
     const consider = (el, src, tag) => {
       if (!src || src.startsWith("data:")) return;
-      let r; try { r = el.getBoundingClientRect(); } catch (_) { return; }
-      if (!onScreenClean(el, r)) return;
+      let r0; try { r0 = el.getBoundingClientRect(); } catch (_) { return; }
+      if (r0.width < 8 || r0.height < 8) return;
+      // tight region: painted sub-rect (background-size / object-fit), then
+      // clamped to the visible area (clipping ancestors) — handles sprite icons.
+      const r = visibleRect(el, paintedBox(el, r0, tag));
+      const clean = onScreenClean(el, r);
       const area = r.width * r.height;
       const prev = bySrc.get(src);
-      if (prev && prev.area >= area) return; // keep the largest clean occurrence
+      // Prefer a cleanly-visible occurrence (required for the screenshot-clip
+      // fallback); among equal cleanliness, the largest. A not-clean occurrence
+      // is still kept as a fallback — it's fine if the image is fetchable, since
+      // fetched bytes don't depend on visibility.
+      if (prev) {
+        if (prev.clean && !clean) return;
+        if (prev.clean === clean && prev.area >= area) return;
+      }
       bySrc.set(src, {
-        el, tag, src, area, label: bestLabel(el),
+        el, tag, src, area, clean, label: bestLabel(el),
         rect: {
           x: Math.round(r.left + window.scrollX),
           y: Math.round(r.top + window.scrollY),
@@ -280,7 +393,7 @@
       if (m) consider(el, m[1], "bg");
     }
 
-    const entries = [...bySrc.values()].slice(0, 60);
+    const entries = [...bySrc.values()].slice(0, 80);
     await Promise.all(
       entries.map(async (e) => {
         let mime, base64;
@@ -291,7 +404,14 @@
             mime = blob.type || "image/png";
             base64 = u8ToB64(await blob.arrayBuffer());
           }
-        } catch (_) { /* CORS-opaque CDN asset → Rust will screenshot-clip it */ }
+        } catch (_) { /* CORS-opaque CDN asset → needs a clean rect for the clip fallback */ }
+        // Emit if we have bytes (visibility irrelevant) OR a cleanly-visible
+        // rect the Rust side can screenshot-clip. Otherwise skip (would capture
+        // neighbor pixels) and surface it as a warning.
+        if (!base64 && !e.clean) {
+          out.warnings.push(`skipped image (no bytes + not cleanly visible): ${e.label}`);
+          return;
+        }
         out.images.push({
           label: e.label || e.tag,
           tag: e.tag,

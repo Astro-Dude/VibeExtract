@@ -24,3 +24,5 @@ native-output.*
 
 # Claude Code local settings (shared commands/skills stay committable)
 # .claude/settings.local.json
+
+*.png
