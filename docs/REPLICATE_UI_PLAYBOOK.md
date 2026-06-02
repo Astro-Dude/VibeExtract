@@ -139,8 +139,48 @@ individual, real, focusable element**, chosen by its accessibility **role**. Thi
   at build time.
 
 Reference implementations: `.replicate-ui/excel/build.py` (AX → role-driven `<button>`s,
-sprite inside) and `.replicate-ui/slack/build.mjs` (DOM containers → `<button>` /
-`role="tab"`, real SVG inside). Both consume the same `_shared/` map + css.
+sprite inside), `.replicate-ui/slack/build.mjs` (DOM containers → `<button>` /
+`role="tab"`, real SVG inside), and `.replicate-ui/acrobat/build.py` (AX-opaque native →
+screenshot-only: roles inferred visually, bounds pixel-measured, glyphs + illustration
+sliced as sprites, real on-disk font `@font-face`-d). All three consume the same
+`_shared/` map + css — the role→element layer is identical whether the role comes from the
+AX tree, the DOM, or visual inference.
+
+## Layout: nested hierarchy + normal flow (not a flat `position:absolute` canvas)
+
+A replica's DOM must read like hand-written code: a **nested tree of real landmark
+containers** (`<header>`/`<nav>`/`<aside>`/`<main>`/`<section>`) laid out with **normal
+document flow + flexbox** — *never* a flat pile of `position:absolute` elements off one
+`.canvas`. Position children with `display:flex`, `gap`, `margin`, `margin-left:auto`,
+`padding`, `flex` ratios — not per-element `left`/`top`. **Reserve `position:absolute`
+for genuine overlays pinned inside a `position:relative` parent** (a presence dot on an
+avatar corner, an unread badge, a dropdown caret, a focus ring); it is never the primary
+layout mechanism.
+
+This holds **even when the source gives pixel bounds** (AX tree or screenshot): translate
+those bounds into container `padding`/`gap`/`margin` **once**, computed from the measured
+constants, rather than stamping each element at an absolute coordinate. Keeping it
+pixel-exact in flow rests on three habits:
+- **Anchor each toolbar group by its fixed edge** — left group first, right group pushed
+  with `margin-left:auto` + a fixed end-padding; let the intra-group `gap`s fall inward so
+  the visually-dominant edge is exact (drift hides on the inner edge).
+- **Re-anchor long vertical lists per-section** with an explicit `margin-top` derived from
+  the measured centre-Y deltas, so flex rounding resets at each section instead of
+  accumulating down a 15-row sidebar.
+- **Centre text** with the row container's `align-items:center` + a leaf `line-height:1`
+  (font-metric-robust); this removes per-element vertical offset hacks. (A `<button>`'s
+  text can still sit ~2–3px off vs a `<span>`; fix per-class if a region diff shows it,
+  but try `line-height:1` first — it usually suffices.)
+
+Expect a **small fidelity cost** vs absolute (flow positions text at sub-pixel offsets):
+the Acrobat Home replica is 0.965 absolute → **0.956** in flow (content 0.97, sidebar 0.90
+— the dense-small-text rasterizer floor). Verify per region with `compare_images` and
+nudge `gap`/`margin`/`padding` until each region holds (target ≈0.96, floor ≥0.92).
+
+Reference models: **Slack `build.mjs`** (DOM-sourced) and **Acrobat `build.py`**
+(screenshot-sourced) — both nest + flow with the same shared map. *Follow-ups not yet
+converted:* `excel/build.py` (≈120 controls / ribbon groups — large rewrite) and Slack's 4
+remaining topbar absolute anchors; `postman/` has an `index.html` but no build script.
 
 ## The coordinate / scale contract (read this)
 
@@ -151,6 +191,9 @@ sprite inside) and `.replicate-ui/slack/build.mjs` (DOM containers → `<button>
   `compare_images` resizes both sides to a common canvas, so you never hand-match
   device pixels. Rendering at device px is the most common cause of a low score on
   an otherwise-correct replica.
+- **This contract governs render *size*, not positioning *strategy*.** Render at point
+  size, but lay elements out with the nested-hierarchy + normal-flow model above — turn
+  measured point bounds into container spacing, don't reuse them as absolute coordinates.
 
 ## Setup / onboarding
 
@@ -195,6 +238,21 @@ sprite inside) and `.replicate-ui/slack/build.mjs` (DOM containers → `<button>
 - **`ax_tree` is nearly empty for an Electron app** (Slack/VS Code/Discord) — AX is
   shallow until the app is woken; use `extract_component` (CDP head-start) or
   `relaunch_with_debug_port { confirm: true }`.
+- **`ax_tree` returns a window with NO children AND `ax_node_at_point` finds nothing**
+  (Adobe Acrobat Reader's Home and other CEF/custom-drawn *native* apps) — the surface is
+  genuinely **AX-opaque** and it is *not* Electron (no CDP port to harvest). First rule out
+  the **inactive-Space gotcha** (empty AX because the app is on another Space): `open -a`
+  the app to bring its window to the active Space, then re-capture (`screenshot_region`
+  works even when `screenshot_window` trips during a Space transition). If AX is still
+  empty, fall back to a **screenshot-only / sprite** replica (a third case beyond AX-rich
+  and Electron): measure every control's bounds by **pixel analysis** of `capture/window.png`,
+  slice the proprietary glyphs + illustration as sprites, render text **live**, and
+  **harvest the app's real font from disk** — e.g. Acrobat ships *Adobe Clean UX* at
+  `/Library/Application Support/Adobe/Acrobat/DC/WebResources/Resource1/app1/fonts/*.otf`;
+  copy the weights you need into the replica and `@font-face` them. The real font alone
+  turns text-width "doubling" in dense regions into a match (Acrobat sidebar 0.84 → 0.87,
+  content 0.98, whole window 0.96). `.replicate-ui/acrobat/build.py` is the reference for
+  this case — same shared `_shared/role-map.json` machinery, roles inferred visually.
 - **Low `compare_images` score on a good replica** — you probably rendered at
   device pixels; render at **point** size and let the diff resize.
 - **Playwright hangs on first run** — run `npx playwright install chromium`.

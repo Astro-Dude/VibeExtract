@@ -95,6 +95,25 @@ then `claude mcp add --transport http vibe-extract <url>`. See
    This is **platform-agnostic** — drive it from the role, never special-case per
    app. Static clone: set `aria-selected`/`aria-pressed` at build time; no JS.
 
+   **Lay it out as a NESTED HIERARCHY in NORMAL FLOW — not a flat `position:absolute`
+   canvas.** Emit real landmark containers (`<header>`/`<nav>`/`<aside>`/`<main>`/
+   `<section>`) and place children with flexbox + normal flow (`display:flex`, `gap`,
+   `margin`, `margin-left:auto`, `padding`, `flex` ratios) — *not* per-element
+   `left`/`top`. Reserve `position:absolute` for **genuine overlays pinned inside a
+   `position:relative` parent** (a presence dot on an avatar corner, a dropdown caret,
+   a focus ring) — never as the primary layout mechanism. This holds even when the
+   source gives you pixel bounds (AX tree / screenshot): translate those bounds into
+   container `padding`/`gap`/`margin` **once**, computed from the measured constants,
+   so the markup reads like hand-written code and stays accessible/maintainable. Two
+   techniques keep it pixel-exact: **anchor each group/section by its fixed edge**
+   (toolbar right-group via `margin-left:auto` + a fixed end-padding; let intra-group
+   `gap`s fall inward) and **re-anchor long vertical lists per-section with an explicit
+   `margin-top`** (so flex rounding resets per section instead of accumulating).
+   Center text with the row container's `align-items:center` + leaf `line-height:1`
+   (font-metric-robust; avoids per-element vertical offsets). Reference models: Slack
+   `build.mjs` (DOM-sourced) and Acrobat `build.py` (screenshot-sourced) — both nest +
+   flow with the same shared map; see the playbook.
+
 7. **Render.** Via the `playwright` MCP:
    - `browser_resize { width: point_w, height: point_h }`
    - `browser_navigate { url: "file:///abs/path/to/replica.html" }`
