@@ -115,6 +115,15 @@ then `claude mcp add --transport http vibe-extract <url>`. See
    densest: 9 nested ribbon groups, a recursive x/y→margin renderer, one A1 overlay) — all
    nest + flow with the same shared map; see the playbook.
 
+   **Grid labels (column letters / row numbers / a date strip baked into one image) →
+   REAL TEXT, never a sprite.** Use the shared `.replicate-ui/_shared/gridtext.py` (AX →
+   OCR → sequence-repair): detect the range + cell sizes from the capture's gridlines
+   (never hardcode the count), get each label from AX if exposed else OCR each cell (macOS
+   Vision via `_shared/vision_ocr.swift`) and repair with a `kind` (alpha/numeric) — OCR
+   gives the start (scroll-aware), the kind only cleans noise + fills misses. Render real
+   `<div>` cells; detect the selected row/col highlight. Reuse across apps; Excel headers
+   are the reference. (Real text costs a little SSIM vs the sprite in dense bands — expected.)
+
 7. **Render.** Via the `playwright` MCP:
    - `browser_resize { width: point_w, height: point_h }`
    - `browser_navigate { url: "file:///abs/path/to/replica.html" }`

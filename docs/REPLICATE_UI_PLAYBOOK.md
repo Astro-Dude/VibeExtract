@@ -189,6 +189,35 @@ flex-**column** group; and never reuse a CSS class name across regions (the ribb
 collided with the grid `.cells` block → renamed to `.gridcells`). *Follow-ups not yet converted:*
 Slack's 4 remaining topbar absolute anchors; `postman/` has an `index.html` but no build script.
 
+## Grid labels → real text (don't bake them into a sprite) — `_shared/gridtext.py`
+
+When a region is a **grid of labels baked into one image** (a spreadsheet's column letters /
+row numbers, a timeline's dates, …), turn it into **real, individual text cells** — never a
+sprite. The mechanism is shared + platform-agnostic (`.replicate-ui/_shared/gridtext.py`,
+used by Excel's headers; available to every replica). **Nothing is hardcoded** — range, cell
+sizes *and* label values are derived from the capture each run, so a scrolled/resized sheet
+adapts with no code change:
+
+- **Geometry** — `detect_boundaries()` reads the real gridlines from the **cell area** (gray
+  lines on white) along a centre probe → exact cell offsets/sizes. The range is *detected*,
+  never a hardcoded count.
+- **Text — the hybrid AX → OCR → repair** (`header_labels(…, kind)`):
+  1. **AX** labels if the app exposes them (`ax_labels=`) — truly data-driven.
+  2. else **OCR** each detected cell via macOS **Vision** (`_shared/vision_ocr.swift`, compiled
+     once + cached; no install). OCR the cell with invert→autocontrast→upscale→pad (single
+     isolated glyphs are OCR's worst case, so prep matters).
+  3. **sequence-repair** (`kind="alpha"|"numeric"`): OCR establishes the **start** (so scrolled
+     sheets stay correct); the sequence rule then regenerates the arithmetic run from that start,
+     fixing OCR noise (I↔1, O↔0) and filling missed cells. `kind` is the only per-region hint —
+     not the values or the range.
+- Render each cell as a real element (`<div class="colhdr">A</div>` …), sized from the
+  detection, coloured from `sample()`, with the **selected** column/row highlight *detected*
+  (the header cell whose bg is lighter than the band) — not hardcoded to A1.
+
+**Cost:** browser-rendered text can't pixel-match the native sprite, so a dense label band loses
+a little SSIM (Excel headers: 0.957 with the sprite → **~0.918** as real text) — the deliberate
+"real text over image" trade-off. Verify per band; it's the expected floor, not a bug.
+
 ## The coordinate / scale contract (read this)
 
 - AX bounds and all screenshot inputs are **points**, top-left origin.
