@@ -33,6 +33,47 @@ then `claude mcp add --transport http vibe-extract <url>`. See
 2. **Target.** `frontmost_app` (or `list_windows`) to get the target `pid` and the
    window `bounds`. Confirm with the user which window if ambiguous.
 
+2b. **Scope — selection vs whole window.** Call `get_selection`. If `present` is true —
+   the user picked component(s) in the desktop app (⌘⇧S on the target app, then click; ⇧+click
+   adds more) — and `age_seconds` is recent (under ~600; if older, confirm with the user it's the
+   intended pick), switch to **COMPONENT-ONLY mode**: skip the whole-window inventory and replicate
+   *just* the selected element(s). For each element, first decide whether to trust its `bounds`:
+
+   - **Healthy AX pick** (`ax_shallow` is false **and** role isn't AXMenuBar/AXApplication/AXWindow):
+     use its `bounds` (points, top-left) as the region — `ax_subtree_at_point { x: bounds.x+bounds.w/2,
+     y: bounds.y+bounds.h/2 }` for roles/structure, `screenshot_region { x,y,w,h }`=`bounds` for the
+     native reference, `extract_component { x, y }` for a DOM/CSS head-start.
+   - **Shallow AX pick** (`ax_shallow` is true, or role ∈ {AXMenuBar, AXApplication, AXWindow}): the
+     native AX tree couldn't see the real element — normal for **Electron** apps (Slack, VS Code),
+     whose web content isn't exposed to AX. **Do NOT use `bounds`** (it's a click-centred placeholder,
+     not the real element). Instead call `extract_component { x: click.x, y: click.y }` (the full
+     CDP→AX→screenshot ladder at the exact click). If it returns **ElectronNeedsRelaunch**, tell the
+     user and **offer** `relaunch_with_debug_port { bundle_id, display_name, confirm: true }` (this
+     quits & reopens that app — only with their OK), then retry `extract_component` at `click`. Use the
+     **returned element's** bounds for `screenshot_region` and for sizing the replica.
+
+   Then Generate (6) + verify (7–9) the component against its crop, sized to its point bounds.
+   (Multiple selected elements → compose them.) If `present` is false/empty, proceed with the
+   **whole-window** flow below.
+
+2c. **Reuse check — similar page of an app you've done before?** Apps with many pages
+   (a 10-screen tool) share identical chrome, fonts, icons, and toolbar across pages — only
+   the content/layout differs. Before paying full cost, run
+   `python3 .replicate-ui/_shared/cache.py <app> [win_w win_h]` (app = the working-dir name,
+   e.g. `slack`). It reports what's already cached and reusable:
+   - **assets** (`assets/manifest.json`) present → **REUSE verbatim**; SKIP
+     `relaunch_with_debug_port` + `extract_assets` entirely (the slowest, most disruptive step —
+     it quits the app). The icon set and fonts never change page-to-page.
+   - **grid labels** (`capture/headers_cache.json`) present for the same window size → reused by
+     `gridtext.py` automatically; no re-OCR.
+   - **prior replica** (`index.html`) present → **START FROM IT**: copy it to the new page's dir,
+     then diff-edit ONLY the regions that changed (new/removed controls, different text/state, new
+     layout) and re-verify just those — far fewer iterations than generating from scratch.
+   - **sprites** (`cache/sprites/`) — AX-app ribbon/toolbar icons are content-addressed
+     (`_shared/cache.py: SpriteCache`); identical icons reuse the same file across pages.
+   Reuse the stable parts; regenerate only what differs. (First page of an app → nothing cached →
+   full cost, as below. This is the incremental-reuse path: pay once per app, fast thereafter.)
+
 3. **Inventory.** `ax_tree { pid, window_index: 0 }` → the component tree (roles,
    names, values, per-node `bounds`). This is your structural source of truth — a
    screenshot can't give you roles/labels. For Electron apps the AX tree may be
@@ -41,9 +82,24 @@ then `claude mcp add --transport http vibe-extract <url>`. See
    `relaunch_with_debug_port { bundle_id, display_name, confirm: true }` first
    (this quits & reopens the app — only with the user's OK).
 
-3b. **Harvest real assets (Electron with a debug port).** Icons and images are
-   what a hand-built replica can't fake — they're proprietary vectors/photos.
-   Call `extract_assets { }` to pull them straight from the live renderer via CDP
+3b. **Harvest real assets — ALWAYS (do this every run).** 🚫 **Real assets are mandatory.
+   NEVER hand-draw, approximate, or substitute an icon, image, avatar, or font.** Every one of
+   them in the replica MUST come from a harvest (`extract_assets`) or the reuse cache — this is
+   not optional and not something to defer or "fix later." Hand-drawn SVGs are the #1 cause of a
+   replica that looks wrong; the user should never have to point one out. So:
+   - **Run `extract_assets { }` on every run** (skip only if step 2c already reported cached
+     assets — then reuse `assets/` + `manifest.json`).
+   - If the target is **Electron without a debug port**, *offer* `relaunch_with_debug_port` to
+     enable the harvest — do **not** fall back to drawing.
+   - For **native (AX) apps** (no CDP), icons come from per-element screenshot **sprites**
+     (`screenshot_region` slices / `_shared/cache.py: SpriteCache`) — sliced from real pixels,
+     never drawn.
+   - **Exact-icon fallback:** if a *specific* icon isn't in the harvest's font/svg/image set, get
+     it exactly anyway — **crop its pixel region** from a `screenshot_region` of that element
+     (transparent-key the background), **or** read its **icon-font codepoint** and embed the
+     harvested woff2. Cropping a real glyph beats drawing one, every time.
+
+   On the harvest itself: `extract_assets { }` pulls assets straight from the live renderer via CDP
    (works even when the app isn't frontmost). It writes files under
    `<out>/assets/{fonts,img}` and returns a manifest:
    - `fonts[]` — every `@font-face` woff2 (icon fonts **and** text fonts, e.g.
@@ -74,12 +130,16 @@ then `claude mcp add --transport http vibe-extract <url>`. See
 
 6. **Generate.** Write plain, self-contained **HTML+CSS** (no framework, no build
    step) to a working dir, sized to the component's **point** dimensions. Use the
-   AX inventory for structure/text and the reference shot + `sample_color`/
-   `color_palette` for colors, spacing, and fonts. For **icons and images**, drop
-   in the real assets from step 3b (inline the harvested SVGs / reference the
-   saved PNGs + woff2) rather than hand-drawing — that's the difference between a
-   look-alike and a pixel match. A tiny generator script that reads the manifest
-   and substitutes assets by name keeps this repeatable.
+   AX inventory for structure/text and the reference shot for colors, spacing, and fonts.
+   **Sample colors with `sample_color` at MULTIPLE points — don't assume one flat fill.**
+   Backgrounds vary: a title-bar strip, a header band, and the body can be different shades
+   (e.g. Slack's lighter title bar over a darker aubergine body) — sample each region; guessing
+   a single bg color is a common, visible miss.
+   For **icons and images**, drop in the real assets from step 3b (inline the harvested SVGs /
+   reference the saved PNGs + woff2). 🚫 **NEVER hand-draw an icon. If you find yourself about to
+   write an SVG path from scratch, STOP and harvest or crop the real one** (step 3b's exact-icon
+   fallback) — a hand-drawn approximation is never acceptable, even for a "simple" glyph. A tiny
+   generator script that reads the manifest and substitutes assets by name keeps this repeatable.
 
    **Emit SEMANTIC, interactive markup — never one flat image or all `<div>`s.**
    Every control is an *individual, real, focusable element* chosen by its
@@ -144,6 +204,14 @@ then `claude mcp add --transport http vibe-extract <url>`. See
     the window's point size, render, and `compare_images` against the
     `screenshot_window` shot. Report the final whole-window score and write the
     final `index.html`.
+
+11. **Pre-done asset check (REQUIRED — do not skip).** Before you report the replica as done,
+    audit the markup: **every icon, avatar, image, and font must be a real harvested asset** (from
+    `extract_assets` / the cache) or a pixel-crop of the real element — **zero hand-drawn or
+    placeholder assets** (no improvised `<svg><path>`, no initials-in-a-box avatars, no guessed
+    glyphs). Re-look at the diff heatmap with the icon/background regions specifically in mind. The
+    bar is **exact assets on the first attempt** — the user should never have to tell you an icon or
+    colour is wrong. If anything is still approximate, fix it (harvest/crop) before declaring done.
 
 ## vibe-extract tools (reference)
 `check_ax_permission`, `request_ax_permission`, `frontmost_app`, `list_windows`,

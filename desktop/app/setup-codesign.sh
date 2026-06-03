@@ -45,7 +45,10 @@ EOF
     -keyout "$TMPDIR_LOCAL/key.pem" -out "$TMPDIR_LOCAL/cert.pem" \
     -config "$CONF" -extensions v3_req >/dev/null 2>&1
 
-  openssl pkcs12 -export -inkey "$TMPDIR_LOCAL/key.pem" -in "$TMPDIR_LOCAL/cert.pem" \
+  # -legacy + -macalg sha1: OpenSSL 3 defaults to a SHA256 MAC + AES that macOS's
+  # `security import` (older Security framework) rejects ("MAC verification failed").
+  # The legacy 3DES/RC2 + SHA1-MAC combo is what macOS can import.
+  openssl pkcs12 -export -legacy -macalg sha1 -inkey "$TMPDIR_LOCAL/key.pem" -in "$TMPDIR_LOCAL/cert.pem" \
     -out "$TMPDIR_LOCAL/identity.p12" -passout pass:vibe >/dev/null
 
   security import "$TMPDIR_LOCAL/identity.p12" -k "$KEYCHAIN" -P vibe -A >/dev/null

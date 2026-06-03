@@ -263,6 +263,126 @@ async fn extract_at_viewport_inner(
     })
 }
 
+/// One element resolved by [`probe_at`] — its viewport rect (top-left CSS px,
+/// which equal macOS points) plus role/tag/label. The caller adds the window
+/// origin to get screen-space bounds.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProbeHit {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+// Self-contained probe expression. Placeholders __X__/__Y__/__WIDEN__ are filled
+// by `probe_at` (via `.replace`, so the JS keeps single braces — no `format!`
+// escaping). Mirrors contentScript.js `expandToMeaningfulContainer`: from the
+// element at the point, expand to the nearest visually-distinct / structural
+// container, then walk up `widen` more parents. Returns the rect + role/label,
+// or null. No inject, no click, no export — just one `Runtime.evaluate`.
+const PROBE_JS: &str = r#"(function(){
+  try {
+    var x=__X__, y=__Y__, widen=__WIDEN__;
+    var el = document.elementFromPoint(x,y);
+    if(!el) return null;
+    function expand(el){
+      var tag=(el.tagName||'').toLowerCase();
+      if(['div','section','article','aside','nav','header','footer','main','form','fieldset','ul','ol','table','tbody','thead','tr'].indexOf(tag)>=0) return el;
+      if(['input','select','textarea','button','a','span','img','svg','label','i','em','strong','p','h1','h2','h3','h4','h5','h6'].indexOf(tag)<0) return el;
+      var sr=el.getBoundingClientRect(); var startArea=sr.width*sr.height; if(!startArea) return el;
+      var maxA=window.innerWidth*window.innerHeight*0.4, minG=1.2;
+      var cur=el.parentElement, depth=0, best=null;
+      while(cur&&cur!==document.body&&cur!==document.documentElement&&depth<8){
+        var cr=cur.getBoundingClientRect(); var cA=cr.width*cr.height;
+        if(cA>maxA) break;
+        if(cA<startArea*minG){cur=cur.parentElement;depth++;continue;}
+        var cs=getComputedStyle(cur);
+        var distinct=(cs.backgroundColor&&cs.backgroundColor!=='rgba(0, 0, 0, 0)'&&cs.backgroundColor!=='transparent')||parseFloat(cs.borderTopWidth)>0||parseFloat(cs.borderLeftWidth)>0||parseFloat(cs.borderTopLeftRadius)>0||(cs.boxShadow&&cs.boxShadow!=='none')||parseFloat(cs.paddingTop)>=4||parseFloat(cs.paddingLeft)>=4;
+        var structural=['form','fieldset','label','li','tr','article','section','header','footer','aside','nav'].indexOf((cur.tagName||'').toLowerCase())>=0;
+        if(distinct||structural){return cur;}
+        cur=cur.parentElement;depth++;
+      }
+      return best||el;
+    }
+    el=expand(el);
+    for(var i=0;i<widen&&el.parentElement&&el.parentElement!==document.body&&el.parentElement!==document.documentElement;i++) el=el.parentElement;
+    var r=el.getBoundingClientRect();
+    var label=(el.getAttribute&&(el.getAttribute('aria-label')||el.getAttribute('data-qa')))||'';
+    if(!label) label=(el.textContent||'').trim().slice(0,60);
+    return {x:r.left,y:r.top,w:r.width,h:r.height,role:((el.getAttribute&&el.getAttribute('role'))||'')+'',tag:(el.tagName||'').toLowerCase(),label:label};
+  } catch(e){ return null; }
+})()"#;
+
+/// Live-hover probe: the element at viewport (vx, vy), expanded to a meaningful
+/// container plus `widen` extra parent steps. Fast enough to drive the pick-mode
+/// highlight (one `Runtime.evaluate` over a short-lived connection, no inject /
+/// click / export). 3s hard timeout. `Ok(None)` = nothing under the point.
+pub async fn probe_at(
+    port: u16,
+    target_index: usize,
+    vx: f64,
+    vy: f64,
+    widen: u32,
+) -> Result<Option<ProbeHit>> {
+    let inner = probe_at_inner(port, target_index, vx, vy, widen);
+    match tokio::time::timeout(Duration::from_secs(3), inner).await {
+        Ok(r) => r,
+        Err(_) => bail!("CDP probe_at timed out (3s)"),
+    }
+}
+
+async fn probe_at_inner(
+    port: u16,
+    target_index: usize,
+    vx: f64,
+    vy: f64,
+    widen: u32,
+) -> Result<Option<ProbeHit>> {
+    let ws_url = discover_target(port, target_index).await?;
+    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(2), connect_async(&ws_url))
+        .await
+        .map_err(|_| anyhow!("CDP WS connect timed out (2s)"))?
+        .context("CDP WS connect")?;
+    let mut next_id: u64 = 0;
+    let mut mk = |method: &str, params: Value| -> CdpCommand {
+        next_id += 1;
+        CdpCommand { id: next_id, method: method.to_string(), params }
+    };
+    call(&mut socket, mk("Runtime.enable", json!({}))).await?;
+    let expr = PROBE_JS
+        .replace("__X__", &format!("{:.2}", vx))
+        .replace("__Y__", &format!("{:.2}", vy))
+        .replace("__WIDEN__", &widen.to_string());
+    let res = eval(
+        &mut socket,
+        mk(
+            "Runtime.evaluate",
+            json!({"expression": expr, "returnByValue": true}),
+        ),
+    )
+    .await?;
+    let _ = socket.close(None).await;
+    let val = res
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    if val.is_null() {
+        return Ok(None);
+    }
+    let hit: ProbeHit = serde_json::from_value(val).context("parse ProbeHit")?;
+    if hit.w < 1.0 || hit.h < 1.0 {
+        return Ok(None);
+    }
+    Ok(Some(hit))
+}
+
 /// Harvest pixel-perfect assets (fonts, icon glyphs, images) from a running
 /// Electron renderer via CDP. `harvester_js` must be a single expression that
 /// evaluates to a Promise resolving to a manifest object (see `assetHarvester.js`).

@@ -1,7 +1,7 @@
 //! Per-element screenshot. macOS uses the built-in `/usr/sbin/screencapture -R`;
 //! Windows uses a `BitBlt` from the desktop DC (Phase 3 stub for now).
 
-use crate::capture::ScreenRect;
+use crate::capture::{ScreenPoint, ScreenRect};
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};

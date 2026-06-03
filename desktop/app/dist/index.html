@@ -702,8 +702,10 @@
           <div class="title" id="pick-status-title">Idle</div>
           <div class="sub" id="pick-status-sub">Press <span class="key">⌘⇧S</span> to start picking</div>
         </div>
-        <button id="start-pick" class="">Start pick mode (⌘⇧S)</button>
         <button id="export-btn" class="secondary" disabled>Export selection (⌘⇧E)</button>
+        <p class="sub" style="margin-top:10px">Selection is <strong>hotkey-driven</strong> — on the app you want:
+          <span class="key">⌘⇧S</span> start · hover + <span class="key">Click</span> select ·
+          <span class="key">⌘⇧E</span> extract · <span class="key">Esc</span> cancel.</p>
       </section>
 
       <section>
@@ -816,16 +818,12 @@
       if (pickActive) {
         const targetStr = targetApp ? ` → <strong>${targetApp}</strong>` : '';
         title.innerHTML = `Picking…${targetStr} (${selectionCount} selected)`;
-        sub.innerHTML = 'Click elements in any app. <span class="key">⇧</span>+Click to add. <span class="key">Esc</span> to cancel.';
-        $('start-pick').textContent = 'Stop pick mode (⌘⇧S / Esc)';
-        $('start-pick').classList.add('toggle-on');
+        sub.innerHTML = 'Hover + <span class="key">Click</span> to select · <span class="key">⇧</span>+Click add · <span class="key">⌘⇧E</span> extract · <span class="key">Esc</span> cancel.';
       } else {
         title.textContent = selectionCount > 0 ? `${selectionCount} selected (paused)` : 'Idle';
         sub.innerHTML = selectionCount > 0
           ? 'Press <span class="key">⌘⇧E</span> to export, or <span class="key">⌘⇧S</span> to add more.'
-          : '<strong>Click on Slack / Calculator / target app FIRST</strong>, then press <span class="key">⌘⇧S</span>. VibeExtract cannot extract from itself.';
-        $('start-pick').textContent = 'Start pick mode (⌘⇧S)';
-        $('start-pick').classList.remove('toggle-on');
+          : 'Go to any app, then press <span class="key">⌘⇧S</span> to start picking.';
       }
       $('export-btn').disabled = selectionCount === 0;
     }
@@ -848,16 +846,8 @@
     });
 
     // --- Buttons -------------------------------------------------------------
-    $('start-pick').addEventListener('click', async () => {
-      try {
-        if (pickActive) {
-          await invoke('stop_pick_mode');
-        } else {
-          await invoke('start_pick_mode');
-        }
-      } catch (e) { toast(`${e}`, { warn: true, ms: 4500 }); }
-    });
-
+    // Selection start/stop is hotkey-only (⌘⇧S start · Esc cancel) — no app-tab toggle.
+    // The Rust global-shortcut handlers + CGEventTap drive pick mode directly.
     $('export-btn').addEventListener('click', async () => {
       try {
         const payload = await invoke('export_selection');

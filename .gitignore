@@ -12,9 +12,8 @@ desktop/app/src-tauri/gen/
 # Node
 **/node_modules/
 
-# VibeExtract replication output (logs, screenshots, scratch artifacts)
+# VibeExtract replication output (scratch screenshots, logs)
 .replica-output/
-.replicate-ui/
 replica-*.png
 *-output.html
 *-output.toon
@@ -22,7 +21,32 @@ replica-*.png
 combo-output.*
 native-output.*
 
+# .replicate-ui: TRACK the reusable skill infra (_shared/ helpers + the per-app
+# generator scripts) so /replicate-ui works on a fresh clone, but IGNORE the
+# generated replica OUTPUTS (per-app index.html, harvested assets, captures,
+# sprite cache) — those are re-created by extract_assets / the generators.
+.replicate-ui/*/index.html
+.replicate-ui/*/index-*.html
+.replicate-ui/*/assets/
+.replicate-ui/*/capture/
+.replicate-ui/*/cache/
+.replicate-ui/*/img/
+.replicate-ui/**/__pycache__/
+# compiled Vision OCR binary (gridtext.py rebuilds it from vision_ocr.swift)
+.replicate-ui/_shared/vision_ocr
+
+# Generated Tauri icon set — regenerate with `cargo tauri icon` (build-dmg.sh does
+# this). The .icns/.ico/platform dirs aren't committed; the source icon.png is.
+desktop/app/src-tauri/icons/*.icns
+desktop/app/src-tauri/icons/*.ico
+desktop/app/src-tauri/icons/android/
+desktop/app/src-tauri/icons/ios/
+
 # Claude Code local settings (shared commands/skills stay committable)
 # .claude/settings.local.json
 
+# Scratch PNGs anywhere — but keep the source app icon.
 *.png
+!desktop/app/src-tauri/icons/icon.png
+*.otf
+*preview.html

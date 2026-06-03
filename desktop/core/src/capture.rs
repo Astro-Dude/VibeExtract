@@ -28,6 +28,11 @@ impl ScreenRect {
             y: self.y + self.h / 2.0,
         }
     }
+    /// Does this rect contain the point (inclusive)? Used to sanity-check that an
+    /// AX hit-test actually landed on the element under the click.
+    pub fn contains(&self, p: ScreenPoint) -> bool {
+        p.x >= self.x && p.x <= self.x + self.w && p.y >= self.y && p.y <= self.y + self.h
+    }
 }
 
 /// Information about the element the picker identified, used by the
@@ -57,4 +62,31 @@ pub struct PickedElement {
     /// Enclosing window bounds — used for coord translation when running the
     /// CDP path.
     pub window_bounds: Option<ScreenRect>,
+    /// The exact screen point the user clicked/hovered when this element was
+    /// picked (the pick anchor, points / top-left origin). Always reliable even
+    /// when AX can't resolve a real leaf, so downstream can re-resolve precisely
+    /// here via the CDP ladder. `#[serde(default)]` keeps older records loadable.
+    #[serde(default)]
+    pub click: Option<ScreenPoint>,
+    /// True when the AX hit-test could NOT land on a real content element at the
+    /// click — e.g. an Electron app whose web content isn't exposed to macOS AX,
+    /// so only a top-level container / menu bar came back. When set, do NOT trust
+    /// `bounds`/`role`; re-resolve at `click` (extract_component / the CDP ladder).
+    #[serde(default)]
+    pub ax_shallow: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rect_contains_point_inclusive() {
+        let r = ScreenRect { x: 10.0, y: 20.0, w: 100.0, h: 40.0 };
+        assert!(r.contains(ScreenPoint { x: 50.0, y: 30.0 })); // inside
+        assert!(r.contains(ScreenPoint { x: 10.0, y: 20.0 })); // top-left corner
+        assert!(r.contains(ScreenPoint { x: 110.0, y: 60.0 })); // bottom-right corner
+        assert!(!r.contains(ScreenPoint { x: 5.0, y: 30.0 })); // left of
+        assert!(!r.contains(ScreenPoint { x: 50.0, y: 61.0 })); // below
+    }
 }

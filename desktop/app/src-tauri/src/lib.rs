@@ -68,6 +68,17 @@ struct PickSession {
     /// On click, we use THIS instead of re-hit-testing — matching how the web
     /// extension's `hoverElement` works. The user sees outline X, clicks, gets X.
     last_hover: Option<PickedElement>,
+    /// CDP debug port of the target app when it's Electron — set at pick start.
+    /// When present, the hover task drives the highlight from the live DOM
+    /// (`cdp::probe_at`) so the user sees the REAL element under the cursor,
+    /// instead of the shallow AX result (menu bar / whole window).
+    cdp_port: Option<u16>,
+    /// The target window's screen bounds, captured at pick start. Used to convert
+    /// between screen points and the CDP viewport (viewport = screen − origin).
+    target_win: Option<vibe_extract_core::capture::ScreenRect>,
+    /// How many extra DOM-parent steps to widen the CDP hover by — ↑ increments,
+    /// ↓ decrements. Lets the user grow row → list → sidebar and SEE each step.
+    widen_level: u32,
 }
 
 #[derive(Default)]
@@ -392,6 +403,21 @@ async fn request_ax_permission() {
     }
 }
 
+/// The largest on-screen window owned by `pid` — its screen bounds become the
+/// CDP-viewport origin for the live hover probe.
+#[cfg(target_os = "macos")]
+fn largest_window_bounds_for_pid(pid: i32) -> Option<vibe_extract_core::capture::ScreenRect> {
+    vibe_extract_core::windows_list::list_windows()
+        .into_iter()
+        .filter(|w| w.pid == pid && w.bounds.w >= 1.0 && w.bounds.h >= 1.0)
+        .max_by(|a, b| {
+            (a.bounds.w * a.bounds.h)
+                .partial_cmp(&(b.bounds.w * b.bounds.h))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|w| w.bounds)
+}
+
 #[tauri::command]
 async fn start_pick_mode(app: AppHandle) -> Result<(), String> {
     log::info!("start_pick_mode");
@@ -427,12 +453,16 @@ async fn start_pick_mode(app: AppHandle) -> Result<(), String> {
         target_pid, target_name
     );
 
+    // No resolvable target yet (e.g. VibeExtract itself is frontmost when ⌘⇧S fires).
+    // DON'T fail — arming anyway is the correct UX: the overlay HUD guides the user, the
+    // hover task falls back to system-wide hit-testing, and the first click resolves +
+    // locks the clicked app's pid. (Previously this returned Err before emitting
+    // `pick-mode-changed`, so the UI never toggled — the "Start does nothing" bug.)
     if target_pid.is_none() {
         let _ = app.emit(
             "toast",
-            "No recent target app. Click on Slack / Finder / any app you want to extract from, then press ⌘⇧S.".to_string(),
+            "Pick mode on — hover the app you want and click. ⌘⇧E to extract · Esc to cancel.".to_string(),
         );
-        return Err("no target app".into());
     }
 
     // Wake the target NOW (before showing overlay), then sleep so Electron has
@@ -442,6 +472,41 @@ async fn start_pick_mode(app: AppHandle) -> Result<(), String> {
         vibe_extract_core::ax_macos::wake_app_ax(pid);
     }
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // For an Electron target the real UI isn't in the AX tree — so drive the
+    // hover highlight from the live DOM via CDP. Detect framework + debug port +
+    // the window origin now; the hover task uses them to probe + convert coords.
+    #[cfg(target_os = "macos")]
+    let (cdp_port, target_win): (Option<u16>, Option<vibe_extract_core::capture::ScreenRect>) =
+        if let Some(pid) = target_pid {
+            let app_path = vibe_extract_core::ax_macos::pid_to_path(pid);
+            let is_electron = app_path
+                .as_deref()
+                .map(|p| {
+                    matches!(
+                        vibe_extract_core::framework_detect::detect(std::path::Path::new(p)),
+                        vibe_extract_core::framework_detect::Framework::Electron
+                    )
+                })
+                .unwrap_or(false);
+            if is_electron {
+                let port = vibe_extract_core::cdp::discover_port().await;
+                if port.is_none() {
+                    let _ = app.emit(
+                        "toast",
+                        "This Electron app isn't in debug mode — the selection highlight will be approximate. Accept the restart prompt (or press ⌘⇧E) for pixel-accurate picking.".to_string(),
+                    );
+                }
+                (port, largest_window_bounds_for_pid(pid))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+    #[cfg(not(target_os = "macos"))]
+    let (cdp_port, target_win): (Option<u16>, Option<vibe_extract_core::capture::ScreenRect>) =
+        (None, None);
 
     // Reset session state. CRITICAL: clear `last_hover` too — a stale
     // PickedElement from a prior session (often VibeExtract's own AXMenuBar
@@ -456,6 +521,9 @@ async fn start_pick_mode(app: AppHandle) -> Result<(), String> {
         s.woken_pids.clear();
         s.target_pid = target_pid;
         s.last_hover = None;
+        s.cdp_port = cdp_port;
+        s.target_win = target_win;
+        s.widen_level = 0;
     }
 
     // Show the overlay window, size it to the primary monitor.
@@ -737,30 +805,58 @@ async fn overlay_click(
         }
     };
 
-    // Electron apps need their AX tree woken before the subtree walk produces
-    // anything useful. Wake on the first click into a new pid and re-pick so
-    // the captured PickedElement reflects the now-populated tree.
+    // The AX hit-test may only have found a shallow container: Electron web
+    // content (Slack / VS Code sidebars, messages) isn't exposed to macOS AX, so
+    // `AXUIElementCopyElementAtPosition` returns a top-level element — often the
+    // menu bar at {0,0,W,30} — instead of what the user clicked. Escalate
+    // NON-DISRUPTIVELY: wake the app's AX tree and retry once after a short wait
+    // (AXManualAccessibility frequently exposes a fuller tree). We keep the TRUE
+    // click point no matter what, so `/replicate-ui` can re-resolve the precise
+    // element via the CDP ladder even when AX stays shallow.
     #[cfg(target_os = "macos")]
     {
-        let needs_wake = {
-            let s = app.state::<PickSessionState>();
-            let mut guard = s.0.lock().unwrap();
-            if picked.pid > 0 && !guard.woken_pids.contains(&picked.pid) {
-                guard.woken_pids.insert(picked.pid);
-                true
-            } else {
-                false
-            }
-        };
-        if needs_wake {
-            vibe_extract_core::ax_macos::wake_app_ax(picked.pid);
-            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-            if let Ok(repicked) =
-                vibe_extract_core::picker::pick_under_cursor(Some(point))
+        if picked.ax_shallow && picked.pid > 0 {
+            log::info!(
+                "overlay_click: AX result shallow (role={} doesn't pin the click) — waking pid={} + retrying",
+                picked.role, picked.pid
+            );
             {
-                picked = repicked;
+                let s = app.state::<PickSessionState>();
+                s.0.lock().unwrap().woken_pids.insert(picked.pid);
+            }
+            vibe_extract_core::ax_macos::wake_app_ax(picked.pid);
+            tokio::time::sleep(std::time::Duration::from_millis(220)).await;
+            if let Ok(repicked) = vibe_extract_core::ax_macos::pick_in_app(point, picked.pid) {
+                if !repicked.ax_shallow {
+                    log::info!(
+                        "overlay_click: wake+retry resolved a real element: role={} name=\"{}\"",
+                        repicked.role, repicked.name
+                    );
+                    picked = repicked;
+                } else {
+                    log::info!(
+                        "overlay_click: still shallow after wake+retry — Electron web content not in AX; keeping click point for CDP re-resolve"
+                    );
+                }
             }
         }
+    }
+
+    // Always anchor the committed pick to the TRUE click point. When AX is still
+    // shallow, replace the misleading container bounds (e.g. the menu bar) with a
+    // click-CENTERED box: the overlay highlight + in-app ⌘⇧E export then target
+    // where the user actually clicked (the dispatcher uses `bounds.center()` for
+    // its CDP at-point lookup, which now equals the click), and `/replicate-ui`
+    // re-resolves the precise element via `extract_component` at `click`.
+    picked.click = Some(point);
+    if picked.ax_shallow {
+        let (half_w, half_h) = (90.0_f64, 24.0_f64);
+        picked.bounds = vibe_extract_core::capture::ScreenRect {
+            x: point.x - half_w,
+            y: point.y - half_h,
+            w: half_w * 2.0,
+            h: half_h * 2.0,
+        };
     }
 
     // Same-app constraint when shift-clicking.
@@ -790,6 +886,17 @@ async fn overlay_click(
         }
         s.selected.clone()
     };
+
+    // Persist the current selection so the MCP `get_selection` tool — and thus
+    // `/replicate-ui` — can read exactly what the user picked. Written on every
+    // pick into the shared output dir (the MCP server reads from the same dir).
+    {
+        let dir = app.state::<OutputDir>().inner().0.clone();
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(js) = serde_json::to_string(&new_selected_list) {
+            let _ = std::fs::write(dir.join("last-selection.json"), js);
+        }
+    }
 
     // Push updated outlines to the overlay.
     if let Some(overlay) = app.get_webview_window("overlay") {
@@ -1323,6 +1430,26 @@ struct KnownAppLite {
 /// smaller region. Bound to ↑ / ↓ while pick mode is active.
 #[cfg(target_os = "macos")]
 async fn walk_hover_ancestry(app: AppHandle, go_up: bool) -> Result<(), String> {
+    // For an Electron target the hover is CDP-driven: ↑/↓ just adjust how many
+    // extra DOM-parent steps to widen by, and the hover task re-probes on the
+    // next tick (row → channel list → sidebar, each shown). The AX ancestry walk
+    // below is the native-app path.
+    {
+        let state = app.state::<PickSessionState>();
+        let mut s = state.0.lock().unwrap();
+        if !s.active {
+            return Err("pick mode not active".into());
+        }
+        if s.cdp_port.is_some() {
+            s.widen_level = if go_up {
+                s.widen_level.saturating_add(1)
+            } else {
+                s.widen_level.saturating_sub(1)
+            };
+            log::info!("walk_hover_ancestry(electron): widen_level = {}", s.widen_level);
+            return Ok(());
+        }
+    }
     // Snapshot the current hover so we don't hold the mutex across AX FFI.
     let (target_pid_opt, current) = {
         let state = app.state::<PickSessionState>();
@@ -1388,6 +1515,9 @@ async fn walk_hover_ancestry(app: AppHandle, go_up: bool) -> Result<(), String> 
                 app_path: vibe_extract_core::ax_macos::pid_to_path(pid),
                 window_title: None,
                 window_bounds: parent.enclosing_window().and_then(|w| w.rect()),
+                // Deliberate ↑ ancestry walk — preserve the anchor, not shallow.
+                click: current.click,
+                ax_shallow: false,
             }
         } else {
             // Walk DOWN: find the deepest descendant under the cursor (or the
@@ -1431,6 +1561,9 @@ async fn walk_hover_ancestry(app: AppHandle, go_up: bool) -> Result<(), String> 
                 app_path: vibe_extract_core::ax_macos::pid_to_path(pid),
                 window_title: None,
                 window_bounds: deeper.enclosing_window().and_then(|w| w.rect()),
+                // Deliberate ↓ ancestry walk — preserve the anchor, not shallow.
+                click: current.click,
+                ax_shallow: false,
             }
         }
     };
@@ -1495,6 +1628,10 @@ fn spawn_hover_task(app: AppHandle) {
     let state = app.state::<PickSessionState>().inner().0.clone();
     let our_pid: i32 = std::process::id() as i32;
     tauri::async_runtime::spawn(async move {
+        // Throttle state for the Electron CDP-hover probe (persists across ticks):
+        // last (cursor x, y, widen_level) we probed, and the last outlined box.
+        let mut last_probe: Option<(f64, f64, u32)> = None;
+        let mut last_box: Option<vibe_extract_core::capture::ScreenRect> = None;
         loop {
             // Tick at ~30Hz.
             tokio::time::sleep(std::time::Duration::from_millis(33)).await;
@@ -1509,6 +1646,106 @@ fn spawn_hover_task(app: AppHandle) {
                 if pt.x < 0.0 || pt.y < 0.0 {
                     continue;
                 }
+
+                // --- Electron: drive the highlight from the live DOM (CDP) ------
+                // When the target is an Electron app with a debug port, its real
+                // UI isn't in the AX tree — so probe the DOM at the cursor and
+                // outline the REAL element the user is over (with `widen_level`
+                // extra parent steps from ↑/↓). This makes the highlight truthful;
+                // clicking then commits exactly what's outlined. Skips the AX path.
+                let (cdp_port, target_win, widen_level, tpid) = {
+                    let s = state.lock().unwrap();
+                    (s.cdp_port, s.target_win, s.widen_level, s.target_pid)
+                };
+                if let (Some(port), Some(win)) = (cdp_port, target_win) {
+                    let moved = match last_probe {
+                        Some((lx, ly, lw)) => {
+                            (pt.x - lx).abs() > 3.0 || (pt.y - ly).abs() > 3.0 || lw != widen_level
+                        }
+                        None => true,
+                    };
+                    if moved {
+                        last_probe = Some((pt.x, pt.y, widen_level));
+                        let vx = pt.x - win.x;
+                        let vy = pt.y - win.y;
+                        if vx >= 0.0 && vy >= 0.0 && vx <= win.w && vy <= win.h {
+                            match vibe_extract_core::cdp::probe_at(port, 0, vx, vy, widen_level).await
+                            {
+                                Ok(Some(hit)) => {
+                                    let bounds = vibe_extract_core::capture::ScreenRect {
+                                        x: hit.x + win.x,
+                                        y: hit.y + win.y,
+                                        w: hit.w,
+                                        h: hit.h,
+                                    };
+                                    let label = if hit.label.is_empty() {
+                                        hit.tag.clone()
+                                    } else {
+                                        hit.label.clone()
+                                    };
+                                    let role = if hit.role.is_empty() {
+                                        format!("dom:{}", hit.tag)
+                                    } else {
+                                        hit.role.clone()
+                                    };
+                                    state.lock().unwrap().last_hover = Some(PickedElement {
+                                        role: role.clone(),
+                                        subrole: None,
+                                        name: label.clone(),
+                                        identifier: None,
+                                        bounds,
+                                        pid: tpid.unwrap_or(-1),
+                                        app_path: tpid
+                                            .and_then(vibe_extract_core::ax_macos::pid_to_path),
+                                        window_title: None,
+                                        window_bounds: Some(win),
+                                        click: Some(pt),
+                                        ax_shallow: false,
+                                    });
+                                    last_box = Some(bounds);
+                                    if let Some(overlay) = app.get_webview_window("overlay") {
+                                        let _ = overlay.emit(
+                                            "overlay-hover",
+                                            OverlayHoverPayload {
+                                                bounds: Some(OverlayBounds {
+                                                    x: bounds.x,
+                                                    y: bounds.y,
+                                                    w: bounds.w,
+                                                    h: bounds.h,
+                                                }),
+                                                role,
+                                                name: label,
+                                                cursor: OverlayCursor { x: pt.x, y: pt.y },
+                                            },
+                                        );
+                                    }
+                                }
+                                _ => {
+                                    // No DOM element under the point (or probe
+                                    // failed) — keep the last box, move the cursor.
+                                    if let Some(overlay) = app.get_webview_window("overlay") {
+                                        let _ = overlay.emit(
+                                            "overlay-hover",
+                                            OverlayHoverPayload {
+                                                bounds: last_box.map(|b| OverlayBounds {
+                                                    x: b.x,
+                                                    y: b.y,
+                                                    w: b.w,
+                                                    h: b.h,
+                                                }),
+                                                role: String::new(),
+                                                name: String::new(),
+                                                cursor: OverlayCursor { x: pt.x, y: pt.y },
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 // Get target pid (the app the user was on when they pressed ⌘⇧S).
                 let target_pid_opt = { state.lock().unwrap().target_pid };
                 // First pass — synchronous block so AxElement (non-Send) drops
@@ -1590,6 +1827,12 @@ fn spawn_hover_task(app: AppHandle) {
                                 // Stash a PickedElement so click can use exactly
                                 // what's outlined — no race between hover and click.
                                 if let Some(b) = bounds {
+                                    let ax_shallow = vibe_extract_core::ax_macos::is_shallow_pick(
+                                        &role,
+                                        &b,
+                                        pt,
+                                        window_bounds.as_ref(),
+                                    );
                                     s.last_hover = Some(PickedElement {
                                         role: role.clone(),
                                         subrole: subrole.clone(),
@@ -1600,6 +1843,8 @@ fn spawn_hover_task(app: AppHandle) {
                                         app_path,
                                         window_title,
                                         window_bounds,
+                                        click: Some(pt),
+                                        ax_shallow,
                                     });
                                 }
                                 (needs, ())
@@ -2017,9 +2262,16 @@ pub fn run() {
                 }
             });
 
-            // Optional: auto-start the MCP server (for headless/E2E testing or
-            // users who always want it on). Off unless VIBE_MCP_AUTOSTART is set.
-            if std::env::var_os("VIBE_MCP_AUTOSTART").is_some() {
+            // Auto-start the MCP server on launch — DEFAULT ON so installed users
+            // (office devs) don't have to toggle anything or set an env var: open the
+            // app, grant permissions once, and `/replicate-ui` can connect to
+            // 127.0.0.1:8765 immediately. Opt OUT with VIBE_MCP_NO_AUTOSTART=1 (for
+            // devs who want to start it manually from the UI). The legacy
+            // VIBE_MCP_AUTOSTART=1 still works as an explicit opt-IN and overrides the
+            // opt-out, so existing scripts keep behaving.
+            let opt_out = std::env::var_os("VIBE_MCP_NO_AUTOSTART").is_some();
+            let force_on = std::env::var_os("VIBE_MCP_AUTOSTART").is_some();
+            if force_on || !opt_out {
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     match mcp::start(h).await {

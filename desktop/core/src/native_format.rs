@@ -408,6 +408,8 @@ mod tests {
             app_path: None,
             window_title: None,
             window_bounds: None,
+            click: None,
+            ax_shallow: false,
         }
     }
 

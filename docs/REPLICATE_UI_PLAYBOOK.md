@@ -68,6 +68,16 @@ The agent loop is defined in the **`replicate-ui`** skill
 
 ### `extract_assets` — pixel-perfect real fonts/icons/images (Electron, CDP)
 
+> **Assets are mandatory, never hand-drawn.** `extract_assets` runs on **every** `/replicate-ui`
+> run (skip only when the per-app cache already has them). NEVER hand-draw, approximate, or
+> substitute an icon/image/avatar/font — every one must be a harvested asset, a cached asset, or a
+> pixel-crop of the real element. If a *specific* icon isn't in the harvest, get it exactly: crop
+> its `screenshot_region` (transparent-key the bg) or use its icon-font codepoint + the harvested
+> woff2 — cropping a real glyph always beats drawing one. The bar is **exact assets on the first
+> attempt**: the dev should never have to point out that an icon or colour is wrong. (Likewise,
+> `sample_color` backgrounds at several points — a title bar / header / body can be different
+> shades; don't assume one flat fill.)
+
 For a true pixel match you need the app's **actual** assets, not hand-drawn
 approximations. `extract_assets` drives CDP (`Runtime.evaluate` + `Page.captureScreenshot`)
 against a running Electron app (launched with `--remote-debugging-port`; auto-discovered
@@ -217,6 +227,46 @@ adapts with no code change:
 **Cost:** browser-rendered text can't pixel-match the native sprite, so a dense label band loses
 a little SSIM (Excel headers: 0.957 with the sprite → **~0.918** as real text) — the deliberate
 "real text over image" trade-off. Verify per band; it's the expected floor, not a bug.
+
+## Incremental reuse — similar pages of an app (`_shared/cache.py`)
+
+A real tool has many pages, and pages of the *same* app share their entire chrome — title bar,
+sidebar, toolbar, fonts, icon set. **Pay the full cost once per app; be fast on every page
+after.** That's the point of the per-app cache under `.replicate-ui/<app>/`. At the start of a
+run (SKILL step **2c**), call:
+
+```
+python3 .replicate-ui/_shared/cache.py <app> [win_w win_h]
+```
+
+It reports — and the skill **reuses** — three app-stable artifact classes plus the prior replica:
+
+| Artifact | Where | Why it's stable across pages | Reuse action |
+|---|---|---|---|
+| **Electron assets** (fonts, icon-svgs, images) | `assets/manifest.json` | Same app = same icon set + fonts | **Skip** `relaunch_with_debug_port` + `extract_assets` — the slowest, most disruptive step (it quits the app). Reference the existing `assets/` verbatim. |
+| **Grid header labels** (A..Z / 1..N) | `capture/headers_cache.json` | Positionally fixed for a window size | `gridtext.py` reuses it automatically — no re-OCR. |
+| **Ribbon/toolbar sprites** (AX apps) | `cache/sprites/<hash>.png` | The toolbar doesn't change | Content-addressed (`SpriteCache`): an identical icon re-slices to a cache **hit**, sharing one file. |
+| **Prior verified replica** | `index.html` | A similar page is a small delta | **Start from it** — copy, then diff-edit only the changed regions and re-verify just those. |
+
+**The big win is not the bytes — it's the iterations.** Generating a page from scratch is
+~6 verify loops per component; starting from a verified sibling page and editing only what
+differs is often one or two. And skipping the asset harvest avoids the one step that quits and
+reopens the user's app. Net: page 1 of an app is full cost; pages 2..N are a fraction.
+
+**Adopting `SpriteCache` in a generator** (opt-in, AX apps) — instead of wiping `assets/sprites/`
+and writing N per-page files, content-address each crop so unchanged icons dedup:
+
+```python
+from cache import SpriteCache          # _shared is already on sys.path in the generators
+sc = SpriteCache(HERE)
+rel = sc.put(png_bytes, hint=slug)     # -> "cache/sprites/<hash>.png"; identical crop = same file
+...
+print(sc.stats())                      # {"hits":.., "misses":.., "reuse_pct":..}
+```
+
+**General, never per-app:** the cache keys off the working-dir name and the manifests the existing
+tools already write. No app names, ranges, or counts are hardcoded — a brand-new app simply
+reports "first page, full cost" and populates the cache as it goes.
 
 ## The coordinate / scale contract (read this)
 

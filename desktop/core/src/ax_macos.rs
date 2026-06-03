@@ -528,6 +528,7 @@ pub fn pick_in_app(point: ScreenPoint, app_pid: i32) -> Result<PickedElement> {
         None => (None, None),
     };
     let app_path = pid_to_path(app_pid);
+    let ax_shallow = is_shallow_pick(&role, &bounds, point, window_bounds.as_ref());
     Ok(PickedElement {
         role,
         subrole,
@@ -538,6 +539,8 @@ pub fn pick_in_app(point: ScreenPoint, app_pid: i32) -> Result<PickedElement> {
         app_path,
         window_title,
         window_bounds,
+        click: Some(point),
+        ax_shallow,
     })
 }
 
@@ -593,6 +596,42 @@ pub fn deepen_at(start: AxElement, point: ScreenPoint) -> AxElement {
     current
 }
 
+/// Heuristic: did the AX hit-test fail to land on a real content element the
+/// user could have meant? True when the resolved element can't be the click
+/// target — its bounds don't contain the click, or it's a top-level container
+/// (menu bar / application / whole window) that Electron returns when its web
+/// content isn't exposed to AX (so `AXUIElementCopyElementAtPosition` yields the
+/// `AXMenuBar` at `{0,0,W,30}` instead of the clicked sidebar/message). Such a
+/// result must NOT be committed as the pick: the caller keeps the click point
+/// and re-resolves at it via the CDP ladder.
+pub fn is_shallow_pick(
+    role: &str,
+    bounds: &ScreenRect,
+    click: ScreenPoint,
+    window_bounds: Option<&ScreenRect>,
+) -> bool {
+    // The element doesn't even cover where the user clicked.
+    if !bounds.contains(click) {
+        return true;
+    }
+    // Top-level containers are never the intended target of a content click.
+    if matches!(
+        role,
+        "AXMenuBar" | "AXMenuBarItem" | "AXApplication" | "AXWindow"
+    ) {
+        return true;
+    }
+    // The element is ~the whole window → no content leaf was found (shallow tree).
+    if let Some(win) = window_bounds {
+        let win_area = win.w * win.h;
+        let el_area = bounds.w * bounds.h;
+        if win_area > 0.0 && el_area >= 0.9 * win_area {
+            return true;
+        }
+    }
+    false
+}
+
 /// Hit-test at `point`, walk to enclosing window, capture metadata.
 ///
 /// Excludes the calling process from the hit-test (so e.g. our own overlay
@@ -628,6 +667,7 @@ pub fn pick(point: ScreenPoint) -> Result<PickedElement> {
 
     // Look up the process path via /proc-equivalent on macOS (libproc).
     let app_path = pid_to_path(pid);
+    let ax_shallow = is_shallow_pick(&role, &bounds, point, window_bounds.as_ref());
 
     Ok(PickedElement {
         role,
@@ -639,6 +679,8 @@ pub fn pick(point: ScreenPoint) -> Result<PickedElement> {
         app_path,
         window_title,
         window_bounds,
+        click: Some(point),
+        ax_shallow,
     })
 }
 
@@ -857,4 +899,38 @@ pub fn window_palette(pid: i32, max_depth: u32) -> Result<Vec<(u8, u8, u8)>> {
     let mut palette = Vec::new();
     crate::sampling::collect_palette(&node, &mut palette);
     Ok(palette)
+}
+
+#[cfg(test)]
+mod shallow_tests {
+    use super::is_shallow_pick;
+    use crate::capture::{ScreenPoint, ScreenRect};
+
+    #[test]
+    fn menu_bar_is_shallow_even_when_it_contains_the_click() {
+        // The exact bug: a Slack sidebar click resolves to the menu bar strip.
+        let menubar = ScreenRect { x: 0.0, y: 0.0, w: 1440.0, h: 30.0 };
+        assert!(is_shallow_pick("AXMenuBar", &menubar, ScreenPoint { x: 700.0, y: 10.0 }, None));
+    }
+
+    #[test]
+    fn click_outside_bounds_is_shallow() {
+        let menubar = ScreenRect { x: 0.0, y: 0.0, w: 1440.0, h: 30.0 };
+        // sidebar click far below the menu bar — bounds don't contain it.
+        assert!(is_shallow_pick("AXMenuBar", &menubar, ScreenPoint { x: 150.0, y: 400.0 }, None));
+    }
+
+    #[test]
+    fn real_button_containing_click_is_not_shallow() {
+        let btn = ScreenRect { x: 100.0, y: 380.0, w: 220.0, h: 34.0 };
+        let win = ScreenRect { x: 0.0, y: 25.0, w: 1440.0, h: 875.0 };
+        assert!(!is_shallow_pick("AXButton", &btn, ScreenPoint { x: 150.0, y: 400.0 }, Some(&win)));
+    }
+
+    #[test]
+    fn whole_window_sized_element_is_shallow() {
+        let win = ScreenRect { x: 0.0, y: 25.0, w: 1440.0, h: 875.0 };
+        let huge = ScreenRect { x: 0.0, y: 25.0, w: 1440.0, h: 870.0 }; // ~entire window
+        assert!(is_shallow_pick("AXGroup", &huge, ScreenPoint { x: 150.0, y: 400.0 }, Some(&win)));
+    }
 }

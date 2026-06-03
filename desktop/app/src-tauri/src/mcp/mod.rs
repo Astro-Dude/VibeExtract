@@ -97,6 +97,30 @@ impl VibeExtractMcp {
         ok_value(json!({ "trusted": ax_trusted() }))
     }
 
+    #[tool(description = "Get the component(s) the user picked in the desktop app (press ⌘⇧S on the target app, then click an element; ⇧+click adds more). Returns the LAST pick's elements — role, name, bounds (points, top-left), pid, `click` (the exact {x,y} screen point clicked), and `ax_shallow` — plus `age_seconds` (how long ago it was picked). USE THIS at the start of /replicate-ui: if `present` is true, replicate ONLY the selected component(s); if false/empty, replicate the whole window. IMPORTANT: when an element's `ax_shallow` is true (or role is AXMenuBar/AXApplication/AXWindow), the native AX tree couldn't see the real element (typical for Electron apps like Slack/VS Code) — do NOT trust `bounds`/`role`; instead call `extract_component { x: click.x, y: click.y }` (the CDP→AX→screenshot ladder) to resolve the real element, and use its returned bounds for screenshot_region. Otherwise use `bounds` directly.")]
+    async fn get_selection(&self) -> Result<CallToolResult, ErrorData> {
+        let path = self.output_dir().join("last-selection.json");
+        match std::fs::read_to_string(&path) {
+            Ok(s) => {
+                let elements: serde_json::Value =
+                    serde_json::from_str(&s).unwrap_or_else(|_| json!([]));
+                let count = elements.as_array().map(|a| a.len()).unwrap_or(0);
+                let age_seconds = std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| d.as_secs());
+                ok_value(json!({
+                    "present": count > 0,
+                    "count": count,
+                    "age_seconds": age_seconds,
+                    "elements": elements,
+                }))
+            }
+            Err(_) => ok_value(json!({ "present": false, "count": 0, "elements": [] })),
+        }
+    }
+
     #[tool(
         description = "Open System Settings → Privacy → Accessibility so the user can grant VibeExtract access. Returns the current trusted state."
     )]
@@ -739,6 +763,7 @@ mod tests {
             .collect();
         for expected in [
             "check_ax_permission",
+            "get_selection",
             "request_ax_permission",
             "frontmost_app",
             "list_windows",
