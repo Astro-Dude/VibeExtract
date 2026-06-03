@@ -21,19 +21,17 @@ replica-*.png
 combo-output.*
 native-output.*
 
-# .replicate-ui: TRACK the reusable skill infra (_shared/ helpers + the per-app
-# generator scripts) so /replicate-ui works on a fresh clone, but IGNORE the
-# generated replica OUTPUTS (per-app index.html, harvested assets, captures,
-# sprite cache) — those are re-created by extract_assets / the generators.
-.replicate-ui/*/index.html
-.replicate-ui/*/index-*.html
-.replicate-ui/*/assets/
-.replicate-ui/*/capture/
-.replicate-ui/*/cache/
-.replicate-ui/*/img/
-.replicate-ui/**/__pycache__/
-# compiled Vision OCR binary (gridtext.py rebuilds it from vision_ocr.swift)
-.replicate-ui/_shared/vision_ocr
+# .replicate-ui/ is PURE SCRATCH — per-extraction working dirs + generated replica
+# outputs (index.html, harvested assets, captures, sprite cache) + local per-app dev
+# examples. The reusable toolkit now lives INSIDE the skill
+# (.claude/skills/replicate-ui/_shared/), so nothing here needs tracking; deleting
+# the whole folder loses nothing but caching speed.
+.replicate-ui/
+
+# Skill toolkit: ship the source, but ignore generated artifacts —
+# the compiled Vision OCR binary (gridtext.py rebuilds it) and Python caches.
+.claude/skills/replicate-ui/_shared/vision_ocr
+**/__pycache__/
 
 # Generated Tauri icon set — regenerate with `cargo tauri icon` (build-dmg.sh does
 # this). The .icns/.ico/platform dirs aren't committed; the source icon.png is.

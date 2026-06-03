@@ -45,6 +45,17 @@ The agent loop is defined in the **`replicate-ui`** skill
 - **Image diff** — pure-Rust SSIM/MAE + heatmap in `vibe-extract-core::image_diff`
   (reuses the `image` crate). Resizes both inputs to a common canvas so device-px
   native shots compare cleanly against CSS-px replica renders.
+- **Distribution & layout (important).** A dev gets only two things: the **app** (the MCP
+  server; `contentScript.js`/`assetHarvester.js` are embedded into it at build time) and the
+  **`/replicate-ui` skill**. The skill is **self-contained**: the *only* shared code is its
+  bundled `_shared/` toolkit — `role-map.json`, `markup.py` (role→HTML), `interactive.css`,
+  `sprite.py` + `cache.py` (sprite slicing/dedup + reuse cache), `gridtext.py` + `vision_ocr.swift`
+  (grid labels). **There is no per-app code in the product.** The method (harvest → inventory →
+  generate → verify) is identical for every app; for one extraction you write the HTML directly or
+  a single throwaway generator that imports `_shared/`. Everything an extraction produces lives in
+  **`.replicate-ui/<app>/`** in the working dir — **gitignored, regenerable scratch; deleting it
+  loses nothing but caching speed.** The per-app folders in *this* repo (`excel/`, `acrobat/`,
+  `slack/`, …) are **local dev examples** of that scratch — not shipped, not required, not the model.
 
 ## Tool reference (`vibe-extract`)
 
@@ -109,7 +120,7 @@ individual, real, focusable element**, chosen by its accessibility **role**. Thi
 **platform-agnostic**: one shared map serves AX-sourced (desktop) *and* DOM-sourced
 (Electron) replicas — never special-case per app.
 
-- **`.replicate-ui/_shared/role-map.json`** — the single source of truth, keyed by
+- **`_shared/role-map.json`** — the single source of truth, keyed by
   macOS **AX roles** and the equivalent **ARIA/DOM roles**. Each build script picks the
   tag by the source node's role and fills it with the captured content (sprite icon,
   inline SVG, text, value):
@@ -142,19 +153,20 @@ individual, real, focusable element**, chosen by its accessibility **role**. Thi
     menu opener like the `⋯` overflow button whole (no gap → no split). For tall split
     buttons whose label fills the columns, fall back to a right-edge caret overlay.
 
-- **`.replicate-ui/_shared/interactive.css`** — inlined by every generator. An
+- **`_shared/interactive.css`** — inlined by every generator. An
   element/role-based reset (no UA chrome on `<button>`/`<input>`) so wrapping a sprite
   in a real control is a **pixel no-op**, plus `cursor`/`:hover`/`:active`/`:focus-visible`
   and `[aria-pressed=true]`. **No JS** (static clone): set `aria-selected`/`aria-pressed`
   at build time.
 
-Reference implementations: `.replicate-ui/excel/build.py` (AX → role-driven `<button>`s,
-sprite inside), `.replicate-ui/slack/build.mjs` (DOM containers → `<button>` /
-`role="tab"`, real SVG inside), and `.replicate-ui/acrobat/build.py` (AX-opaque native →
-screenshot-only: roles inferred visually, bounds pixel-measured, glyphs + illustration
-sliced as sprites, real on-disk font `@font-face`-d). All three consume the same
-`_shared/` map + css — the role→element layer is identical whether the role comes from the
-AX tree, the DOM, or visual inference.
+Worked examples (local dev scratch in this repo — **gitignored, not shipped, not required**; they
+just illustrate the method): `excel/build.py` (AX → role-driven `<button>`s, sprite inside),
+`slack/build.mjs` (DOM containers → `<button>` / `role="tab"`, real SVG inside), and
+`acrobat/build.py` (AX-opaque native → screenshot-only: roles inferred visually, bounds
+pixel-measured, glyphs + illustration sliced as sprites, real on-disk font `@font-face`-d). All
+three consume the same `_shared/` map + css — the role→element layer is identical whether the role
+comes from the AX tree, the DOM, or visual inference. For a new app you don't copy these; you apply
+the method, calling `_shared/markup.py` (role→tag) + `_shared/sprite.py` (slice) directly.
 
 ## Layout: nested hierarchy + normal flow (not a flat `position:absolute` canvas)
 
@@ -187,9 +199,10 @@ the Acrobat Home replica is 0.965 absolute → **0.956** in flow (content 0.97, 
 — the dense-small-text rasterizer floor). Verify per region with `compare_images` and
 nudge `gap`/`margin`/`padding` until each region holds (target ≈0.96, floor ≥0.92).
 
-Reference models (all nest + flow with the same shared map): **Slack `build.mjs`** (DOM-sourced),
-**Acrobat `build.py`** (screenshot-sourced, AX-opaque), and **Excel `build.py`** (AX-sourced, the
-densest — ~120 controls in 9 ribbon groups; `0.97` absolute → **`0.957`** in flow). Excel uses a
+Worked examples (local dev scratch — gitignored, not shipped; the technique, not the files, is what
+transfers): **Slack `build.mjs`** (DOM-sourced), **Acrobat `build.py`** (screenshot-sourced,
+AX-opaque), and **Excel `build.py`** (AX-sourced, the densest — ~120 controls in 9 ribbon groups;
+`0.97` absolute → **`0.957`** in flow). Excel uses a
 tiny recursive renderer that turns each container's child x/y deltas into flow `margin-left/top`
 (reproducing exact positions with zero absolute), and is the canonical example of nested ribbon
 groups (`<section class="group …">` → row/col of rows) and the one sanctioned overlay (the A1
@@ -203,7 +216,7 @@ Slack's 4 remaining topbar absolute anchors; `postman/` has an `index.html` but 
 
 When a region is a **grid of labels baked into one image** (a spreadsheet's column letters /
 row numbers, a timeline's dates, …), turn it into **real, individual text cells** — never a
-sprite. The mechanism is shared + platform-agnostic (`.replicate-ui/_shared/gridtext.py`,
+sprite. The mechanism is shared + platform-agnostic (`_shared/gridtext.py`,
 used by Excel's headers; available to every replica). **Nothing is hardcoded** — range, cell
 sizes *and* label values are derived from the capture each run, so a scrolled/resized sheet
 adapts with no code change:
@@ -236,7 +249,7 @@ after.** That's the point of the per-app cache under `.replicate-ui/<app>/`. At 
 run (SKILL step **2c**), call:
 
 ```
-python3 .replicate-ui/_shared/cache.py <app> [win_w win_h]
+python3 _shared/cache.py <app> [win_w win_h]
 ```
 
 It reports — and the skill **reuses** — three app-stable artifact classes plus the prior replica:
@@ -253,15 +266,19 @@ It reports — and the skill **reuses** — three app-stable artifact classes pl
 differs is often one or two. And skipping the asset harvest avoids the one step that quits and
 reopens the user's app. Net: page 1 of an app is full cost; pages 2..N are a fraction.
 
-**Adopting `SpriteCache` in a generator** (opt-in, AX apps) — instead of wiping `assets/sprites/`
-and writing N per-page files, content-address each crop so unchanged icons dedup:
+**Slicing sprites for an AX / screenshot-only app** — use the toolkit's `sprite.SpriteSlicer`
+(it wraps `cache.SpriteCache`, so identical icons across pages content-address to one file). Put
+`_shared/` on `sys.path` (the skill knows its base dir), then:
 
 ```python
-from cache import SpriteCache          # _shared is already on sys.path in the generators
-sc = SpriteCache(HERE)
-rel = sc.put(png_bytes, hint=slug)     # -> "cache/sprites/<hash>.png"; identical crop = same file
+import sys; sys.path.insert(0, "<skill-base>/_shared")
+import markup                                   # role -> semantic tag
+from sprite import SpriteSlicer                 # crop real pixels -> deduped PNG
+sl = SpriteSlicer("capture/window.png", out_root=".replicate-ui/<app>", scale=scale, origin=win_origin)
+rel = sl.slice("bold", x, y, w, h)              # -> "cache/sprites/<hash>.png"; identical crop = same file
+html = markup.el("AXButton", inner=f'<img src="{rel}">', cls="iconbtn", extra_attrs={"aria-label": "Bold"})
 ...
-print(sc.stats())                      # {"hits":.., "misses":.., "reuse_pct":..}
+print(sl.stats())                               # {"hits":.., "misses":.., "reuse_pct":..}
 ```
 
 **General, never per-app:** the cache keys off the working-dir name and the manifests the existing
@@ -337,8 +354,8 @@ reports "first page, full cost" and populates the cache as it goes.
   `/Library/Application Support/Adobe/Acrobat/DC/WebResources/Resource1/app1/fonts/*.otf`;
   copy the weights you need into the replica and `@font-face` them. The real font alone
   turns text-width "doubling" in dense regions into a match (Acrobat sidebar 0.84 → 0.87,
-  content 0.98, whole window 0.96). `.replicate-ui/acrobat/build.py` is the reference for
-  this case — same shared `_shared/role-map.json` machinery, roles inferred visually.
+  content 0.98, whole window 0.96). The `acrobat/` example (dev scratch) shows this case —
+  same shared `_shared/role-map.json` machinery, roles inferred visually.
 - **Low `compare_images` score on a good replica** — you probably rendered at
   device pixels; render at **point** size and let the diff resize.
 - **Playwright hangs on first run** — run `npx playwright install chromium`.

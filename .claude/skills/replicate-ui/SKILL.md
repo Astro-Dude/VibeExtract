@@ -15,6 +15,29 @@ missing, tell the user to open the VibeExtract app and click **Start MCP server*
 then `claude mcp add --transport http vibe-extract <url>`. See
 `docs/REPLICATE_UI_PLAYBOOK.md` for full setup.
 
+## The toolkit & where things live (read once)
+There is **ONE common toolkit, no per-app code.** It ships *inside this skill* at
+`_shared/` (the **Base directory for this skill** shown at the top of this prompt) — so it
+travels with the skill on any machine, with or without this repo:
+- `role-map.json` + `markup.py` — AX/ARIA role → semantic HTML tag/attrs (`markup.role_el`,
+  `markup.el`, `markup.attrs_str`).
+- `interactive.css` — the button/input reset + hover/focus/active.
+- `sprite.py` (`SpriteSlicer`) + `cache.py` (`SpriteCache`) — crop real pixels into deduped
+  icon sprites (for AX / screenshot-only apps); `cache.py` is also the reuse-cache CLI.
+- `gridtext.py` (+ `vision_ocr.swift`) — baked grid labels → real text (AX→OCR→repair).
+
+Reference it **by the skill's base path**, e.g. `python3 "<skill-base>/_shared/cache.py" …`;
+below, `_shared/…` is shorthand for that. **There are no app-specific scripts to locate** — the
+method (harvest → inventory → generate → verify) is identical for *every* app; for a given
+extraction you generate the HTML directly, or write one **thin throwaway generator** into the
+output dir that imports this toolkit.
+
+**Outputs are scratch.** Everything you produce for an extraction — the replica `index.html`,
+harvested `assets/`, screenshots/captures, sprite `cache/`, and any generator you write — lives
+in **`.replicate-ui/<app>/`** in the current working directory. That folder is gitignored and
+fully regenerable: **deleting it loses nothing but caching speed.** The only thing that must
+persist is the skill (with its `_shared/`).
+
 ## The golden rule: coordinates & scale
 - All AX bounds and screenshot inputs are in **points**, top-left origin.
 - Native screenshots come back at **device pixels** (Retina ≈ 2× points). Each
@@ -59,7 +82,7 @@ then `claude mcp add --transport http vibe-extract <url>`. See
 2c. **Reuse check — similar page of an app you've done before?** Apps with many pages
    (a 10-screen tool) share identical chrome, fonts, icons, and toolbar across pages — only
    the content/layout differs. Before paying full cost, run
-   `python3 .replicate-ui/_shared/cache.py <app> [win_w win_h]` (app = the working-dir name,
+   `python3 "<skill-base>/_shared/cache.py" <app> [win_w win_h]` (app = the working-dir name,
    e.g. `slack`). It reports what's already cached and reusable:
    - **assets** (`assets/manifest.json`) present → **REUSE verbatim**; SKIP
      `relaunch_with_debug_port` + `extract_assets` entirely (the slowest, most disruptive step —
@@ -144,13 +167,13 @@ then `claude mcp add --transport http vibe-extract <url>`. See
    **Emit SEMANTIC, interactive markup — never one flat image or all `<div>`s.**
    Every control is an *individual, real, focusable element* chosen by its
    accessibility **role**, mapped through the shared, platform-agnostic
-   `.replicate-ui/_shared/role-map.json` (AX roles *and* ARIA/DOM roles → tag):
+   `_shared/role-map.json` (via `_shared/markup.py`'s `role_el`/`el`; AX roles *and* ARIA/DOM roles → tag):
    `AXButton`/`AXMenuButton`/`AXCheckBox` → `<button>` (with `aria-haspopup` /
    `aria-pressed`); a radio in a tab group → `<button role="tab" aria-selected>`;
    `AXComboBox` → `role="combobox"` + `<input>`; `AXTextField`/`AXSearchField` →
    `<input type=text|search>`; `AXSlider` → `role="slider"`; `AXStaticText` →
    `<span>`. The icon artwork (sprite PNG for AX apps, inline SVG for Electron)
-   goes **inside** the real control. Inline `.replicate-ui/_shared/interactive.css`
+   goes **inside** the real control. Inline `_shared/interactive.css`
    for the button/input reset (so wrapping is a pixel no-op) + hover/focus/active.
    This is **platform-agnostic** — drive it from the role, never special-case per
    app. Static clone: set `aria-selected`/`aria-pressed` at build time; no JS.
@@ -170,13 +193,16 @@ then `claude mcp add --transport http vibe-extract <url>`. See
    `gap`s fall inward) and **re-anchor long vertical lists per-section with an explicit
    `margin-top`** (so flex rounding resets per section instead of accumulating).
    Center text with the row container's `align-items:center` + leaf `line-height:1`
-   (font-metric-robust; avoids per-element vertical offsets). Reference models — Slack
-   `build.mjs` (DOM), Acrobat `build.py` (screenshot/AX-opaque), Excel `build.py` (AX, the
-   densest: 9 nested ribbon groups, a recursive x/y→margin renderer, one A1 overlay) — all
-   nest + flow with the same shared map; see the playbook.
+   (font-metric-robust; avoids per-element vertical offsets). These techniques are
+   **app-agnostic** — a DOM-sourced app (Slack), a screenshot/AX-opaque one (Acrobat), and a
+   dense AX one (Excel: nested ribbon groups, a recursive x/y→margin renderer, one A1 overlay)
+   all nest + flow through the same `_shared/markup.py` + `role-map.json`. There are **no
+   per-app generators to copy**: apply the method here, writing the HTML directly or via one
+   throwaway generator in the output dir that imports the toolkit. See the playbook for worked
+   patterns.
 
    **Grid labels (column letters / row numbers / a date strip baked into one image) →
-   REAL TEXT, never a sprite.** Use the shared `.replicate-ui/_shared/gridtext.py` (AX →
+   REAL TEXT, never a sprite.** Use the shared `_shared/gridtext.py` (AX →
    OCR → sequence-repair): detect the range + cell sizes from the capture's gridlines
    (never hardcode the count), get each label from AX if exposed else OCR each cell (macOS
    Vision via `_shared/vision_ocr.swift`) and repair with a `kind` (alpha/numeric) — OCR

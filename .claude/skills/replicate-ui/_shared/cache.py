@@ -39,14 +39,19 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPLICATE_ROOT = os.path.dirname(HERE)  # the .replicate-ui directory
 
 
 def app_root(app_or_path: str) -> str:
-    """Resolve an app name ('slack') or a path to its `.replicate-ui/<app>` dir."""
-    if os.path.isdir(app_or_path):
+    """Resolve an app's OUTPUT directory.
+
+    A path (or an existing dir) is used as-is; a bare name like `slack` resolves to
+    the gitignored working area `<cwd>/.replicate-ui/<name>`. This is **decoupled
+    from where this `_shared/` toolkit lives** — the toolkit ships *inside the skill*
+    (`.claude/skills/replicate-ui/_shared/`), while replica outputs live next to the
+    user's working dir. So we anchor on the CWD, never on `__file__`."""
+    if os.path.sep in app_or_path or os.path.isdir(app_or_path):
         return os.path.abspath(app_or_path)
-    return os.path.join(REPLICATE_ROOT, app_or_path)
+    return os.path.join(os.getcwd(), ".replicate-ui", app_or_path)
 
 
 def _age_days(path: str):

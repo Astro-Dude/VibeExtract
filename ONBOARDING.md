@@ -10,9 +10,10 @@ Two pieces work together:
 1. **The VibeExtract app** (`VibeExtract Desktop.app`) — a tray/desktop app that reads the native
    UI and runs a small local **MCP server** on `127.0.0.1:8765`. It also owns the global hotkeys
    for picking a component.
-2. **The `/replicate-ui` skill + shared helpers** (this repo) — the Claude Code skill that drives
-   the perceive → generate → verify loop, plus `.replicate-ui/_shared/` (role map, CSS reset,
-   grid-text OCR, the reuse cache).
+2. **The `/replicate-ui` skill** — a **self-contained** Claude Code skill that drives the
+   perceive → generate → verify loop. It **bundles its own toolkit** in `_shared/` (role map +
+   role→HTML helpers, CSS reset, sprite slicer, grid-text OCR, the reuse cache), so it works on
+   any machine **without this repo**.
 
 ---
 
@@ -50,20 +51,26 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8765/mcp   # 406 = up 
 `406` means the server is running (it only speaks the MCP protocol). To disable autostart for
 local debugging, launch with `VIBE_MCP_NO_AUTOSTART=1`.
 
-## 4. Set up the skill workspace
+## 4. Install the skill (no repo clone needed)
 
-Clone/copy **this repo** to where you'll do replica work — it carries the skill, the shared
-helpers, and the MCP registration:
+The skill is **self-contained** — it carries its whole toolkit in `_shared/`. You do **not** need
+this repo or any per-app scripts.
 
-- `.claude/skills/replicate-ui/SKILL.md` — the skill (auto-discovered when Claude Code runs in
-  this folder; or copy it to `~/.claude/skills/` to use it everywhere).
-- `.replicate-ui/_shared/` — `role-map.json`, `interactive.css`, `gridtext.py`, `vision_ocr`,
-  `cache.py` (the reuse cache). The generators reference these by relative path.
-- `.mcp.json` — registers **both** MCP servers Claude needs:
+1. Copy the **`replicate-ui/` skill folder** into your Claude Code skills directory:
+   - globally → `~/.claude/skills/replicate-ui/` (usable from every project), or
+   - per-project → `<your-project>/.claude/skills/replicate-ui/`.
+
+   It contains `SKILL.md` + `_shared/` (`role-map.json`, `interactive.css`, `markup.py`,
+   `sprite.py`, `gridtext.py`, `vision_ocr.swift`, `cache.py`) — everything the skill needs.
+2. Register the two MCP servers Claude uses — add a `.mcp.json` to your project (or `claude mcp add`):
   - `vibe-extract` → `http://127.0.0.1:8765/mcp` (the app)
   - `playwright` → headless Chromium for rendering replicas (`npx @playwright/mcp`)
 
   Edit the playwright `--output-dir` in `.mcp.json` to a path on **your** machine.
+
+> **Outputs are scratch.** Each replica (its `index.html`, harvested `assets/`, screenshots, sprite
+> cache) is written to `.replicate-ui/<app>/` in your current working directory. Gitignore it and
+> delete it anytime — it's fully regenerable; only the skill (with `_shared/`) needs to persist.
 
 Register the servers (if not picked up from `.mcp.json` automatically):
 
@@ -118,11 +125,11 @@ picked also arms pick mode.)
 The **first** page of an app pays full cost (harvest assets, OCR any grid labels, verify every
 component). **Pages 2..N of the same app reuse** the cached fonts/icons/images, grid labels, and
 toolbar sprites, and **start from the previous verified page** — so they're much quicker. You
-don't do anything special; the skill checks the cache (`.replicate-ui/_shared/cache.py`)
+don't do anything special; the skill checks the cache (its bundled `_shared/cache.py`)
 automatically. To see what's cached for an app:
 
 ```bash
-python3 .replicate-ui/_shared/cache.py <app>     # e.g. slack
+python3 ~/.claude/skills/replicate-ui/_shared/cache.py <app>     # e.g. slack
 ```
 
 ---
