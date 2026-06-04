@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>VibeExtract — Restart in debug mode?</title>
+  <style>
+    :root {
+      --bg-0: #050a1f;
+      --bg-1: #0a1438;
+      --surface: rgba(255,255,255,0.06);
+      --border-soft: rgba(186,230,253,0.12);
+      --royal: #2563eb;
+      --sky: #38bdf8;
+      --cyan: #67e8f9;
+      --text: #f0f9ff;
+      --text-dim: #cbd5f0;
+      --text-muted: #8794b8;
+      --danger: #fb7185;
+      --iridescent: linear-gradient(135deg, var(--royal) 0%, var(--sky) 50%, var(--cyan) 100%);
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: transparent;
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+      font-size: 13.5px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 14px;
+      box-sizing: border-box;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 520px;
+      background: linear-gradient(180deg, rgba(10,20,56,0.96) 0%, rgba(5,10,31,0.96) 100%);
+      border: 1px solid var(--border-soft);
+      border-radius: 14px;
+      padding: 22px 24px 18px 24px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(56,189,248,0.18);
+      backdrop-filter: blur(20px);
+    }
+
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.1px;
+      background: var(--iridescent);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .question {
+      color: var(--text-dim);
+      line-height: 1.55;
+      margin: 0 0 6px 0;
+    }
+
+    .question strong {
+      color: var(--text);
+    }
+
+    .why {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin: 10px 0 16px 0;
+      line-height: 1.5;
+      padding: 10px 12px;
+      background: var(--surface);
+      border-left: 2px solid var(--sky);
+      border-radius: 0 6px 6px 0;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 16px 0;
+      font-size: 12.5px;
+      color: var(--text-dim);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .checkbox-row input {
+      accent-color: var(--sky);
+      width: 14px;
+      height: 14px;
+    }
+
+    .buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    button {
+      font: inherit;
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 120ms ease;
+    }
+
+    button.cancel {
+      background: var(--surface);
+      border-color: var(--border-soft);
+      color: var(--text-dim);
+    }
+
+    button.cancel:hover {
+      background: rgba(255,255,255,0.10);
+      color: var(--text);
+    }
+
+    button.primary {
+      background: var(--iridescent);
+      color: #061021;
+      font-weight: 600;
+      border-color: rgba(255,255,255,0.18);
+      box-shadow: 0 4px 14px rgba(56,189,248,0.35);
+    }
+
+    button.primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 20px rgba(56,189,248,0.45);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    /* Progress view — shown after the user clicks Restart, replaces the
+       question/buttons until quit_and_relaunch returns. */
+    .progress-view { display: none; }
+    .progress-view.active { display: block; }
+    .question-view.hidden { display: none; }
+
+    .progress-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin: 10px 0 4px 0;
+    }
+    .spinner {
+      width: 22px;
+      height: 22px;
+      border: 2px solid rgba(255,255,255,0.12);
+      border-top-color: var(--sky);
+      border-right-color: var(--cyan);
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+      flex-shrink: 0;
+    }
+    .spinner.done {
+      animation: none;
+      border-color: var(--sky);
+      background: var(--sky);
+      position: relative;
+    }
+    .spinner.done::after {
+      content: "";
+      position: absolute;
+      left: 6px; top: 3px;
+      width: 5px; height: 11px;
+      border: solid #061021;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .progress-phase {
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.1px;
+    }
+    .progress-elapsed {
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-muted);
+      font-size: 11.5px;
+    }
+    .progress-detail {
+      color: var(--text-muted);
+      font-size: 12px;
+      margin: 0 0 4px 36px;
+      line-height: 1.4;
+      min-height: 16px;
+    }
+    .progress-bar {
+      height: 3px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 2px;
+      overflow: hidden;
+      margin: 14px 0 4px 0;
+    }
+    .progress-bar > div {
+      height: 100%;
+      width: 0%;
+      background: var(--iridescent);
+      transition: width 250ms ease;
+      box-shadow: 0 0 8px rgba(56,189,248,0.5);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="title">Restart in debug mode?</h1>
+
+    <div class="question-view" id="question-view">
+      <p class="question" id="question">Loading…</p>
+      <p class="why" id="why">
+        Pixel-perfect HTML+CSS needs Chromium's DevTools API to be available.
+        VibeExtract will quit the app gently (your drafts are preserved), reopen
+        it with the debug flag, then bring you back to pick mode.
+      </p>
+      <label class="checkbox-row">
+        <input type="checkbox" id="dont-ask">
+        <span id="dont-ask-label">Don't ask again for this app</span>
+      </label>
+      <div class="buttons">
+        <button class="cancel" id="cancel-btn">Cancel</button>
+        <button class="primary" id="restart-btn">Restart</button>
+      </div>
+    </div>
+
+    <div class="progress-view" id="progress-view">
+      <div class="progress-row">
+        <div class="spinner" id="spinner"></div>
+        <span class="progress-phase" id="progress-phase">Quitting app…</span>
+        <span class="progress-elapsed" id="progress-elapsed">0.0s</span>
+      </div>
+      <p class="progress-detail" id="progress-detail">
+        Sending an AppleScript quit so any unsaved drafts are saved cleanly.
+      </p>
+      <div class="progress-bar"><div id="progress-fill"></div></div>
+    </div>
+  </div>
+
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+
+    const $ = (id) => document.getElementById(id);
+    let info = { display_name: 'this app', bundle_id: '', known: false };
+
+    // Apply the active dialog's info to the UI. Called from both the initial
+    // `load()` (in case the dialog was opened before this script attached its
+    // event listeners) AND from the `relaunch-dialog-show` event listener
+    // (the path that fires every subsequent time the dialog is reopened).
+    function applyDialogInfo(next) {
+      info = next || info;
+      const name = (info && info.display_name) || 'this app';
+      $('title').textContent = info && info.known
+        ? `Restart ${name} in debug mode?`
+        : `${name} looks like an Electron app — restart in debug mode?`;
+      $('question').innerHTML = info && info.known
+        ? `<strong>${escape(name)}</strong> needs to restart so VibeExtract can capture pixel-perfect HTML+CSS instead of a structural skeleton.`
+        : `VibeExtract believes <strong>${escape(name)}</strong> is built on Electron. Restart it in debug mode for pixel-perfect capture?`;
+      $('dont-ask-label').textContent = `Don't ask again for ${name}`;
+    }
+
+    // Reset UI to the question view (used when the dialog reopens after a
+    // previous restart cycle — we don't want to land in progress view from
+    // last time).
+    function resetToQuestionView() {
+      $('question-view').classList.remove('hidden');
+      $('progress-view').classList.remove('active');
+      $('dont-ask').checked = false;
+      $('spinner').classList.remove('done');
+      $('progress-fill').style.width = '0%';
+      $('progress-elapsed').textContent = '0.0s';
+      window.__veRelaunchStart = null;
+    }
+
+    async function load() {
+      // Best-effort initial fetch — only succeeds if the dialog window was
+      // shown WITH pending state already set, which never happens at app
+      // launch (window is created visible:false before any pick session).
+      // Safe to ignore the error — the persistent listener below picks up
+      // every real open.
+      try {
+        const initial = await invoke('get_relaunch_dialog_info');
+        applyDialogInfo(initial);
+      } catch (e) {
+        // No pending dialog yet — fine. Wait for the event.
+      }
+    }
+
+    function escape(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    async function respond(accept, dontAsk) {
+      try {
+        await invoke('relaunch_dialog_response', { accept, dontAsk });
+      } catch (e) {
+        // Backend will hide the window anyway.
+        console.warn('respond failed:', e);
+      }
+    }
+
+    // Switch from question view to live progress view. The backend keeps the
+    // dialog window open while quit_and_relaunch runs (3–7s typical), then
+    // explicitly hides it from handle_electron_relaunch_flow.
+    function showProgress() {
+      $('question-view').classList.add('hidden');
+      $('progress-view').classList.add('active');
+      const name = info.display_name || 'this app';
+      $('title').textContent = `Restarting ${name}…`;
+    }
+
+    // Map backend phase strings → user-facing labels + progress-bar fill %.
+    // The total wall clock varies; the bar is a rough hint, not a precise
+    // measure. "ready" tops it out at 100%.
+    const PHASES = {
+      quitting:  { label: 'Quitting app…',           pct: 15,
+                   detail: 'Sending an AppleScript quit so any unsaved drafts are saved cleanly.' },
+      launching: { label: 'Launching with debug port…', pct: 50,
+                   detail: 'Reopening the app via launch services with --remote-debugging-port set.' },
+      waiting:   { label: 'Waiting for debug port…', pct: 75,
+                   detail: 'Polling the DevTools endpoint until the app publishes a page target.' },
+      ready:     { label: 'Ready — bringing you back to pick mode', pct: 100,
+                   detail: 'Debug port is up. Re-pick the element you wanted to capture.' },
+    };
+
+    // EVERY real dialog open arrives via this event. The listener was attached
+    // when this script first ran (at app launch) and persists across all the
+    // window's show/hide cycles.
+    listen('relaunch-dialog-show', (event) => {
+      resetToQuestionView();
+      applyDialogInfo(event.payload);
+    });
+
+    listen('electron-relaunch-progress', (event) => {
+      const p = event.payload || {};
+      const cfg = PHASES[p.phase];
+      if (!cfg) return;
+      // First time progress lands, swap the view.
+      if (!$('progress-view').classList.contains('active')) {
+        showProgress();
+      }
+      $('progress-phase').textContent = cfg.label;
+      $('progress-detail').textContent = cfg.detail;
+      $('progress-fill').style.width = cfg.pct + '%';
+      // Elapsed time. The backend resets elapsed_ms per-phase, but for the
+      // user a single rolling counter feels less jumpy than per-phase resets.
+      // Use a local epoch the first time we see ANY progress event.
+      if (!window.__veRelaunchStart) window.__veRelaunchStart = Date.now();
+      const totalMs = Date.now() - window.__veRelaunchStart;
+      $('progress-elapsed').textContent = (totalMs / 1000).toFixed(1) + 's';
+      if (p.phase === 'ready') {
+        $('spinner').classList.add('done');
+      }
+    });
+
+    $('restart-btn').addEventListener('click', () => {
+      // Tell the backend the user accepted, then immediately swap to the
+      // progress view so the user has visible feedback during the 3–7s wait.
+      // The backend keeps the dialog visible until quit_and_relaunch returns.
+      respond(true, $('dont-ask').checked);
+      showProgress();
+    });
+    $('cancel-btn').addEventListener('click', () => {
+      respond(false, $('dont-ask').checked);
+    });
+
+    document.addEventListener('keydown', (e) => {
+      // While progress view is active, keys do nothing — the backend is
+      // driving the flow and Esc would just close the dialog without
+      // affecting the underlying restart.
+      if ($('progress-view').classList.contains('active')) return;
+      if (e.key === 'Escape') respond(false, $('dont-ask').checked);
+      if (e.key === 'Enter') respond(true, $('dont-ask').checked);
+    });
+
+    load();
+  </script>
+</body>
+</html>

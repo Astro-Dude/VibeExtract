@@ -1,0 +1,50 @@
+# OS junk
+.DS_Store
+**/.DS_Store
+
+# Rust build artifacts
+**/target/
+**/Cargo.lock
+
+# Tauri generated files
+desktop/app/src-tauri/gen/
+
+# Node
+**/node_modules/
+
+# VibeExtract replication output (scratch screenshots, logs)
+.replica-output/
+replica-*.png
+*-output.html
+*-output.toon
+*-output.png
+combo-output.*
+native-output.*
+
+# .replicate-ui/ is PURE SCRATCH — per-extraction working dirs + generated replica
+# outputs (index.html, harvested assets, captures, sprite cache) + local per-app dev
+# examples. The reusable toolkit now lives INSIDE the skill
+# (.claude/skills/replicate-ui/_shared/), so nothing here needs tracking; deleting
+# the whole folder loses nothing but caching speed.
+.replicate-ui/
+
+# Skill toolkit: ship the source, but ignore generated artifacts —
+# the compiled Vision OCR binary (gridtext.py rebuilds it) and Python caches.
+.claude/skills/replicate-ui/_shared/vision_ocr
+**/__pycache__/
+
+# Generated Tauri icon set — regenerate with `cargo tauri icon` (build-dmg.sh does
+# this). The .icns/.ico/platform dirs aren't committed; the source icon.png is.
+desktop/app/src-tauri/icons/*.icns
+desktop/app/src-tauri/icons/*.ico
+desktop/app/src-tauri/icons/android/
+desktop/app/src-tauri/icons/ios/
+
+# Claude Code local settings (shared commands/skills stay committable)
+# .claude/settings.local.json
+
+# Scratch PNGs anywhere — but keep the source app icon.
+*.png
+!desktop/app/src-tauri/icons/icon.png
+*.otf
+*preview.html

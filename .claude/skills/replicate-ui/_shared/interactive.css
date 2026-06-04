@@ -1,0 +1,39 @@
+/* Shared, platform-agnostic interactivity for UI replicas — inlined at build time
+   by every replica generator (Excel build.py, Slack build.mjs, ...). It is
+   ELEMENT/ROLE-based, never app-class-based, so it works for any replica.
+
+   Static (no JS): the real semantic controls produced from the AX/DOM roles become
+   keyboard-focusable and show hover / active / focus / pressed states. The reset
+   neutralises native <button>/<input> chrome so wrapping a sprite or inline SVG in
+   a real control is a VISUAL NO-OP. Positioning, size and display are intentionally
+   left to each replica's own CSS (absolute for AX apps, flex flow for Electron). */
+
+/* --- reset: make a control that wraps a sprite/SVG/text render identically --- */
+button, [role="tab"], [role="radio"], [role="menuitem"] {
+  -webkit-appearance: none; appearance: none;
+  margin: 0; border: 0; background: none;
+  font: inherit; color: inherit; text-align: inherit; line-height: inherit;
+}
+input {
+  -webkit-appearance: none; appearance: none;
+  margin: 0; padding: 0; border: 0; outline: none;
+  background: transparent; font: inherit; color: inherit;
+}
+
+/* --- affordances: every interactive control is clickable + focusable --- */
+button, a, [role="tab"], [role="radio"], [role="combobox"],
+[role="slider"], [role="button"], [role="menuitem"] { cursor: pointer; }
+input[type="text"], input[type="search"] { cursor: text; }
+
+button:hover, a:hover, [role="tab"]:hover,
+[role="combobox"]:hover, [role="button"]:hover { filter: brightness(1.12); }
+button:active, [role="button"]:active { filter: brightness(0.9); }
+
+button:focus-visible, a:focus-visible, input:focus-visible,
+[role="tab"]:focus-visible, [role="combobox"]:focus-visible,
+[role="slider"]:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid #2684ff; outline-offset: -2px;
+}
+
+/* --- state reflected from ARIA (set statically at build time; no JS) --- */
+[aria-pressed="true"] { background: rgba(0, 0, 0, 0.16); }

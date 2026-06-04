@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- VibeExtract inspects OTHER apps (Accessibility tree + screen capture) and runs a
+       local HTTP MCP server, so it must NOT be sandboxed. The two capabilities it needs,
+       Accessibility and Screen Recording, are TCC permissions the user grants at runtime
+       keyed by the code signature; they are not entitlements. The keys below only relax
+       the hardened runtime enough for the embedded WKWebView, and allow the localhost
+       MCP socket. No app-sandbox key on purpose. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.network.server</key>
+  <true/>
+</dict>
+</plist>

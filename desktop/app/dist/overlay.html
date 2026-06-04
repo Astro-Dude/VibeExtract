@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>VibeExtract Overlay</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      background: transparent;
+      overflow: hidden;
+      /* Hide the OS cursor over our overlay — we draw our own crosshair below.
+         Falls back to crosshair on systems where `none` isn't honored. */
+      cursor: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 11px; }
+
+    .outline {
+      position: absolute;
+      box-sizing: border-box;
+      pointer-events: none;
+    }
+    .outline.hover {
+      /* Gold celestial hover — luminous, impossible to miss. z-index above
+         selected so hover always paints on top. */
+      border: 3px solid #fcd34d;
+      background: rgba(252, 211, 77, 0.08);
+      box-shadow:
+        0 0 0 1px rgba(0,0,0,0.4),
+        0 0 0 2px rgba(255,255,255,0.4),
+        0 0 24px rgba(252, 211, 77, 0.7),
+        inset 0 0 12px rgba(252, 211, 77, 0.15);
+      z-index: 10;
+      border-radius: 4px;
+    }
+    .outline.selected {
+      /* Lavender dashed for selected — clearly distinct from gold hover. */
+      border: 3px dashed #a78bfa;
+      background: rgba(167, 139, 250, 0.10);
+      box-shadow:
+        0 0 0 1px rgba(0,0,0,0.4),
+        0 0 0 2px rgba(255,255,255,0.4),
+        0 0 28px rgba(167, 139, 250, 0.6);
+      z-index: 5;
+      border-radius: 4px;
+    }
+    .outline-label.hover {
+      z-index: 11;
+      background: linear-gradient(135deg, #fcd34d, #f59e0b) !important;
+      color: #1a1a3a !important;
+      font-weight: 700;
+    }
+    .outline-label.selected {
+      z-index: 6;
+      background: linear-gradient(135deg, #a78bfa, #60a5fa) !important;
+      color: white !important;
+    }
+    .outline-label {
+      position: absolute;
+      padding: 4px 10px;
+      border-radius: 6px 6px 6px 0;
+      color: white;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+      pointer-events: none;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      max-width: 360px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .outline-label.hover { background: #ff3b30; }
+    .outline-label.selected { background: #007aff; }
+
+    /* Custom crosshair that replaces the cursor visually. Positioned at
+       cursor's screen coordinates by JS at ~60fps. */
+    #crosshair {
+      position: absolute;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+      z-index: 9999;
+      transform: translate(0, 0);
+      will-change: transform;
+    }
+    .ch-line {
+      position: absolute;
+      background: #ffd60a;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.7), 0 0 8px rgba(255, 214, 10, 0.8);
+    }
+    .ch-line.ch-h {
+      width: 28px;
+      height: 3px;
+      top: -1.5px;
+      left: -14px;
+    }
+    .ch-line.ch-v {
+      width: 3px;
+      height: 28px;
+      top: -14px;
+      left: -1.5px;
+    }
+    .ch-dot {
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      top: -3px;
+      left: -3px;
+      background: #ff3b30;
+      border: 1px solid white;
+      border-radius: 50%;
+      box-shadow: 0 0 6px rgba(255, 59, 48, 0.8);
+    }
+
+    /* Top-of-screen instruction strip — glassmorphic celestial pill */
+    .hud {
+      position: fixed;
+      top: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      background:
+        linear-gradient(135deg, rgba(167, 139, 250, 0.18), rgba(96, 165, 250, 0.12)),
+        rgba(15, 15, 36, 0.78);
+      color: #f5f3ff;
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 500;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      letter-spacing: 0.01em;
+      pointer-events: none;
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      border: 1px solid rgba(255,255,255,0.12);
+      box-shadow:
+        0 12px 32px rgba(0,0,0,0.5),
+        0 0 0 1px rgba(167,139,250,0.18),
+        0 0 48px rgba(167,139,250,0.25),
+        inset 0 1px 0 rgba(255,255,255,0.1);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .hud strong {
+      background: linear-gradient(135deg, #f5f3ff, #a78bfa 60%, #60a5fa);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .hud .count {
+      display: inline-flex;
+      align-items: center;
+      background: linear-gradient(135deg, #fcd34d, #f59e0b);
+      color: #1a1a3a;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 11px;
+      margin-left: 6px;
+      box-shadow: 0 0 16px rgba(252, 211, 77, 0.4);
+    }
+    .hud kbd {
+      background: rgba(255,255,255,0.10);
+      color: #f5f3ff;
+      padding: 2px 7px;
+      border-radius: 5px;
+      font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+      font-size: 11px;
+      font-weight: 500;
+      margin: 0 1px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+  </style>
+</head>
+<body>
+  <!-- Custom crosshair that follows the cursor — drawn ABOVE the system cursor.
+       The cursor itself is hidden via CSS so the user sees only this crosshair. -->
+  <div id="crosshair">
+    <div class="ch-line ch-h"></div>
+    <div class="ch-line ch-v"></div>
+    <div class="ch-dot"></div>
+  </div>
+
+  <div id="hover-outline" class="outline hover" style="display: none;"></div>
+  <div id="hover-label" class="outline-label hover" style="display: none;"></div>
+  <div id="selected-container"></div>
+  <div class="hud">
+    <strong>VibeExtract</strong>
+    &nbsp;·&nbsp; <span id="hover-readout" style="opacity: 0.85;">hover an element…</span>
+    &nbsp;·&nbsp; <kbd>Click</kbd> select &nbsp;·&nbsp;
+    <kbd>⇧</kbd>+<kbd>Click</kbd> add &nbsp;·&nbsp;
+    <kbd>⌘</kbd><kbd>⇧</kbd><kbd>E</kbd> export &nbsp;·&nbsp;
+    <kbd>Esc</kbd> cancel
+    <span class="count" id="sel-count">0 selected</span>
+  </div>
+
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+    const { getCurrentWindow } = window.__TAURI__.window;
+
+    const overlayWindow = getCurrentWindow();
+    let windowSize = { width: window.innerWidth, height: window.innerHeight };
+    let scaleFactor = window.devicePixelRatio || 1;
+
+    // Convert AX (screen, top-left, points) coordinates to overlay-window-local
+    // CSS pixels. The overlay window covers the screen at (0,0) so this is
+    // largely a passthrough, but we still respect devicePixelRatio.
+    function axToOverlay(ax) {
+      return {
+        left: ax.x,
+        top: ax.y,
+        width: ax.w,
+        height: ax.h,
+      };
+    }
+
+    function setHoverOutline(bounds, label) {
+      const el = document.getElementById('hover-outline');
+      const labelEl = document.getElementById('hover-label');
+      if (!bounds) {
+        el.style.display = 'none';
+        labelEl.style.display = 'none';
+        return;
+      }
+      const r = axToOverlay(bounds);
+      el.style.display = 'block';
+      el.style.left = r.left + 'px';
+      el.style.top = r.top + 'px';
+      el.style.width = r.width + 'px';
+      el.style.height = r.height + 'px';
+      labelEl.style.display = 'block';
+      labelEl.style.left = r.left + 'px';
+      labelEl.style.top = Math.max(0, r.top - 22) + 'px';
+      labelEl.textContent = label || '';
+    }
+
+    function setSelections(selections) {
+      const container = document.getElementById('selected-container');
+      container.innerHTML = '';
+      selections.forEach((sel, i) => {
+        const r = axToOverlay(sel.bounds);
+        const box = document.createElement('div');
+        box.className = 'outline selected';
+        box.style.left = r.left + 'px';
+        box.style.top = r.top + 'px';
+        box.style.width = r.width + 'px';
+        box.style.height = r.height + 'px';
+        container.appendChild(box);
+
+        const lbl = document.createElement('div');
+        lbl.className = 'outline-label selected';
+        lbl.style.left = r.left + 'px';
+        lbl.style.top = Math.max(0, r.top - 22) + 'px';
+        lbl.textContent = `${i + 1}. ${sel.role}${sel.name ? ' "' + sel.name + '"' : ''}`;
+        container.appendChild(lbl);
+      });
+      document.getElementById('sel-count').textContent =
+        `${selections.length} selected`;
+    }
+
+    // Note: clicks are NOT handled in this webview anymore. Tauri's
+    // ignore_cursor_events(false) was unreliable on transparent overlays,
+    // so we now use CGEventTap on the Rust side (event_tap_macos.rs) which
+    // captures clicks system-wide regardless of window event handling.
+    // The overlay is permanently click-through; its only job is drawing.
+
+    // Backend pushes hover updates here at ~30Hz.
+    const crosshair = document.getElementById('crosshair');
+    function moveCrosshair(x, y) {
+      // The overlay window sits at screen origin (0,0) so cursor screen coords
+      // are also our window-local CSS coords (Tauri scales via devicePixelRatio).
+      crosshair.style.transform = `translate(${x}px, ${y}px)`;
+    }
+
+    listen('overlay-hover', (event) => {
+      const { bounds, role, name, cursor } = event.payload || {};
+      const readout = document.getElementById('hover-readout');
+
+      if (cursor && typeof cursor.x === 'number') {
+        moveCrosshair(cursor.x, cursor.y);
+      }
+
+      if (bounds && bounds.w > 0 && bounds.h > 0) {
+        const label = name ? `${role} "${name}"` : role;
+        const sizeStr = `${Math.round(bounds.w)}×${Math.round(bounds.h)}`;
+        setHoverOutline(bounds, `${label} · ${sizeStr}`);
+        if (readout) readout.textContent = `→ ${label}`;
+      } else {
+        setHoverOutline(null);
+        if (readout) readout.textContent = 'hover an element…';
+      }
+    });
+
+    listen('overlay-selections', (event) => {
+      setSelections(event.payload || []);
+    });
+
+    listen('overlay-hide', () => {
+      setHoverOutline(null);
+      setSelections([]);
+    });
+
+    // Escape closes pick mode.
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        invoke('stop_pick_mode').catch(() => {});
+      }
+    });
+  </script>
+</body>
+</html>
