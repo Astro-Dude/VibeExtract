@@ -1,0 +1,19 @@
+[package]
+name = "vibe-extract-picker-macos"
+version = "0.1.0"
+edition = "2021"
+description = "Phase 1a spike: poll the cursor and dump AX info about the element underneath. Mirrors Desktop_Pluck's PickerService + AXDumper, in Rust."
+
+[[bin]]
+name = "picker"
+path = "src/main.rs"
+
+[dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+core-graphics = "0.24"
+core-graphics-types = "0.2"
+libc = "0.2"
+anyhow = "1"
+
+[build-dependencies]

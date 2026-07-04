@@ -1,0 +1,33 @@
+{
+  "_comment": "Platform-agnostic accessibility role -> semantic HTML element. The SINGLE source of truth for how every replica turns a control into markup. Keyed by macOS AX roles (desktop apps) AND ARIA/DOM roles (Electron apps) so one map serves both. Each value is { tag, attrs? }. The build script picks the tag by the source node's role and fills it with the captured content (sprite icon, text, value); it must NEVER special-case per app. Special keys: 'tab' = a radio inside a tab group; 'search' = a search field. Tags 'div' carrying role=combobox/slider are styled to look native while staying semantic + focusable (tabindex).",
+
+  "AXButton":      { "tag": "button" },
+  "AXMenuButton":  { "tag": "button", "attrs": { "aria-haspopup": "menu" } },
+  "AXCheckBox":    { "tag": "button", "attrs": { "aria-pressed": "false" } },
+  "AXRadioButton": { "tag": "button", "attrs": { "role": "radio" } },
+  "AXComboBox":    { "tag": "div",    "attrs": { "role": "combobox", "tabindex": "0" } },
+  "AXTextField":   { "tag": "input",  "attrs": { "type": "text" } },
+  "AXTextArea":    { "tag": "input",  "attrs": { "type": "text" } },
+  "AXSlider":      { "tag": "div",    "attrs": { "role": "slider", "tabindex": "0" } },
+  "AXStaticText":  { "tag": "span" },
+  "AXImage":       { "tag": "img" },
+  "AXLink":        { "tag": "a",      "attrs": { "href": "#" } },
+
+  "tab":           { "tag": "button", "attrs": { "role": "tab" } },
+  "search":        { "tag": "input",  "attrs": { "type": "search" } },
+
+  "button":        { "tag": "button" },
+  "menubutton":    { "tag": "button", "attrs": { "aria-haspopup": "menu" } },
+  "menuitem":      { "tag": "button", "attrs": { "role": "menuitem" } },
+  "checkbox":      { "tag": "button", "attrs": { "aria-pressed": "false" } },
+  "radio":         { "tag": "button", "attrs": { "role": "radio" } },
+  "combobox":      { "tag": "div",    "attrs": { "role": "combobox", "tabindex": "0" } },
+  "textbox":       { "tag": "input",  "attrs": { "type": "text" } },
+  "searchbox":     { "tag": "input",  "attrs": { "type": "search" } },
+  "slider":        { "tag": "div",    "attrs": { "role": "slider", "tabindex": "0" } },
+  "link":          { "tag": "a",      "attrs": { "href": "#" } },
+  "image":         { "tag": "img" },
+  "text":          { "tag": "span" },
+
+  "_default":      { "tag": "div" }
+}

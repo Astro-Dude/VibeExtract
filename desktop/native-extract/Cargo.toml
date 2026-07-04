@@ -1,0 +1,25 @@
+[package]
+name = "vibe-extract-native"
+version = "0.1.0"
+edition = "2021"
+description = "Phase 2-full native macOS extractor. Pick an element in ANY desktop app (Finder, Calculator, System Settings, native Slack, etc.) via the macOS Accessibility API, walk its subtree, screenshot its bounds, sample pixel colors, and emit TOON + HTML output in the same shape VibeExtract's browser extension produces."
+
+[[bin]]
+name = "native-extract"
+path = "src/main.rs"
+
+[dependencies]
+# macOS AX FFI
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+core-graphics = "0.24"
+core-graphics-types = "0.2"
+libc = "0.2"
+
+# Image / sampling
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+
+# CLI / errors
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

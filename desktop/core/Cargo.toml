@@ -1,0 +1,50 @@
+[package]
+name = "vibe-extract-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared extraction library: AX picker (macOS/Windows), CDP injection, screenshot+sampling, NIB/asar/XAML extractors, strategy dispatcher. Used by the Tauri app and CLI demos."
+
+[lib]
+name = "vibe_extract_core"
+path = "src/lib.rs"
+
+[dependencies]
+# CLI / errors
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async + CDP
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
+futures-util = "0.3"
+
+# Image / sampling / base64
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+
+# Static binary inspection
+goblin = "0.10"   # PE / Mach-O parsing for framework detection
+
+# Logging
+log = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+core-graphics = "0.24"
+core-graphics-types = "0.2"
+libc = "0.2"
+plist = "1"        # Info.plist + NIB archives
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Stubs for now — real Windows port is Phase 3.
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }

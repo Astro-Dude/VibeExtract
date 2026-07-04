@@ -1,0 +1,17 @@
+{
+  "name": "echo",
+  "owner": {
+    "name": "VibeExtract"
+  },
+  "metadata": {
+    "description": "VibeExtract desktop app plugins"
+  },
+  "plugins": [
+    {
+      "name": "replicate-ui",
+      "source": "./replicate-ui",
+      "description": "Replicate a running macOS app's UI as self-verified HTML+CSS.",
+      "category": "design"
+    }
+  ]
+}

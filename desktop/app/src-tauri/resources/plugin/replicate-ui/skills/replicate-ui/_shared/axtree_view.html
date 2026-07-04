@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AX Tree — VibeExtract</title>
+<!--
+  Standalone viewer for a /replicate-ui extraction's AX tree. The skill copies
+  this into the output dir as `ax_tree.html` (sibling to `ax_tree.json`), so the
+  replica folder is a complete spec: index.html (visual) + ax_tree.json (semantic)
+  + this viewer. Open via the skill's local http.server (fetch needs http, not
+  file://). Renders a single Node {role,name,value,bounds,children,…} OR an array
+  of {element,role,name,ax_tree} (multi-element capture) as a collapsible tree.
+-->
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: #0d1117; color: #d7dce3;
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  header { padding: 12px 18px; border-bottom: 1px solid #21262d; display: flex; gap: 14px; align-items: baseline; position: sticky; top: 0; background: #0d1117; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  header .src { color: #6e7681; font-size: 12px; }
+  header .controls { margin-left: auto; display: flex; gap: 8px; }
+  button.tool { background: #21262d; color: #d7dce3; border: 1px solid #30363d; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+  button.tool:hover { background: #30363d; }
+  #tree { padding: 16px 18px; line-height: 1.75; }
+  .axnode { margin-left: 16px; white-space: nowrap; }
+  summary { cursor: pointer; }
+  summary:hover { filter: brightness(1.25); }
+  .ax-role { color: #7dd3fc; }
+  .ax-name { color: #fde68a; }
+  .ax-meta { color: #8b949e; }
+  .err { color: #f87171; padding: 16px 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AX Tree</h1>
+  <span class="src" id="src">ax_tree.json</span>
+  <div class="controls">
+    <button class="tool" id="expand">Expand all</button>
+    <button class="tool" id="collapse">Collapse all</button>
+  </div>
+</header>
+<div id="tree"></div>
+<script>
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function label(node){
+  if(!node) return '<span class="ax-meta">(null)</span>';
+  const role=(node.role||'?')+(node.subrole?(':'+node.subrole):'');
+  let h='<span class="ax-role">'+esc(role)+'</span>';
+  if(node.name) h+=' <span class="ax-name">"'+esc(node.name)+'"</span>';
+  if(node.value!=null && node.value!=='') h+=' <span class="ax-meta">= '+esc(String(node.value).slice(0,80))+'</span>';
+  const b=node.bounds;
+  if(b) h+=' <span class="ax-meta">['+Math.round(b.x)+','+Math.round(b.y)+' '+Math.round(b.w)+'×'+Math.round(b.h)+']</span>';
+  if(node.identifier) h+=' <span class="ax-meta">#'+esc(node.identifier)+'</span>';
+  return h;
+}
+function nodeEl(node){
+  const kids = node && node.children && node.children.length ? node.children : null;
+  const wrap = document.createElement(kids ? 'details' : 'div');
+  wrap.className = 'axnode';
+  if(kids){
+    wrap.open = true;
+    const s = document.createElement('summary'); s.innerHTML = label(node); wrap.appendChild(s);
+    kids.forEach(c => wrap.appendChild(nodeEl(c)));
+  } else {
+    wrap.innerHTML = label(node);
+  }
+  return wrap;
+}
+function render(data){
+  const tree = document.getElementById('tree');
+  tree.innerHTML = '';
+  if(Array.isArray(data)){
+    data.forEach(entry => {
+      const det = document.createElement('details'); det.open = true; det.className = 'axnode';
+      const s = document.createElement('summary');
+      s.innerHTML = '<span class="ax-meta">Element '+entry.element+' — </span><span class="ax-role">'+esc(entry.role||'')+'</span>'+(entry.name?' <span class="ax-name">"'+esc(entry.name)+'"</span>':'');
+      det.appendChild(s);
+      det.appendChild(nodeEl(entry.ax_tree || entry));
+      tree.appendChild(det);
+    });
+  } else {
+    tree.appendChild(nodeEl(data));
+  }
+}
+document.getElementById('expand').onclick  = () => document.querySelectorAll('#tree details').forEach(d => d.open = true);
+document.getElementById('collapse').onclick = () => document.querySelectorAll('#tree details').forEach(d => d.open = false);
+
+// Allow ?src=other.json; default ax_tree.json (sibling).
+const src = new URLSearchParams(location.search).get('src') || 'ax_tree.json';
+document.getElementById('src').textContent = src;
+fetch(src)
+  .then(r => { if(!r.ok) throw new Error(r.status+' '+r.statusText); return r.json(); })
+  .then(render)
+  .catch(e => { document.getElementById('tree').innerHTML =
+    '<div class="err">Could not load '+esc(src)+': '+esc(e.message)+'<br>Serve the folder over http (the skill does this) — file:// blocks fetch.</div>'; });
+</script>
+</body>
+</html>

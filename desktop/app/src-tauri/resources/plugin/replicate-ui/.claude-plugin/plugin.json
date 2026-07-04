@@ -1,0 +1,30 @@
+{
+  "name": "replicate-ui",
+  "description": "Replicate a running macOS app's UI as self-verified HTML+CSS via the VibeExtract + Playwright MCP loop. Bundles the /replicate-ui and /replicate-ui-watch skills and the echo MCP server.",
+  "version": "1.0.0",
+  "author": {
+    "name": "VibeExtract"
+  },
+  "keywords": [
+    "ui",
+    "replicate",
+    "macos",
+    "screenshot",
+    "accessibility",
+    "mcp"
+  ],
+  "mcpServers": {
+    "echo": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--headless",
+        "--isolated"
+      ]
+    }
+  }
+}

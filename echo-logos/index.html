@@ -1,0 +1,279 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Echo Desktop — Icon Concepts v2</title>
+<style>
+  :root{--bg:#101318;--card:#181c22;--line:#262c35;--txt:#eef2f7;--muted:#8b96a3;--acc:#5fc3f4;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    padding:52px 26px 72px;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1060px;margin:0 auto}
+  .eyebrow{color:var(--acc);font-size:11.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:36px;font-weight:650;margin:10px 0 8px;letter-spacing:-.6px}
+  .lede{color:var(--muted);font-size:15px;max-width:640px;line-height:1.55;margin-bottom:40px}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:24px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:26px 26px 22px;
+    display:flex;flex-direction:column;gap:0}
+  .hero{display:flex;justify-content:center;padding:10px 0 24px}
+  .hero svg{width:196px;height:196px;filter:drop-shadow(0 16px 34px rgba(0,0,0,.5))}
+  .meta{display:flex;gap:14px;align-items:flex-start;border-top:1px solid var(--line);padding-top:18px}
+  .num{flex:0 0 auto;width:28px;height:28px;border-radius:8px;background:var(--acc);color:#07202e;
+    font-weight:800;display:flex;align-items:center;justify-content:center;font-size:14px}
+  .meta h2{font-size:17.5px;font-weight:650;margin-bottom:5px;letter-spacing:-.2px}
+  .meta p{color:var(--muted);font-size:13.5px;line-height:1.5}
+  .meta p b{color:#c8d6e2;font-weight:600}
+  .sizes{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap;margin-top:20px;
+    padding-top:16px;border-top:1px dashed var(--line)}
+  .ss{display:flex;flex-direction:column;align-items:center;gap:7px}
+  .ss span{font-size:10.5px;color:var(--muted)}
+  .ss.light{background:#f2f5f8;padding:10px 14px;border-radius:12px}
+  .ss.light span{color:#5a6673}
+  footer{margin-top:40px;color:var(--muted);font-size:14px;text-align:center;line-height:1.6}
+  footer b{color:var(--txt)}
+</style></head><body>
+
+<!-- ======== ICON DEFINITIONS (each a 512×512 symbol) ======== -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- shared ground -->
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262d37"/><stop offset="1" stop-color="#12161c"/>
+    </linearGradient>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <filter id="soft6" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <radialGradient id="coreG" cx=".38" cy=".35" r=".9">
+      <stop offset="0" stop-color="#f4fbff"/><stop offset="1" stop-color="#8edcff"/>
+    </radialGradient>
+    <linearGradient id="iceV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bfe9ff"/><stop offset="1" stop-color="#4aa8e8"/>
+    </linearGradient>
+    <linearGradient id="iceH" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a5d8f5"/><stop offset="1" stop-color="#59b7e8"/>
+    </linearGradient>
+    <linearGradient id="fadeDown" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="reflMask"><rect x="0" y="330" width="512" height="182" fill="url(#fadeDown)"/></mask>
+    <linearGradient id="barG" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6fcff"/><stop offset="1" stop-color="#cdeeff"/>
+    </linearGradient>
+
+    <!-- 1 · ECHO BLOOM -->
+    <symbol id="ic1" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="115" fill="url(#ground)"/>
+      <rect x="1.5" y="1.5" width="509" height="509" rx="114" fill="none" stroke="#ffffff" stroke-opacity=".05" stroke-width="2"/>
+      <circle cx="256" cy="256" r="208" fill="none" stroke="#3785c2" stroke-opacity=".14" stroke-width="2.5"/>
+      <circle cx="256" cy="256" r="160" fill="none" stroke="#45a3dd" stroke-opacity=".32" stroke-width="3.5"/>
+      <circle cx="256" cy="256" r="112" fill="none" stroke="#5fc3f4" stroke-opacity=".55" stroke-width="5"/>
+      <circle cx="256" cy="256" r="64"  fill="none" stroke="#8ee0ff" stroke-opacity=".95" stroke-width="7"/>
+      <circle cx="256" cy="256" r="46" fill="#38bdf8" opacity=".4" filter="url(#soft)"/>
+      <circle cx="256" cy="256" r="30" fill="url(#coreG)"/>
+    </symbol>
+
+    <!-- 2 · REFLECTION -->
+    <symbol id="ic2" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="115" fill="url(#ground)"/>
+      <rect x="1.5" y="1.5" width="509" height="509" rx="114" fill="none" stroke="#ffffff" stroke-opacity=".05" stroke-width="2"/>
+      <!-- live window -->
+      <rect x="126" y="106" width="260" height="168" rx="20" fill="#28313d"/>
+      <rect x="126" y="106" width="260" height="168" rx="20" fill="none" stroke="url(#iceH)" stroke-width="3"/>
+      <line x1="128" y1="148" x2="384" y2="148" stroke="#7dd3fc" stroke-opacity=".3" stroke-width="2"/>
+      <circle cx="152" cy="127" r="6.5" fill="#8ee0ff" opacity=".95"/>
+      <circle cx="176" cy="127" r="6.5" fill="#8ee0ff" opacity=".55"/>
+      <circle cx="200" cy="127" r="6.5" fill="#8ee0ff" opacity=".3"/>
+      <rect x="150" y="172" width="122" height="11" rx="5.5" fill="#7dd3fc" opacity=".2"/>
+      <rect x="150" y="197" width="172" height="11" rx="5.5" fill="#7dd3fc" opacity=".12"/>
+      <rect x="150" y="222" width="94"  height="11" rx="5.5" fill="#7dd3fc" opacity=".08"/>
+      <!-- horizon -->
+      <line x1="104" y1="306" x2="408" y2="306" stroke="#38bdf8" stroke-opacity=".35" stroke-width="2"/>
+      <!-- echo: wireframe reflection -->
+      <g mask="url(#reflMask)">
+        <g transform="translate(0,624) scale(1,-1)">
+          <rect x="126" y="106" width="260" height="168" rx="20" fill="none" stroke="#5fc3f4" stroke-width="2.5"/>
+          <line x1="128" y1="148" x2="384" y2="148" stroke="#5fc3f4" stroke-width="2"/>
+          <circle cx="152" cy="127" r="6.5" fill="none" stroke="#5fc3f4" stroke-width="2"/>
+          <circle cx="176" cy="127" r="6.5" fill="none" stroke="#5fc3f4" stroke-width="2"/>
+          <circle cx="200" cy="127" r="6.5" fill="none" stroke="#5fc3f4" stroke-width="2"/>
+          <rect x="150" y="172" width="122" height="11" rx="5.5" fill="none" stroke="#5fc3f4" stroke-width="1.5"/>
+          <rect x="150" y="197" width="172" height="11" rx="5.5" fill="none" stroke="#5fc3f4" stroke-width="1.5"/>
+        </g>
+      </g>
+    </symbol>
+
+    <!-- 3 · GLASS MARKUP -->
+    <symbol id="ic3" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="115" fill="url(#ground)"/>
+      <rect x="1.5" y="1.5" width="509" height="509" rx="114" fill="none" stroke="#ffffff" stroke-opacity=".05" stroke-width="2"/>
+      <circle cx="256" cy="256" r="170" fill="#38bdf8" opacity=".055"/>
+      <circle cx="256" cy="256" r="170" fill="none" stroke="#7dd3fc" stroke-opacity=".14" stroke-width="2"/>
+      <g stroke="#38bdf8" stroke-width="17" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity=".35" filter="url(#soft6)">
+        <polyline points="196,196 138,256 196,316"/>
+        <polyline points="316,196 374,256 316,316"/>
+        <line x1="284" y1="182" x2="228" y2="330"/>
+      </g>
+      <g stroke="url(#iceV)" stroke-width="17" stroke-linecap="round" stroke-linejoin="round" fill="none">
+        <polyline points="196,196 138,256 196,316"/>
+        <polyline points="316,196 374,256 316,316"/>
+        <line x1="284" y1="182" x2="228" y2="330"/>
+      </g>
+    </symbol>
+
+    <!-- 4 · MONOGRAM DECAY -->
+    <symbol id="ic4" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="115" fill="url(#ground)"/>
+      <rect x="1.5" y="1.5" width="509" height="509" rx="114" fill="none" stroke="#ffffff" stroke-opacity=".05" stroke-width="2"/>
+      <g fill="url(#barG)">
+        <rect x="150" y="160" width="30" height="192" rx="15"/>
+        <rect x="150" y="160" width="178" height="30" rx="15"/>
+        <rect x="150" y="241" width="138" height="30" rx="15"/>
+        <rect x="150" y="322" width="178" height="30" rx="15"/>
+      </g>
+      <g fill="#56c2f2">
+        <rect x="348" y="160" width="26" height="30" rx="13" opacity=".5"/>
+        <rect x="394" y="160" width="12" height="30" rx="6"  opacity=".22"/>
+        <rect x="308" y="241" width="26" height="30" rx="13" opacity=".5"/>
+        <rect x="354" y="241" width="12" height="30" rx="6"  opacity=".22"/>
+        <rect x="348" y="322" width="26" height="30" rx="13" opacity=".5"/>
+        <rect x="394" y="322" width="12" height="30" rx="6"  opacity=".22"/>
+      </g>
+    </symbol>
+
+    <!-- 5 · APERTURE -->
+    <symbol id="ic5" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="115" fill="url(#ground)"/>
+      <rect x="1.5" y="1.5" width="509" height="509" rx="114" fill="none" stroke="#ffffff" stroke-opacity=".05" stroke-width="2"/>
+      <circle cx="256" cy="256" r="148" fill="none" stroke="#3a4a5c" stroke-width="3"/>
+      <circle cx="256" cy="256" r="148" fill="none" stroke="#66c8f7" stroke-width="5"
+              stroke-linecap="round" stroke-dasharray="233 697" transform="rotate(-90 256 256)"/>
+      <g stroke="#dceefb" stroke-width="6" stroke-linecap="round" opacity=".92">
+        <line x1="256" y1="88"  x2="256" y2="120"/>
+        <line x1="256" y1="392" x2="256" y2="424"/>
+        <line x1="88"  y1="256" x2="120" y2="256"/>
+        <line x1="392" y1="256" x2="424" y2="256"/>
+      </g>
+      <circle cx="256" cy="256" r="52" fill="none" stroke="#66c8f7" stroke-opacity=".45" stroke-width="3"/>
+      <circle cx="256" cy="256" r="22" fill="#38bdf8" opacity=".45" filter="url(#soft6)"/>
+      <circle cx="256" cy="256" r="11" fill="#8ee0ff"/>
+    </symbol>
+
+    <!-- 6 · PRISM -->
+    <symbol id="ic6" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="115" fill="url(#ground)"/>
+      <rect x="1.5" y="1.5" width="509" height="509" rx="114" fill="none" stroke="#ffffff" stroke-opacity=".05" stroke-width="2"/>
+      <polygon points="256,186 182,322 330,322" fill="#38bdf8" fill-opacity=".06"
+               stroke="url(#iceV)" stroke-width="6" stroke-linejoin="round"/>
+      <line x1="96" y1="268" x2="212" y2="268" stroke="#8ee0ff" stroke-width="5" stroke-linecap="round" opacity=".5" filter="url(#soft6)"/>
+      <line x1="96" y1="268" x2="212" y2="268" stroke="#eef6fc" stroke-width="5" stroke-linecap="round"/>
+      <g stroke-width="5" stroke-linecap="round">
+        <line x1="300" y1="258" x2="416" y2="206" stroke="#8ee0ff" opacity=".95"/>
+        <line x1="300" y1="266" x2="416" y2="262" stroke="#56b8ef" opacity=".7"/>
+        <line x1="300" y1="274" x2="416" y2="318" stroke="#3a8fd0" opacity=".45"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Echo Desktop · app icon · set v2</div>
+    <h1>Six marks, one idea each</h1>
+    <p class="lede">Echo listens to a running app — its accessibility tree, its pixels — and answers back with a faithful HTML+CSS twin. Each mark below holds exactly one piece of that story, drawn as fine vector work on the app's own charcoal-and-ice palette.</p>
+  </header>
+
+  <div class="grid">
+
+    <article class="card">
+      <div class="hero"><svg><use href="#ic1"/></svg></div>
+      <div class="meta"><div class="num">1</div><div>
+        <h2>Echo Bloom</h2>
+        <p>The ping. A capture signal leaves the core and returns as fading rings — <b>send a probe, get a reflection</b>. The purest reading of the name; unmistakable at any size.</p>
+      </div></div>
+      <div class="sizes">
+        <div class="ss"><svg width="64" height="64"><use href="#ic1"/></svg><span>64</span></div>
+        <div class="ss"><svg width="32" height="32"><use href="#ic1"/></svg><span>32</span></div>
+        <div class="ss"><svg width="16" height="16"><use href="#ic1"/></svg><span>16</span></div>
+        <div class="ss light"><svg width="48" height="48"><use href="#ic1"/></svg><span>on light</span></div>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="hero"><svg><use href="#ic2"/></svg></div>
+      <div class="meta"><div class="num">2</div><div>
+        <h2>Reflection</h2>
+        <p>A live window above the waterline; below it, the same window returned as a <b>wireframe echo</b> — the app and the HTML twin Echo builds of it. The most literal telling of what the app does.</p>
+      </div></div>
+      <div class="sizes">
+        <div class="ss"><svg width="64" height="64"><use href="#ic2"/></svg><span>64</span></div>
+        <div class="ss"><svg width="32" height="32"><use href="#ic2"/></svg><span>32</span></div>
+        <div class="ss"><svg width="16" height="16"><use href="#ic2"/></svg><span>16</span></div>
+        <div class="ss light"><svg width="48" height="48"><use href="#ic2"/></svg><span>on light</span></div>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="hero"><svg><use href="#ic3"/></svg></div>
+      <div class="meta"><div class="num">3</div><div>
+        <h2>Glass Markup</h2>
+        <p>What comes out the other side: <b>clean, luminous <code>&lt;/&gt;</code></b> floating in a soft lens. For a developer audience it says "the deliverable is real code" in one glance.</p>
+      </div></div>
+      <div class="sizes">
+        <div class="ss"><svg width="64" height="64"><use href="#ic3"/></svg><span>64</span></div>
+        <div class="ss"><svg width="32" height="32"><use href="#ic3"/></svg><span>32</span></div>
+        <div class="ss"><svg width="16" height="16"><use href="#ic3"/></svg><span>16</span></div>
+        <div class="ss light"><svg width="48" height="48"><use href="#ic3"/></svg><span>on light</span></div>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="hero"><svg><use href="#ic4"/></svg></div>
+      <div class="meta"><div class="num">4</div><div>
+        <h2>Monogram Decay</h2>
+        <p>The brand letter, engineered: each arm of the <b>E trails off like an echo delay</b> — signal, repeat, fade. A proper logotype that also works as an icon; strongest for branding beyond the dock.</p>
+      </div></div>
+      <div class="sizes">
+        <div class="ss"><svg width="64" height="64"><use href="#ic4"/></svg><span>64</span></div>
+        <div class="ss"><svg width="32" height="32"><use href="#ic4"/></svg><span>32</span></div>
+        <div class="ss"><svg width="16" height="16"><use href="#ic4"/></svg><span>16</span></div>
+        <div class="ss light"><svg width="48" height="48"><use href="#ic4"/></svg><span>on light</span></div>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="hero"><svg><use href="#ic5"/></svg></div>
+      <div class="meta"><div class="num">5</div><div>
+        <h2>Aperture</h2>
+        <p>The ⌘⇧S moment: a camera-grade <b>aperture locked on a target</b>, one quadrant charged with signal. Says "precision capture" — the pick, the crop, the sample.</p>
+      </div></div>
+      <div class="sizes">
+        <div class="ss"><svg width="64" height="64"><use href="#ic5"/></svg><span>64</span></div>
+        <div class="ss"><svg width="32" height="32"><use href="#ic5"/></svg><span>32</span></div>
+        <div class="ss"><svg width="16" height="16"><use href="#ic5"/></svg><span>16</span></div>
+        <div class="ss light"><svg width="48" height="48"><use href="#ic5"/></svg><span>on light</span></div>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="hero"><svg><use href="#ic6"/></svg></div>
+      <div class="meta"><div class="num">6</div><div>
+        <h2>Prism</h2>
+        <p>One window of light goes in; <b>structure, style, and pixels come out</b> as separated beams. The extraction engine itself — decomposition made elegant.</p>
+      </div></div>
+      <div class="sizes">
+        <div class="ss"><svg width="64" height="64"><use href="#ic6"/></svg><span>64</span></div>
+        <div class="ss"><svg width="32" height="32"><use href="#ic6"/></svg><span>32</span></div>
+        <div class="ss"><svg width="16" height="16"><use href="#ic6"/></svg><span>16</span></div>
+        <div class="ss light"><svg width="48" height="48"><use href="#ic6"/></svg><span>on light</span></div>
+      </div>
+    </article>
+
+  </div>
+
+  <footer>Pick a <b>number (1–6)</b> — I'll rasterize it to <b>icon.png</b>, regenerate the full icon set, and rebuild the app.<br>Want a hybrid (e.g. the E inside the bloom) or a different accent? Say so and I'll draw a v3.</footer>
+</div>
+</body></html>
