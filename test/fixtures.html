@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cheater fixtures — every capture path</title>
+
+<!-- Diverse font types, loaded the way real pages do it. Google's CSS is
+     CORS-readable, so these arrive as discoverable @font-face rules; the capture
+     must LINK these families (small, always resolves) rather than bundle them,
+     and bundle only the genuinely self-hosted face below. -->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,400&family=JetBrains+Mono:wght@400;700&family=Roboto+Slab:wght@300..800&display=swap">
+
+<!-- A genuinely self-hosted woff2 (Inter, OFL), so @font-face discovery, URL
+     resolution, the service-worker fetch, the relative-path rewrite and the
+     fonts zip are all exercised locally rather than only against a live site. -->
+<style>
+@font-face{
+  font-family:"Fixture Sans";
+  /* Relative URL, so @font-face URL resolution against the stylesheet base gets
+     exercised too. Genuinely self-hosted: this one must be BUNDLED, not linked. */
+  src:url("fonts/fixture-sans.woff2") format("woff2");
+  font-weight:400;
+  font-style:normal;
+  font-display:swap;
+}
+/* A data: URI face too — the inline branch of parseFontFace(). */
+@font-face{
+  font-family:"Fixture Inline";
+  src:url("data:font/woff2;base64,d09GMgABAAAAAAIkAAoAAAAABHwAAAHXAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGhYbCBwqBmA_ShEICoFYgTMLDAABNgIkAxAEIAWDdgcgG7wDyJ7DXg9m1zbmYUQURVEUxf9_9c7cnbsPGGKIJYQQQgghhBBCCCGEEEIIIYQQQgg") format("woff2");
+  font-weight:400;
+}
+
+:root{
+  --ink:#111827;
+  --line:#e4e4e7;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;padding:28px;
+  /* Deliberately Bootstrap/Tailwind-shaped: an icon-ish family buried deep in
+     the stack. Nothing here may be treated as an icon. */
+  font-family:"Fixture Sans",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,
+              "Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+  font-size:15px;line-height:1.5;color:var(--ink);background:#f7f7f8;
+}
+h1{font-size:18px;margin:0 0 20px}
+section{
+  background:#fff;border:1px solid var(--line);border-radius:8px;
+  padding:16px;margin:0 0 16px;max-width:900px;
+}
+section > h2{
+  font-family:ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:#71717a;margin:0 0 12px;font-weight:400;
+}
+
+/* --- 1. field card: label + input + absolutely positioned svg icon --------- */
+.field-card{
+  position:relative;display:flex;flex-direction:column;gap:4px;
+  padding:10px 12px 10px 38px;background:#fff;border:1px solid #d4d4d8;
+  border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.06);max-width:320px;
+}
+.field-card .lbl{font-size:11px;color:#71717a;letter-spacing:.02em}
+.field-card input{
+  border:0;outline:none;font:inherit;font-size:15px;color:var(--ink);
+  background:transparent;padding:0;width:100%;
+}
+.field-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#a1a1aa}
+
+/* --- 2. sprite + inline svg ----------------------------------------------- */
+.icons{display:flex;gap:14px;align-items:center}
+.icons svg{width:22px;height:22px;color:#2563eb}
+
+/* --- 5. prose that must stay prose ---------------------------------------- */
+.prose{max-width:560px;color:#3f3f46}
+
+/* --- 6. Font Awesome style ::before icon ---------------------------------- */
+.fa-search{font-family:"Font Awesome 6 Free";font-weight:900;font-style:normal;color:#16a34a}
+.fa-search::before{content:"\f002";font-size:17px}
+.mi{font-family:"Material Icons";font-size:20px;color:#dc2626;
+    -webkit-font-feature-settings:"liga";font-feature-settings:"liga"}
+
+/* --- 7. decorative empty-content pseudos ---------------------------------- */
+.divider{position:relative;height:22px}
+.divider::after{
+  content:"";position:absolute;left:0;right:0;top:50%;height:1px;
+  background:linear-gradient(90deg,transparent,#d4d4d8 20%,#d4d4d8 80%,transparent);
+}
+.switch{
+  position:relative;width:40px;height:22px;border-radius:999px;background:#22c55e;
+}
+.switch::before{
+  content:"";position:absolute;top:2px;left:20px;width:18px;height:18px;
+  border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);
+}
+
+/* --- 13. grid with named areas -------------------------------------------- */
+.grid{
+  display:grid;grid-template-areas:"head head" "side body";
+  grid-template-columns:120px 1fr;gap:10px;
+}
+.grid .g-head{grid-area:head;background:#eef2ff;padding:8px;border-radius:6px}
+.grid .g-side{grid-area:side;background:#f0fdf4;padding:8px;border-radius:6px}
+.grid .g-body{grid-area:body;background:#fff7ed;padding:8px;border-radius:6px}
+
+/* --- 14. hover states ----------------------------------------------------- */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border:0;
+  border-radius:6px;background:#18181b;color:#fafafa;font:inherit;font-size:13px;
+  cursor:pointer;transition:background-color .12s;
+}
+.btn:hover{background:#3f3f46}
+.hover-card{padding:12px;border:1px solid var(--line);border-radius:8px;background:#fafafa}
+.hover-card .reveal{opacity:.35;transition:opacity .12s}
+.hover-card:hover .reveal{opacity:1}
+
+/* --- 15. mask-image icon -------------------------------------------------- */
+.mask-icon{
+  width:24px;height:24px;background-color:#7c3aed;
+  -webkit-mask-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>');
+  mask-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>');
+  -webkit-mask-size:contain;mask-size:contain;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+}
+.bg-icon{
+  width:24px;height:24px;
+  background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23ea580c"><circle cx="12" cy="12" r="9"/></svg>');
+  background-size:contain;background-repeat:no-repeat;
+}
+
+/* --- 16. transparent overlay click-catcher -------------------------------- */
+.catch-host{position:relative;max-width:280px}
+.catch-card{padding:14px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.catch-overlay{position:absolute;inset:0;cursor:pointer}
+
+/* --- 17/18. filtered nodes ------------------------------------------------ */
+.gone{display:none}
+.invisible{visibility:hidden}
+.faded{opacity:0}
+
+/* --- 19. table ------------------------------------------------------------ */
+table{border-collapse:collapse;font-size:13px}
+th,td{border:1px solid var(--line);padding:6px 10px;text-align:left}
+th{background:#f4f4f5;font-weight:600}
+
+/* --- 20. dark component -------------------------------------------------- */
+.dark-card{
+  background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;
+  border:1px solid #1e293b;max-width:280px;
+}
+.dark-card .k{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#fbbf24}
+
+/* --- 21. backdrop-filter ------------------------------------------------- */
+.glass{
+  backdrop-filter:blur(8px) saturate(140%);
+  background:rgba(255,255,255,.35);border:1px solid rgba(255,255,255,.5);
+  padding:12px;border-radius:10px;max-width:240px;
+}
+
+/* --- 22. scrollbar + clamp ---------------------------------------------- */
+.scroller{
+  max-height:70px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#a1a1aa #f4f4f5;
+  border:1px solid var(--line);padding:8px;border-radius:6px;max-width:320px;
+}
+.clamp{
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;max-width:320px;color:#52525b;
+}
+.chip{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;
+  background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;font-size:12px;
+}
+
+/* --- 23. custom dropdown / combobox (open state, abs-positioned menu) ----- */
+.dd{position:relative;display:inline-block}
+.dd-btn{
+  display:inline-flex;align-items:center;gap:7px;padding:7px 11px;font:inherit;font-size:13px;
+  border:1px solid #d4d4d8;border-radius:7px;background:#fff;cursor:pointer;color:var(--ink);
+}
+.dd-btn::after{content:"";width:0;height:0;border-left:4px solid transparent;
+  border-right:4px solid transparent;border-top:5px solid #71717a}
+.dd-menu{
+  position:absolute;top:calc(100% + 5px);left:0;min-width:190px;z-index:20;
+  background:#fff;border:1px solid #e4e4e7;border-radius:8px;padding:5px;
+  box-shadow:0 10px 24px -6px rgba(0,0,0,.22),0 2px 6px rgba(0,0,0,.08);
+}
+.dd-item{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:7px 9px;border-radius:5px;font-size:13px;cursor:pointer;
+}
+.dd-item:hover{background:#f4f4f5}
+.dd-item[aria-selected="true"]{background:#eff6ff;color:#1d4ed8;font-weight:500}
+.dd-item[aria-selected="true"]::after{content:"\2713";font-size:12px}
+.dd-sep{height:1px;background:#e4e4e7;margin:4px 2px}
+
+/* --- 24. tabs ------------------------------------------------------------- */
+.tabs{display:flex;gap:2px;border-bottom:1px solid #e4e4e7}
+.tab{
+  padding:8px 13px;font-size:13px;color:#71717a;cursor:pointer;
+  border-bottom:2px solid transparent;margin-bottom:-1px;
+}
+.tab[aria-selected="true"]{color:#1d4ed8;border-bottom-color:#1d4ed8;font-weight:500}
+
+/* --- 25. sticky + fixed (position normalization) -------------------------- */
+.sticky-bar{
+  position:sticky;top:0;background:#fef3c7;border:1px solid #fde68a;
+  padding:7px 11px;font-size:12px;border-radius:6px;
+}
+.fixed-toast{
+  position:fixed;right:18px;bottom:18px;z-index:40;
+  background:#111827;color:#f9fafb;padding:9px 13px;border-radius:8px;font-size:12px;
+  box-shadow:0 8px 20px rgba(0,0,0,.3);
+}
+
+/* --- 26. avatar + absolutely positioned badge ----------------------------- */
+.avatar-wrap{position:relative;display:inline-block}
+.avatar{
+  width:40px;height:40px;border-radius:50%;background:#c7d2fe;color:#3730a3;
+  display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;
+}
+.badge-dot{
+  position:absolute;top:-3px;right:-3px;min-width:18px;height:18px;padding:0 5px;
+  border-radius:999px;background:#dc2626;color:#fff;font-size:10px;font-weight:600;
+  display:flex;align-items:center;justify-content:center;border:2px solid #fff;
+}
+
+/* --- 27. floating-label input --------------------------------------------- */
+.float{position:relative;padding-top:8px;max-width:260px}
+.float input{
+  width:100%;padding:14px 11px 6px;border:1px solid #d4d4d8;border-radius:7px;
+  font:inherit;font-size:14px;background:#fff;outline:none;
+}
+.float label{
+  position:absolute;left:11px;top:12px;font-size:11px;color:#2563eb;
+  background:#fff;padding:0 3px;pointer-events:none;
+}
+
+/* --- 28. breadcrumb with ::after separators ------------------------------- */
+.crumbs{display:flex;align-items:center;font-size:12px;color:#71717a;gap:0}
+.crumbs a{color:#2563eb;text-decoration:none}
+.crumbs li{display:flex;align-items:center;list-style:none}
+.crumbs li:not(:last-child)::after{content:"/";margin:0 8px;color:#c4c4c8}
+
+/* --- 29. CSS custom properties (vars defined on :root) -------------------- */
+.var-card{
+  --card-accent:#7c3aed;
+  --card-pad:13px;
+  border-left:3px solid var(--card-accent);
+  padding:var(--card-pad);
+  background:color-mix(in srgb, var(--card-accent) 7%, white);
+  border-radius:0 7px 7px 0;font-size:13px;
+}
+.var-card b{color:var(--card-accent)}
+
+/* --- 30. gradient text (background-clip:text) ----------------------------- */
+.grad-text{
+  font-size:22px;font-weight:700;
+  background:linear-gradient(90deg,#ec4899,#8b5cf6,#0ea5e9);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+
+/* --- 31. CSS counters ---------------------------------------------------- */
+.steps{counter-reset:step;display:flex;flex-direction:column;gap:7px;max-width:300px}
+.step{counter-increment:step;position:relative;padding-left:29px;font-size:13px}
+.step::before{
+  content:counter(step);position:absolute;left:0;top:0;width:20px;height:20px;
+  border-radius:50%;background:#18181b;color:#fff;font-size:11px;
+  display:flex;align-items:center;justify-content:center;
+}
+
+/* --- 32. RTL + ellipsis + multicolumn ------------------------------------ */
+.rtl{direction:rtl;text-align:right;font-size:13px;max-width:280px}
+.ellipsis{max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.multicol{columns:2;column-gap:18px;font-size:12px;color:#52525b;max-width:400px}
+
+/* --- 33. transformed / rotated element ---------------------------------- */
+.rotated{
+  display:inline-block;transform:rotate(-4deg) scale(1.04);
+  background:#fef08a;border:1px solid #facc15;padding:6px 11px;font-size:12px;border-radius:5px;
+}
+
+/* --- 34. range / progress / meter --------------------------------------- */
+.native-row{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+
+/* --- 35. svg with gradient, clipPath and filter ------------------------- */
+.fancy-svg{width:120px;height:60px}
+
+/* --- 36. diverse font types --------------------------------------------- */
+.f-serif   {font-family:"Playfair Display",Georgia,serif;font-size:20px;font-weight:700}
+.f-serif-i {font-family:"Playfair Display",Georgia,serif;font-size:16px;font-style:italic;font-weight:400}
+.f-mono    {font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:13px}
+.f-mono-b  {font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:13px;font-weight:700}
+.f-var     {font-family:"Roboto Slab",serif;font-size:17px;font-weight:600;font-variation-settings:"wght" 600}
+.f-selfhost{font-family:"Fixture Sans",sans-serif;font-size:16px}
+/* A family that exists nowhere: must cost nothing and must not break the others,
+   and must be reported as NOT auto-loadable. */
+.f-missing {font-family:"Absolutely Proprietary Grotesk","Fixture Sans",sans-serif;font-size:16px}
+.f-system  {font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:16px}
+.f-row{display:flex;flex-direction:column;gap:9px;max-width:560px}
+.f-row > div{white-space:nowrap}
+
+/* --- 37. private icon font (the Google Sheets case) ---------------------- */
+/* Deliberately NO @font-face here: the font is registered from JS via the
+   FontFace API below, exactly as applications with their own icon set do it.
+   From the capture's point of view the family is loaded and rendering but has no
+   discoverable rule and no public CDN, so the glyph cannot travel as text. */
+.priv-icon{
+  font-family:"Private Sheets Icons";font-size:20px;line-height:1;color:#e8eaed;
+  display:inline-block;width:20px;height:20px;
+}
+.priv-toolbar{
+  display:flex;align-items:center;gap:14px;background:#1f1f1f;padding:9px 12px;border-radius:8px;
+}
+.priv-toolbar .lbl{font-size:12px;color:#9aa0a6;font-family:ui-monospace,Menlo,monospace}
+/* A pseudo-element icon from the same private font. */
+.priv-pseudo::before{
+  content:"\e5d2";font-family:"Private Sheets Icons";font-size:20px;color:#8ab4f8;
+}
+/* CSS sprite-sheet icon, the older Docs technique: one image, positioned. */
+.sprite-icon{
+  width:24px;height:24px;display:inline-block;
+  background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="72" height="24"><rect x="0" y="0" width="24" height="24" fill="%23ef4444"/><rect x="24" y="0" width="24" height="24" fill="%2322c55e"/><rect x="48" y="0" width="24" height="24" fill="%233b82f6"/></svg>');
+  background-position:-24px 0;background-repeat:no-repeat;
+}
+
+/* --- 38. holes: unrepresentable visuals (pixel recovery) ------------------ */
+.hole-row{display:flex;align-items:center;gap:14px;background:#111827;padding:10px 12px;border-radius:8px}
+/* An icon-sized box that paints nothing our capture can see. Stands in for the
+   whole family of "the glyph vanished and we never worked out why" failures. */
+.hole-icon{width:26px;height:26px}
+/* A legitimate layout spacer: wrong shape, must be left alone. */
+.hole-spacer{width:120px;height:10px}
+.hole-label{font:12px ui-monospace,Menlo,monospace;color:#9aa0a6}
+
+/* --- 39. alias-named private icon build (the Google Sheets pattern) -------- */
+/* The family name is an ALIAS of a public CDN family, but the file is a private
+   build with its own private-use mapping. Linking the public CDN font would put a
+   different glyph — or nothing — at this codepoint. */
+.alias-icon{font-family:"Google Material Icons";font-size:20px;color:#e8eaed;
+  display:inline-block;width:20px;height:20px}
+</style>
+</head>
+<body>
+
+<h1>Cheater fixtures</h1>
+
+<!-- Sprite definitions live OUTSIDE every section on purpose: resolving
+     <use href="#..."> across the selection boundary is the whole point. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="icon-star" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/>
+    </symbol>
+    <symbol id="icon-nested" viewBox="0 0 24 24">
+      <!-- a <use> inside a symbol: nested reference resolution -->
+      <use href="#icon-star"/>
+      <circle cx="20" cy="20" r="3" fill="#dc2626"/>
+    </symbol>
+  </defs>
+</svg>
+
+<section id="s-field">
+  <h2>1 · field card (expansion target, abs-positioned svg icon)</h2>
+  <div class="field-card" data-test="field-card">
+    <svg class="field-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/>
+    </svg>
+    <span class="lbl">Where to?</span>
+    <input data-test="field-input" type="text" value="Las Vegas, NV" placeholder="Search destinations">
+  </div>
+</section>
+
+<section id="s-sprite">
+  <h2>2 · sprite &lt;use&gt;, nested use, decorative empty svg</h2>
+  <div class="icons" data-test="icons">
+    <svg data-test="sprite-svg"><use href="#icon-star"/></svg>
+    <svg data-test="sprite-nested"><use href="#icon-nested"/></svg>
+    <!-- purely decorative: no fill, no stroke — should be dropped -->
+    <svg data-test="decorative" width="20" height="20" viewBox="0 0 20 20">
+      <circle cx="10" cy="10" r="9" fill="none" stroke="none"/>
+    </svg>
+    <!-- stroke-only icon: must NOT be dropped -->
+    <svg data-test="stroke-only" width="20" height="20" viewBox="0 0 24 24" fill="none"
+         stroke="#0891b2" stroke-width="2"><path d="M4 12h16M12 4v16"/></svg>
+  </div>
+</section>
+
+<section id="s-shadow">
+  <h2>3 · open shadow DOM</h2>
+  <fancy-widget data-test="shadow-host"></fancy-widget>
+  <fancy-widget data-test="shadow-host-2" label="Second"></fancy-widget>
+</section>
+
+<section id="s-canvas">
+  <h2>4 · canvas (2d readable, webgl unreadable)</h2>
+  <div style="display:flex;gap:14px;align-items:flex-start">
+    <canvas data-test="canvas-2d" width="240" height="120"
+            style="width:240px;height:120px;border:1px solid #d4d4d8;border-radius:6px"></canvas>
+    <canvas data-test="canvas-gl" width="120" height="120"
+            style="width:120px;height:120px;border:1px solid #d4d4d8;border-radius:6px"></canvas>
+  </div>
+</section>
+
+<section id="s-prose">
+  <h2>5 · prose that must never become icon ligatures</h2>
+  <p class="prose" data-test="prose">
+    Best price, <em>guaranteed</em> daily. This paragraph inherits a font stack that
+    mentions <strong>Segoe UI Symbol</strong> and <strong>Apple Color Emoji</strong>
+    further down, exactly like Bootstrap and Tailwind defaults do. A naive substring
+    match over the stack would render every word here as an icon glyph.
+  </p>
+  <p class="prose" data-test="prose-short">search</p>
+</section>
+
+<section id="s-pseudo-icons">
+  <h2>6 · ::before icon fonts · 7 · decorative empty-content pseudos</h2>
+  <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+    <i class="fa-search" data-test="fa-icon" aria-hidden="true"></i>
+    <span class="mi" data-test="mi-icon">search</span>
+    <span class="mi" data-test="mi-pua">&#xe5cd;</span>
+    <div class="switch" data-test="switch"></div>
+    <div class="mask-icon" data-test="mask-icon"></div>
+    <div class="bg-icon" data-test="bg-icon"></div>
+  </div>
+  <div class="divider" data-test="divider"></div>
+</section>
+
+<section id="s-form">
+  <h2>10 · live form state</h2>
+  <form data-test="form" style="display:flex;flex-direction:column;gap:10px;max-width:340px">
+    <input data-test="f-text" type="text" value="typed by hand" placeholder="unused placeholder">
+    <label style="display:flex;gap:7px;align-items:center">
+      <input data-test="f-check" type="checkbox" checked> checked box
+    </label>
+    <label style="display:flex;gap:7px;align-items:center">
+      <input data-test="f-radio" type="radio" name="r" checked> selected radio
+    </label>
+    <select data-test="f-select">
+      <option>First</option>
+      <option selected>Second is selected</option>
+    </select>
+    <textarea data-test="f-textarea" rows="2">textarea value set live</textarea>
+    <details data-test="f-details" open>
+      <summary>Open details</summary>
+      <div>Body that must not export collapsed.</div>
+    </details>
+    <button data-test="f-disabled" type="button" disabled>Disabled</button>
+    <input data-test="f-readonly" type="text" value="read only" readonly required>
+  </form>
+</section>
+
+<section id="s-layout">
+  <h2>13 · grid template areas (parent-wrap source)</h2>
+  <div class="grid" data-test="grid">
+    <div class="g-head" data-test="g-head">head</div>
+    <div class="g-side" data-test="g-side">side</div>
+    <div class="g-body" data-test="g-body">body</div>
+  </div>
+</section>
+
+<section id="s-hover">
+  <h2>14 · hover states (self and via ancestor)</h2>
+  <div style="display:flex;gap:16px;align-items:center">
+    <button class="btn" data-test="hover-btn">Hover me</button>
+    <div class="hover-card" data-test="hover-card">
+      Card
+      <button class="btn reveal" data-test="hover-reveal">Revealed on card hover</button>
+    </div>
+  </div>
+</section>
+
+<section id="s-overlay">
+  <h2>16 · transparent overlay click-catcher</h2>
+  <div class="catch-host" data-test="catch-host">
+    <div class="catch-card" data-test="catch-card">
+      <strong>Real card</strong><br>An invisible overlay covers this.
+    </div>
+    <div class="catch-overlay" data-test="catch-overlay"></div>
+  </div>
+</section>
+
+<section id="s-filtered">
+  <h2>17/18 · filtered nodes (display:none, visibility, opacity:0, noscript)</h2>
+  <div data-test="filtered">
+    <span>visible</span>
+    <span class="gone">display:none — must be dropped</span>
+    <span class="invisible">visibility:hidden — must be dropped</span>
+    <span class="faded">opacity:0 — must be KEPT (animation state)</span>
+    <noscript>&lt;img src="https://analytics.example/px"&gt; GTM noscript — must be dropped</noscript>
+    <script type="text/plain">script content must be dropped</script>
+  </div>
+</section>
+
+<section id="s-table">
+  <h2>19 · table (td expands to tr)</h2>
+  <table data-test="table">
+    <thead><tr><th>Key</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr data-test="tr-1"><td data-test="td-1">alpha</td><td>1</td></tr>
+      <tr><td>beta</td><td>2</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="s-misc" style="background:#334155">
+  <h2 style="color:#94a3b8">20/21/22 · dark card, backdrop-filter, scrollbars, clamp, chip</h2>
+  <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">
+    <div class="dark-card" data-test="dark-card">
+      <div class="k">STATUS</div>
+      <div>Dark component on a dark surface.</div>
+    </div>
+    <div class="glass" data-test="glass">backdrop-filter blur</div>
+    <div class="scroller" data-test="scroller">
+      Scrollable region with styled scrollbars. Line one. Line two. Line three.
+      Line four. Line five. Line six.
+    </div>
+    <div class="clamp" data-test="clamp">
+      Clamped to two lines with -webkit-line-clamp, which needs box-orient to survive
+      the round trip, otherwise this text expands to its full height in the export.
+    </div>
+    <span class="chip" data-test="chip">chip · 3</span>
+  </div>
+</section>
+
+<section id="s-ticker">
+  <h2>Dynamic content (freeze at selection time)</h2>
+  <div data-test="ticker" style="font-family:ui-monospace,Menlo,monospace">tick 0</div>
+  <div class="prose" data-test="rotator">ProTip: rotating text</div>
+</section>
+
+<section id="s-alias">
+  <h2>39 · alias-named private icon font, private-use codepoint</h2>
+  <div class="priv-toolbar" data-test="alias-toolbar">
+    <span class="lbl">100%</span>
+    <span class="alias-icon" data-test="alias-pua">&#xe5cd;</span>
+    <span class="alias-icon" data-test="alias-liga">undo</span>
+    <span class="lbl">B</span>
+  </div>
+</section>
+
+<section id="s-holes">
+  <h2>38 · unrepresentable visuals — recovered as pixels</h2>
+  <div class="hole-row" data-test="hole-row">
+    <span class="hole-label">holes:</span>
+    <div class="hole-icon" data-test="hole-icon"></div>
+    <div class="hole-spacer" data-test="hole-spacer"></div>
+    <span class="hole-label">end</span>
+  </div>
+</section>
+
+<section id="s-privfont">
+  <h2>37 · private icon font (no @font-face) + CSS sprite icon</h2>
+  <div class="priv-toolbar" data-test="priv-toolbar">
+    <span class="lbl">100%</span>
+    <span class="priv-icon" data-test="priv-icon-1">&#xe5cd;</span>
+    <span class="priv-icon" data-test="priv-icon-2">&#xe5c4;</span>
+    <span class="priv-icon" data-test="priv-icon-3">print</span>
+    <span class="priv-pseudo" data-test="priv-pseudo"></span>
+    <span class="sprite-icon" data-test="sprite-icon"></span>
+    <span class="lbl">B</span>
+  </div>
+</section>
+
+<section id="s-fonts">
+  <h2>36 · diverse font types — each must render in the export with identical metrics</h2>
+  <div class="f-row" data-test="font-row">
+    <div class="f-serif"    data-test="f-serif">Playfair Display 700 — Handgloves 0123</div>
+    <div class="f-serif-i"  data-test="f-serif-i">Playfair Display 400 italic — Handgloves</div>
+    <div class="f-mono"     data-test="f-mono">JetBrains Mono 400 — const x = 42;</div>
+    <div class="f-mono-b"   data-test="f-mono-b">JetBrains Mono 700 — const x = 42;</div>
+    <div class="f-var"      data-test="f-var">Roboto Slab variable 600 — Handgloves</div>
+    <div class="f-selfhost" data-test="f-selfhost">Fixture Sans self-hosted — Handgloves</div>
+    <div class="f-missing"  data-test="f-missing">Missing family falls back — Handgloves</div>
+    <div class="f-system"   data-test="f-system">System UI stack — Handgloves</div>
+  </div>
+</section>
+
+<section id="s-dropdown">
+  <h2>23 · custom dropdown (open), 24 · tabs, 28 · breadcrumb</h2>
+  <div style="display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap;min-height:170px">
+    <div class="dd" data-test="dropdown">
+      <button class="dd-btn" data-test="dd-btn" aria-expanded="true" aria-haspopup="listbox">Currency: USD</button>
+      <div class="dd-menu" data-test="dd-menu" role="listbox">
+        <div class="dd-item" role="option" aria-selected="true" data-test="dd-item-sel">US Dollar</div>
+        <div class="dd-item" role="option" aria-selected="false">Euro</div>
+        <div class="dd-item" role="option" aria-selected="false">Japanese Yen</div>
+        <div class="dd-sep"></div>
+        <div class="dd-item" role="option" aria-selected="false">More…</div>
+      </div>
+    </div>
+    <div>
+      <div class="tabs" data-test="tabs" role="tablist">
+        <div class="tab" role="tab" aria-selected="true" data-test="tab-active">Overview</div>
+        <div class="tab" role="tab" aria-selected="false">Pricing</div>
+        <div class="tab" role="tab" aria-selected="false">Reviews</div>
+      </div>
+      <div style="padding:11px 2px;font-size:13px;color:#52525b">Panel body</div>
+    </div>
+    <ul class="crumbs" data-test="crumbs">
+      <li><a href="/">Home</a></li>
+      <li><a href="/hotels">Hotels</a></li>
+      <li>Las Vegas</li>
+    </ul>
+  </div>
+</section>
+
+<section id="s-native">
+  <h2>25 · sticky, 26 · badge overlay, 27 · floating label, 34 · native controls</h2>
+  <div class="sticky-bar" data-test="sticky">position:sticky bar</div>
+  <div class="native-row" style="margin-top:12px">
+    <div class="avatar-wrap" data-test="avatar-wrap">
+      <div class="avatar" data-test="avatar">SK</div>
+      <span class="badge-dot" data-test="badge-dot">9</span>
+    </div>
+    <div class="float" data-test="float-field">
+      <label for="fl">Email</label>
+      <input id="fl" data-test="float-input" type="email" value="ash@example.com">
+    </div>
+    <input data-test="range" type="range" min="0" max="100" value="72">
+    <progress data-test="progress" value="0.6"></progress>
+    <meter data-test="meter" value="0.3" low="0.25" high="0.75" optimum="1"></meter>
+    <div class="rotated" data-test="rotated">rotated −4°</div>
+  </div>
+</section>
+
+<section id="s-css">
+  <h2>29 · CSS variables, 30 · gradient text, 31 · counters, 32 · RTL/ellipsis/multicol</h2>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
+    <div class="var-card" data-test="var-card">Uses <b>var(--card-accent)</b> and color-mix()</div>
+    <div class="grad-text" data-test="grad-text">Gradient text</div>
+    <ol class="steps" data-test="steps">
+      <li class="step" data-test="step-1">Pick your dates</li>
+      <li class="step">Choose a room</li>
+      <li class="step">Confirm and pay</li>
+    </ol>
+    <div class="rtl" data-test="rtl">النص العربي من اليمين إلى اليسار</div>
+    <div class="ellipsis" data-test="ellipsis">A single line of text that is far too long to fit and must be clipped with an ellipsis</div>
+    <div class="multicol" data-test="multicol">
+      Multi-column text flows across two columns and needs the column properties to
+      survive the round trip, otherwise it collapses into one tall column in the export.
+    </div>
+  </div>
+</section>
+
+<section id="s-modal">
+  <h2>Dialog (open), nested shadow DOM, slots</h2>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
+    <dialog data-test="dialog" open style="position:static;display:block;border:1px solid #e4e4e7;
+            border-radius:10px;padding:15px;box-shadow:0 12px 28px -8px rgba(0,0,0,.25);max-width:270px">
+      <h3 style="font-size:14px;margin:0 0 7px">Confirm booking</h3>
+      <p style="font-size:13px;color:#52525b;margin:0 0 11px">This charges your card immediately.</p>
+      <div style="display:flex;gap:7px;justify-content:flex-end">
+        <button class="btn" style="background:#f4f4f5;color:#18181b">Cancel</button>
+        <button class="btn">Confirm</button>
+      </div>
+    </dialog>
+    <outer-shell data-test="nested-shadow"></outer-shell>
+    <slot-host data-test="slot-host">
+      <span slot="title" data-test="slotted-title">Projected title</span>
+      <em>Projected default content</em>
+    </slot-host>
+  </div>
+</section>
+
+<section id="s-svgadv">
+  <h2>35 · SVG with gradient, clipPath, filter</h2>
+  <svg class="fancy-svg" data-test="fancy-svg" viewBox="0 0 120 60">
+    <defs>
+      <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#f472b6"/><stop offset="100%" stop-color="#6366f1"/>
+      </linearGradient>
+      <clipPath id="c1"><rect x="0" y="0" width="120" height="42" rx="7"/></clipPath>
+      <filter id="f1"><feGaussianBlur stdDeviation="1.1"/></filter>
+    </defs>
+    <rect width="120" height="60" fill="url(#g1)" clip-path="url(#c1)"/>
+    <circle cx="94" cy="16" r="9" fill="#fff" opacity=".82" filter="url(#f1)"/>
+    <text x="10" y="26" font-size="12" fill="#fff" font-family="ui-monospace,monospace">chart</text>
+  </svg>
+</section>
+
+<div class="fixed-toast" data-test="fixed-toast">position:fixed toast</div>
+
+<section id="s-frames">
+  <h2>Frames (about:blank and cross-origin)</h2>
+  <div style="display:flex;gap:12px">
+    <iframe data-test="frame-blank" src="about:blank" width="200" height="80"
+            style="border:1px solid #d4d4d8"></iframe>
+    <iframe data-test="frame-srcdoc" width="200" height="80" style="border:1px solid #d4d4d8"
+            srcdoc="<body style='font:13px system-ui;margin:6px'>srcdoc frame</body>"></iframe>
+  </div>
+</section>
+
+<section id="s-images">
+  <h2>Images (data URI, broken, srcset)</h2>
+  <div style="display:flex;gap:12px;align-items:center">
+    <img data-test="img-data" width="40" height="40" alt="green square"
+         src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' fill='%2316a34a'/></svg>">
+    <img data-test="img-broken" width="40" height="40" alt="broken"
+         src="does-not-exist-anywhere.png">
+    <!-- Real srcset with real URLs: a data: URI cannot appear in srcset at all,
+         because the comma inside it is the candidate separator. The point of this
+         case is that capture uses currentSrc (the candidate the browser actually
+         chose) rather than the src attribute. -->
+    <img data-test="img-srcset" width="40" height="40" alt="srcset"
+         srcset="fonts/../img/blue-40.png 1x, fonts/../img/blue-80.png 2x"
+         src="img/blue-40.png">
+  </div>
+</section>
+
+<script>
+/* ---- private icon font, registered from JS so no CSS rule exists --------- */
+(function () {
+  if (typeof FontFace !== 'function') return;
+  var face = new FontFace('Private Sheets Icons', 'url(fonts/private-icons.ttf)');
+  face.load().then(function (loaded) { document.fonts.add(loaded); }).catch(function () {});
+  var alias = new FontFace('Google Material Icons', 'url(fonts/private-icons.ttf)');
+  alias.load().then(function (loaded) { document.fonts.add(loaded); }).catch(function () {});
+})();
+
+/* ---- nested shadow roots + slots --------------------------------------- */
+class InnerBit extends HTMLElement {
+  connectedCallback() {
+    if (this.shadowRoot) return;
+    const r = this.attachShadow({ mode: 'open' });
+    r.innerHTML = `<style>
+      .inner{display:flex;align-items:center;gap:6px;padding:5px 9px;border-radius:999px;
+             background:#dcfce7;color:#166534;font:12px system-ui;border:1px solid #86efac}
+      .pulse{width:6px;height:6px;border-radius:50%;background:#16a34a}
+    </style><span class="inner"><span class="pulse"></span>inner shadow</span>`;
+  }
+}
+customElements.define('inner-bit', InnerBit);
+
+class OuterShell extends HTMLElement {
+  connectedCallback() {
+    if (this.shadowRoot) return;
+    const r = this.attachShadow({ mode: 'open' });
+    r.innerHTML = `<style>
+      .outer{display:flex;flex-direction:column;gap:7px;padding:11px;border-radius:9px;
+             background:#f5f3ff;border:1px solid #ddd6fe;font:13px system-ui;color:#5b21b6}
+    </style><div class="outer"><strong>outer shadow</strong><inner-bit></inner-bit></div>`;
+  }
+}
+customElements.define('outer-shell', OuterShell);
+
+class SlotHost extends HTMLElement {
+  connectedCallback() {
+    if (this.shadowRoot) return;
+    const r = this.attachShadow({ mode: 'open' });
+    r.innerHTML = `<style>
+      .card{padding:11px;border:1px dashed #a5b4fc;border-radius:9px;background:#fff;
+            font:13px system-ui;display:flex;flex-direction:column;gap:5px;max-width:230px}
+      .hd{font-weight:600;color:#3730a3;font-size:12px}
+    </style><div class="card"><div class="hd"><slot name="title"></slot></div><slot></slot></div>`;
+  }
+}
+customElements.define('slot-host', SlotHost);
+
+/* ---- shadow DOM component (open root, its own stylesheet) ---------------- */
+class FancyWidget extends HTMLElement {
+  connectedCallback() {
+    if (this.shadowRoot) return;
+    const root = this.attachShadow({ mode: 'open' });
+    root.innerHTML = `
+      <style>
+        :host{display:inline-block}
+        .box{
+          display:flex;align-items:center;gap:8px;padding:10px 12px;
+          border:1px solid #c7d2fe;border-radius:10px;background:#eef2ff;
+          font:14px system-ui;color:#3730a3;
+        }
+        .dot{width:8px;height:8px;border-radius:50%;background:#4f46e5}
+        button{
+          font:12px system-ui;padding:4px 9px;border:1px solid #a5b4fc;border-radius:5px;
+          background:#fff;color:#3730a3;cursor:pointer;
+        }
+        button:hover{background:#e0e7ff}
+      </style>
+      <div class="box">
+        <span class="dot"></span>
+        <span class="lbl">${this.getAttribute('label') || 'Shadow widget'}</span>
+        <button>Act</button>
+      </div>`;
+  }
+}
+customElements.define('fancy-widget', FancyWidget);
+
+/* ---- canvas: one readable 2d grid, one webgl that reads back blank ------- */
+(function () {
+  const c = document.querySelector('[data-test="canvas-2d"]');
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 240, 120);
+  ctx.strokeStyle = '#e4e4e7'; ctx.lineWidth = 1;
+  for (let x = 0; x <= 240; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 120); ctx.stroke(); }
+  for (let y = 0; y <= 120; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(240, y); ctx.stroke(); }
+  ctx.fillStyle = '#2563eb';
+  ctx.beginPath(); ctx.moveTo(0, 100);
+  [30, 60, 40, 88, 55, 96, 70, 110, 30].forEach((v, i) => ctx.lineTo(i * 30, 120 - v));
+  ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = '#111827'; ctx.font = '11px ui-monospace,monospace';
+  ctx.fillText('canvas-painted chart', 8, 14);
+
+  // No preserveDrawingBuffer: toDataURL reads back empty, which must degrade to
+  // a correctly-sized placeholder rather than throwing or aborting the export.
+  const gl = document.querySelector('[data-test="canvas-gl"]');
+  const glCtx = gl.getContext('webgl') || gl.getContext('experimental-webgl');
+  if (glCtx) { glCtx.clearColor(0.9, 0.3, 0.2, 1); glCtx.clear(glCtx.COLOR_BUFFER_BIT); }
+})();
+
+/* ---- dynamic content: must freeze at whatever it showed when selected ---- */
+(function () {
+  let n = 0;
+  const tick = document.querySelector('[data-test="ticker"]');
+  setInterval(() => { tick.textContent = 'tick ' + (++n); }, 250);
+
+  const tips = ['ProTip: rotating text', 'ProTip: second tip', 'ProTip: third tip'];
+  let i = 0;
+  const rotator = document.querySelector('[data-test="rotator"]');
+  setInterval(() => { rotator.textContent = tips[++i % tips.length]; }, 400);
+})();
+
+/* ---- lazy-loader swap: exercise currentSrc-after-swap ------------------- */
+setTimeout(() => {
+  const img = document.querySelector('[data-test="img-srcset"]');
+  if (img) img.dataset.swapped = '1';
+}, 100);
+</script>
+</body>
+</html>

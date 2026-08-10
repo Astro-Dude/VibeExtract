@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# Playwright MCP scratch output from test runs
+.playwright-mcp/
+
+# Editor noise
+*.swp
+.idea/
+.vscode/

@@ -1,320 +1,358 @@
-const startBtn = document.getElementById("start");
-const clearBtn = document.getElementById("clear");
-const exportBtn = document.getElementById("export");
-const statusDiv = document.getElementById("status");
-const statusDot = document.getElementById("status-dot");
-const toggleSettings = document.getElementById("toggle-settings");
-const settingsPanel = document.getElementById("settings-panel");
-const saveShortcutsBtn = document.getElementById("save-shortcuts");
-const resetShortcutsBtn = document.getElementById("reset-shortcuts");
-const currentShortcutsDiv = document.getElementById("current-shortcuts");
+/**
+ * Cheater — toolbar popup.
+ *
+ * Opening the popup is itself the "start selecting" gesture: selection mode
+ * auto-activates on load, so the common case needs no click at all.
+ */
 
-// Detect Mac platform
-const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0 || navigator.userAgent.includes('Mac');
+'use strict';
 
-// Add Mac class to body for CSS
-if (isMac) {
-  document.body.classList.add('is-mac');
-  // Update Alt labels to Option on Mac
-  document.querySelectorAll('.mod-alt-label').forEach(el => { el.textContent = 'Opt'; });
-}
+(function () {
+  var el = function (id) { return document.getElementById(id); };
 
-// Default shortcuts - use Cmd on Mac, Ctrl on other platforms
-const DEFAULT_SHORTCUTS = {
-  startSelect: { ctrl: !isMac, shift: true, alt: false, meta: isMac, key: 'S' },
-  clearSelect: { ctrl: false, shift: false, alt: false, meta: false, key: 'Escape' },
-  export: { ctrl: !isMac, shift: true, alt: false, meta: isMac, key: 'E' },
-  extractPage: { ctrl: !isMac, shift: true, alt: false, meta: isMac, key: 'X' }
-};
+  var isMac = /mac/i.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
+  var PRIMARY_LABEL = isMac ? '⌘' : 'Ctrl';
+  var ALT_LABEL = isMac ? 'Opt' : 'Alt';
 
-// Format shortcut for display
-function formatShortcut(shortcut) {
-  const parts = [];
-  if (shortcut.meta) parts.push(isMac ? '\u2318' : 'Meta');
-  if (shortcut.ctrl) parts.push(isMac ? '\u2303' : 'Ctrl');
-  if (shortcut.shift) parts.push(isMac ? '\u21E7' : 'Shift');
-  if (shortcut.alt) parts.push(isMac ? '\u2325' : 'Alt');
-  parts.push(shortcut.key === 'Escape' ? 'ESC' : shortcut.key.toUpperCase());
-  return parts.join(isMac ? '' : '+');
-}
-
-// Display current shortcuts as pills
-function displayCurrentShortcuts(shortcuts) {
-  const ep = shortcuts.extractPage || DEFAULT_SHORTCUTS.extractPage;
-  const items = [
-    { label: 'Select', shortcut: shortcuts.startSelect },
-    { label: 'Clear', shortcut: shortcuts.clearSelect },
-    { label: 'Export', shortcut: shortcuts.export },
-    { label: 'Full Page', shortcut: ep }
-  ];
-  currentShortcutsDiv.innerHTML = items.map(item =>
-    `<span class="shortcut-pill"><kbd>${formatShortcut(item.shortcut)}</kbd><span class="pill-label">${item.label}</span></span>`
-  ).join('');
-}
-
-// Set status with dot state
-function setStatus(text, active) {
-  statusDiv.textContent = text;
-  if (active) {
-    statusDot.classList.add('active');
-  } else {
-    statusDot.classList.remove('active');
-  }
-}
-
-// Load shortcuts into UI
-function loadShortcutsToUI(shortcuts) {
-  // Start Select
-  document.getElementById('start-ctrl').checked = !!shortcuts.startSelect.ctrl;
-  document.getElementById('start-meta').checked = !!shortcuts.startSelect.meta;
-  document.getElementById('start-shift').checked = !!shortcuts.startSelect.shift;
-  document.getElementById('start-alt').checked = !!shortcuts.startSelect.alt;
-  document.getElementById('start-key').value = shortcuts.startSelect.key;
-
-  // Clear Select
-  document.getElementById('clear-ctrl').checked = !!shortcuts.clearSelect.ctrl;
-  document.getElementById('clear-meta').checked = !!shortcuts.clearSelect.meta;
-  document.getElementById('clear-shift').checked = !!shortcuts.clearSelect.shift;
-  document.getElementById('clear-alt').checked = !!shortcuts.clearSelect.alt;
-  document.getElementById('clear-key').value = shortcuts.clearSelect.key;
-
-  // Export
-  document.getElementById('export-ctrl').checked = !!shortcuts.export.ctrl;
-  document.getElementById('export-meta').checked = !!shortcuts.export.meta;
-  document.getElementById('export-shift').checked = !!shortcuts.export.shift;
-  document.getElementById('export-alt').checked = !!shortcuts.export.alt;
-  document.getElementById('export-key').value = shortcuts.export.key;
-
-  // Extract Page
-  const ep = shortcuts.extractPage || DEFAULT_SHORTCUTS.extractPage;
-  document.getElementById('extract-ctrl').checked = !!ep.ctrl;
-  document.getElementById('extract-meta').checked = !!ep.meta;
-  document.getElementById('extract-shift').checked = !!ep.shift;
-  document.getElementById('extract-alt').checked = !!ep.alt;
-  document.getElementById('extract-key').value = ep.key;
-
-  displayCurrentShortcuts(shortcuts);
-}
-
-// Get shortcuts from UI
-function getShortcutsFromUI() {
-  return {
-    startSelect: {
-      ctrl: document.getElementById('start-ctrl').checked,
-      meta: document.getElementById('start-meta').checked,
-      shift: document.getElementById('start-shift').checked,
-      alt: document.getElementById('start-alt').checked,
-      key: document.getElementById('start-key').value || 'S'
-    },
-    clearSelect: {
-      ctrl: document.getElementById('clear-ctrl').checked,
-      meta: document.getElementById('clear-meta').checked,
-      shift: document.getElementById('clear-shift').checked,
-      alt: document.getElementById('clear-alt').checked,
-      key: document.getElementById('clear-key').value || 'Escape'
-    },
-    export: {
-      ctrl: document.getElementById('export-ctrl').checked,
-      meta: document.getElementById('export-meta').checked,
-      shift: document.getElementById('export-shift').checked,
-      alt: document.getElementById('export-alt').checked,
-      key: document.getElementById('export-key').value || 'E'
-    },
-    extractPage: {
-      ctrl: document.getElementById('extract-ctrl').checked,
-      meta: document.getElementById('extract-meta').checked,
-      shift: document.getElementById('extract-shift').checked,
-      alt: document.getElementById('extract-alt').checked,
-      key: document.getElementById('extract-key').value || 'X'
-    }
+  var DEFAULT_SHORTCUTS = {
+    start: { primary: true, shift: true, alt: false, key: 'S' },
+    export: { primary: true, shift: true, alt: false, key: 'E' },
+    fullpage: { primary: true, shift: true, alt: false, key: 'X' },
+    history: { primary: true, shift: true, alt: false, key: 'H' }
   };
-}
 
-// Load saved shortcuts on popup open (migrate old shortcuts missing meta field)
-chrome.storage.sync.get(['shortcuts'], (result) => {
-  let shortcuts = result.shortcuts || DEFAULT_SHORTCUTS;
-  // Migrate old shortcuts that don't have meta field
-  for (const key of Object.keys(shortcuts)) {
-    if (shortcuts[key] && shortcuts[key].meta === undefined) {
-      shortcuts[key].meta = false;
-    }
-  }
-  loadShortcutsToUI(shortcuts);
-});
+  // Pages where no extension content script can run. Saying so plainly beats
+  // three dead buttons and no explanation.
+  var BLOCKED_SCHEMES = ['chrome:', 'chrome-extension:', 'about:', 'data:', 'edge:', 'devtools:', 'view-source:'];
+  var BLOCKED_HOSTS = ['chrome.google.com', 'chromewebstore.google.com'];
 
-// Toggle settings panel
-toggleSettings.addEventListener('click', () => {
-  settingsPanel.classList.toggle('visible');
-  toggleSettings.classList.toggle('open');
-  const isOpen = settingsPanel.classList.contains('visible');
-  toggleSettings.innerHTML = `<span class="arrow">&#9654;</span> ${isOpen ? 'Hide Shortcuts' : 'Customize Shortcuts'}`;
-});
+  var state = { tab: null, shortcuts: DEFAULT_SHORTCUTS, blocked: false, history: [] };
 
-// Save shortcuts
-saveShortcutsBtn.addEventListener('click', () => {
-  const shortcuts = getShortcutsFromUI();
-  chrome.storage.sync.set({ shortcuts }, () => {
-    setStatus('Shortcuts saved!', true);
-    displayCurrentShortcuts(shortcuts);
-    setTimeout(() => {
-      setStatus('Selection mode active', true);
-    }, 1500);
-  });
-});
+  /* ---------------------------------------------------------------- helpers */
 
-// Reset shortcuts to defaults
-resetShortcutsBtn.addEventListener('click', () => {
-  loadShortcutsToUI(DEFAULT_SHORTCUTS);
-  chrome.storage.sync.set({ shortcuts: DEFAULT_SHORTCUTS }, () => {
-    setStatus('Shortcuts reset to defaults!', false);
-    setTimeout(() => {
-      setStatus('Selection mode active', true);
-    }, 1500);
-  });
-});
-
-// Handle key input - capture actual key pressed
-['start-key', 'clear-key', 'export-key', 'extract-key'].forEach(id => {
-  const input = document.getElementById(id);
-  input.addEventListener('keydown', (e) => {
-    e.preventDefault();
-    // Use the key name for special keys, otherwise the key character
-    let keyName = e.key;
-    if (keyName === ' ') keyName = 'Space';
-    input.value = keyName;
-  });
-});
-
-function getActiveTab(cb) {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    cb(tabs[0]);
-  });
-}
-
-function isTabCompatible(tab) {
-  // Content scripts cannot run on certain pages
-  if (!tab.url) return false;
-  if (tab.url.startsWith("chrome://")) return false;
-  if (tab.url.startsWith("chrome-extension://")) return false;
-  if (tab.url.startsWith("about:")) return false;
-  if (tab.url.startsWith("data:")) return false;
-  return true;
-}
-
-async function sendMessageToTab(tab, message, callback) {
-  if (!isTabCompatible(tab)) {
-    setStatus("Can't run on this page type", false);
-    callback(null);
-    return;
+  function comboLabel(config) {
+    if (!config || !config.key) return '—';
+    var parts = [];
+    if (config.primary) parts.push(PRIMARY_LABEL);
+    if (config.shift) parts.push('Shift');
+    if (config.alt) parts.push(ALT_LABEL);
+    parts.push(String(config.key).toUpperCase());
+    return parts.join('+');
   }
 
-  // For export, we need to check all frames
-  if (message.type === "EXPORT_SELECTION") {
-    try {
-      // Get all frames in the tab
-      const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
-
-      for (const frame of frames) {
-        try {
-          const response = await chrome.tabs.sendMessage(tab.id, message, { frameId: frame.frameId });
-          if (response && response.toon) {
-            callback(response);
-            return;
-          }
-        } catch (e) {
-          // Frame might not have content script, continue
-        }
-      }
-      // No frame had selections
-      callback(null);
-    } catch (e) {
-      // Fallback to main frame only
-      chrome.tabs.sendMessage(tab.id, message, (response) => {
-        if (chrome.runtime.lastError) {
-          callback(null);
-          return;
-        }
-        callback(response);
-      });
-    }
-    return;
-  }
-
-  // For other messages, send to all frames
-  try {
-    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
-    for (const frame of frames) {
+  function sendToTab(message) {
+    return new Promise(function (resolve) {
+      if (!state.tab) { resolve(null); return; }
       try {
-        await chrome.tabs.sendMessage(tab.id, message, { frameId: frame.frameId });
-      } catch (e) {
-        // Ignore frames without content script
-      }
-    }
-    callback({ ok: true });
-  } catch (e) {
-    // Fallback
-    chrome.tabs.sendMessage(tab.id, message, (response) => {
-      if (chrome.runtime.lastError) {
-        setStatus(`Error: ${chrome.runtime.lastError.message}`, false);
-        callback(null);
-        return;
-      }
-      callback(response);
+        chrome.tabs.sendMessage(state.tab.id, message, function (response) {
+          if (chrome.runtime.lastError) resolve(null);
+          else resolve(response);
+        });
+      } catch (_) { resolve(null); }
     });
   }
-}
 
-function activateSelectionMode() {
-  getActiveTab((tab) => {
-    sendMessageToTab(tab, { type: "START_PICK_MODE" }, (response) => {
-      if (!response) return;
-      setStatus("Selection mode active", true);
-    });
-  });
-}
-
-startBtn.addEventListener("click", activateSelectionMode);
-
-// Auto-activate selection mode when popup opens
-activateSelectionMode();
-
-clearBtn.addEventListener("click", () => {
-  getActiveTab((tab) => {
-    sendMessageToTab(tab, { type: "CLEAR_SELECTION" }, (response) => {
-      if (response) {
-        setStatus("Selection cleared", false);
-      }
-    });
-  });
-});
-
-exportBtn.addEventListener("click", () => {
-  getActiveTab((tab) => {
-    sendMessageToTab(tab, { type: "EXPORT_SELECTION" }, (response) => {
-      if (!response || !response.toon) {
-        setStatus("No elements selected", false);
-        return;
-      }
-
-      // Hand the font URLs to the background worker so it can fetch the
-      // binaries (CORS works there) before we stash everything for the
-      // export tab to consume.
-      chrome.runtime.sendMessage({
-        type: 'PREFETCH_FONTS',
-        fontFaces: response.fontFaces || []
-      }, (fetched) => {
-        chrome.storage.local.set({
-          exportHTML: response.html,
-          exportTOON: response.toon,
-          exportSourceURL: tab.url || '',
-          exportDiagnostics: response.diagnostics || null,
-          exportFontFaces: fetched && fetched.fontFaces ? fetched.fontFaces : []
-        }, () => {
-          chrome.tabs.create({ url: chrome.runtime.getURL('export.html') });
+  function sendToWorker(message) {
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage(message, function (response) {
+          if (chrome.runtime.lastError) resolve(null);
+          else resolve(response);
         });
-      });
+      } catch (_) { resolve(null); }
+    });
+  }
 
-      setStatus("Opening export page...", true);
+  function isBlocked(url) {
+    if (!url) return true;
+    for (var i = 0; i < BLOCKED_SCHEMES.length; i += 1) {
+      if (url.indexOf(BLOCKED_SCHEMES[i]) === 0) return true;
+    }
+    try {
+      var host = new URL(url).hostname;
+      if (BLOCKED_HOSTS.indexOf(host) !== -1) return true;
+    } catch (_) { return true; }
+    return false;
+  }
+
+  /* ------------------------------------------------------------------ render */
+
+  function renderShortcuts() {
+    var rows = [
+      ['Start selection', comboLabel(state.shortcuts.start)],
+      ['Export selection', comboLabel(state.shortcuts.export)],
+      ['Extract full page', comboLabel(state.shortcuts.fullpage)],
+      ['Recent captures', comboLabel(state.shortcuts.history)],
+      ['Clear / exit', 'Esc'],
+      ['Exact target', ALT_LABEL + '+Click'],
+      ['Multi-select', 'Shift+Click'],
+      ['Parent / child', ALT_LABEL + '+↑ / ' + ALT_LABEL + '+↓'],
+      ['Walk the tree', ALT_LABEL + '+Scroll']
+    ];
+    el('keys').innerHTML = rows.map(function (row) {
+      return '<div class="keyrow"><span class="name">' + row[0] +
+        '</span><span class="kbd">' + row[1] + '</span></div>';
+    }).join('');
+  }
+
+  function renderStatus(status) {
+    var dot = el('dot');
+    var text = el('status');
+
+    if (state.blocked) {
+      dot.className = 'dot bad';
+      text.innerHTML = 'inactive';
+      return;
+    }
+    if (!status) {
+      dot.className = 'dot bad';
+      text.innerHTML = 'content script not loaded — <b>reload the page</b>';
+      return;
+    }
+    dot.className = 'dot' + (status.active ? ' on' : '');
+    if (status.active && status.count) {
+      text.innerHTML = 'selecting · <b>' + status.count + '</b> element' + (status.count === 1 ? '' : 's') + ' held';
+    } else if (status.active) {
+      text.innerHTML = 'selecting · <b>click an element</b>';
+    } else {
+      text.innerHTML = 'idle';
+    }
+    el('export').disabled = !status.count;
+  }
+
+  function renderEditor() {
+    document.querySelectorAll('.mod-label').forEach(function (node) { node.textContent = PRIMARY_LABEL; });
+    document.querySelectorAll('.alt-label').forEach(function (node) { node.textContent = ALT_LABEL; });
+
+    document.querySelectorAll('.edrow').forEach(function (row) {
+      var config = state.shortcuts[row.dataset.action] || {};
+      row.querySelectorAll('input[data-mod]').forEach(function (input) {
+        input.checked = !!config[input.dataset.mod];
+        input.closest('.chk').classList.toggle('on', input.checked);
+      });
+      row.querySelector('[data-key]').value = String(config.key || '').toUpperCase();
+    });
+  }
+
+  function renderNote() {
+    el('note').innerHTML = state.blocked
+      ? ''
+      : 'Click a small element and Cheater expands to the surrounding component. ' +
+        '<b>' + ALT_LABEL + '+Click</b> takes the exact element. ' +
+        '<b>' + ALT_LABEL + '+↑/↓</b> moves the selection to its parent or child.';
+  }
+
+  /* ---------------------------------------------------------------- history */
+
+  function timeAgo(ms) {
+    var seconds = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (seconds < 60) return seconds + 's';
+    if (seconds < 3600) return Math.round(seconds / 60) + 'm';
+    if (seconds < 86400) return Math.round(seconds / 3600) + 'h';
+    return Math.round(seconds / 86400) + 'd';
+  }
+
+  function hostOf(url) {
+    try { return new URL(url).hostname.replace(/^www\./, ''); } catch (_) { return url || ''; }
+  }
+
+  /**
+   * The popup is the only surface always one click away, so past captures live
+   * here too — not just in an export tab you may not have open. Rows are read from
+   * the same worker store the export tab uses; clicking one opens it there.
+   */
+  async function renderHistory() {
+    var response = await sendToWorker({ type: 'CHEATER_HISTORY_LIST' });
+    var list = el('hist-list');
+
+    if (!response || !response.ok) {
+      el('hist-count').textContent = '';
+      list.innerHTML = '<div class="hist-empty">History unavailable' +
+        (response && response.reason ? ': ' + response.reason : '') + '</div>';
+      return;
+    }
+
+    state.history = response.entries || [];
+    el('hist-count').textContent = state.history.length
+      ? state.history.length + (state.history.length === 10 ? ' (max)' : '')
+      : '0';
+
+    if (!state.history.length) {
+      list.innerHTML = '<div class="hist-empty">Nothing captured yet. ' +
+        'The last 10 exports appear here.</div>';
+      return;
+    }
+
+    list.innerHTML = state.history.map(function (entry) {
+      return '<button class="hitem" data-id="' + entry.id + '" title="' +
+        (entry.url || '').replace(/"/g, '&quot;') + '">' +
+        '<span class="hi-when">' + timeAgo(entry.createdAt) + '</span>' +
+        '<span class="hi-what">' + (entry.label || 'selection') + '</span>' +
+        '<span class="hi-where">' + hostOf(entry.url) + '</span>' +
+        '</button>';
+    }).join('');
+  }
+
+  /* -------------------------------------------------------------------- boot */
+
+  async function boot() {
+    el('ver').textContent = 'v' + chrome.runtime.getManifest().version;
+
+    var tabs = await new Promise(function (resolve) {
+      chrome.tabs.query({ active: true, currentWindow: true }, resolve);
+    });
+    state.tab = tabs && tabs[0];
+
+    var stored = await new Promise(function (resolve) {
+      chrome.storage.sync.get({ shortcuts: null }, resolve);
+    });
+    state.shortcuts = (stored && stored.shortcuts) || DEFAULT_SHORTCUTS;
+
+    renderShortcuts();
+    renderEditor();
+
+    if (!state.tab || isBlocked(state.tab.url)) {
+      state.blocked = true;
+      var scheme = '';
+      try { scheme = new URL(state.tab.url).protocol; } catch (_) { scheme = 'this'; }
+      el('blocked').textContent =
+        'Cheater can\'t run on this page type (' + scheme + '). Chrome blocks extension ' +
+        'content scripts on browser-internal pages, the Web Store, and view-source. ' +
+        'Open a normal http(s) page and try again.';
+      el('blocked').classList.remove('hidden');
+      el('main').classList.add('hidden');
+      renderStatus(null);
+      renderNote();
+      return;
+    }
+
+    renderNote();
+
+    // Opening the popup IS the start gesture.
+    await sendToWorker({ type: 'CHEATER_CMD', cmd: 'start', tabId: state.tab.id });
+    var status = await sendToTab({ type: 'CHEATER_STATUS' });
+    renderStatus(status);
+
+    // The count is worth knowing without expanding the section.
+    renderHistory();
+
+    // The popup stays open while you click on the page in some window setups, so
+    // keep the count live rather than stale.
+    setInterval(async function () {
+      if (state.blocked) return;
+      renderStatus(await sendToTab({ type: 'CHEATER_STATUS' }));
+    }, 700);
+  }
+
+  /* ------------------------------------------------------------------ wiring */
+
+  el('start').addEventListener('click', async function () {
+    await sendToWorker({ type: 'CHEATER_CMD', cmd: 'start', tabId: state.tab.id });
+    renderStatus(await sendToTab({ type: 'CHEATER_STATUS' }));
+  });
+
+  el('clear').addEventListener('click', async function () {
+    await sendToWorker({ type: 'CHEATER_CMD', cmd: 'clear', tabId: state.tab.id });
+    renderStatus(await sendToTab({ type: 'CHEATER_STATUS' }));
+  });
+
+  el('export').addEventListener('click', async function () {
+    var result = await sendToWorker({ type: 'CHEATER_CMD', cmd: 'export', tabId: state.tab.id });
+    if (result && result.ok) window.close();
+    else renderStatus(await sendToTab({ type: 'CHEATER_STATUS' }));
+  });
+
+  el('hist-toggle').addEventListener('click', async function () {
+    var open = !el('histbox').classList.contains('open');
+    el('histbox').classList.toggle('open', open);
+    el('hist-toggle').classList.toggle('open', open);
+    if (open) await renderHistory();
+  });
+
+  el('hist-list').addEventListener('click', async function (event) {
+    var row = event.target.closest('.hitem');
+    if (!row) return;
+    var result = await sendToWorker({ type: 'CHEATER_OPEN_HISTORY', id: row.dataset.id });
+    if (result && result.ok) window.close();
+    else el('status').innerHTML = 'could not open that capture';
+  });
+
+  el('hist-clear').addEventListener('click', async function () {
+    await sendToWorker({ type: 'CHEATER_HISTORY_DELETE' });
+    await renderHistory();
+  });
+
+  el('customize-toggle').addEventListener('click', function () {
+    el('customize-toggle').classList.toggle('open');
+    el('editor').classList.toggle('open');
+  });
+
+  document.querySelectorAll('input[data-mod]').forEach(function (input) {
+    input.addEventListener('change', function () {
+      input.closest('.chk').classList.toggle('on', input.checked);
     });
   });
-});
+
+  // Key capture: read the physical key, ignoring the modifiers (those are the
+  // checkboxes' job) so pressing ⌘⇧S while focused records just "S".
+  document.querySelectorAll('[data-key]').forEach(function (input) {
+    input.addEventListener('focus', function () { input.classList.add('capturing'); input.value = '…'; });
+    input.addEventListener('blur', function () {
+      input.classList.remove('capturing');
+      if (input.value === '…') {
+        var action = input.closest('.edrow').dataset.action;
+        input.value = String((state.shortcuts[action] || {}).key || '').toUpperCase();
+      }
+    });
+    input.addEventListener('keydown', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      var key = event.key;
+      if (key === 'Tab' || key === 'Escape') { input.blur(); return; }
+      if (key.length !== 1 && !/^F\d+$/.test(key) && key !== 'ArrowUp' && key !== 'ArrowDown') return;
+      input.value = key.length === 1 ? key.toUpperCase() : key;
+      input.blur();
+    });
+  });
+
+  el('save-keys').addEventListener('click', async function () {
+    var next = {};
+    var valid = true;
+    document.querySelectorAll('.edrow').forEach(function (row) {
+      var config = { primary: false, shift: false, alt: false, key: '' };
+      row.querySelectorAll('input[data-mod]').forEach(function (input) {
+        config[input.dataset.mod] = input.checked;
+      });
+      config.key = row.querySelector('[data-key]').value.trim();
+      if (!config.key || config.key === '…') valid = false;
+      next[row.dataset.action] = config;
+    });
+
+    if (!valid) {
+      el('status').innerHTML = '<b style="color:#FF4A3D">every shortcut needs a key</b>';
+      return;
+    }
+
+    await new Promise(function (resolve) { chrome.storage.sync.set({ shortcuts: next }, resolve); });
+    state.shortcuts = next;
+    renderShortcuts();
+    // Push to every frame so the change takes effect without a page reload.
+    chrome.tabs.sendMessage(state.tab.id, { type: 'CHEATER_SHORTCUTS', shortcuts: next }, function () {
+      void chrome.runtime.lastError;
+    });
+    el('status').innerHTML = 'shortcuts <b>saved</b>';
+  });
+
+  el('reset-keys').addEventListener('click', async function () {
+    state.shortcuts = JSON.parse(JSON.stringify(DEFAULT_SHORTCUTS));
+    await new Promise(function (resolve) { chrome.storage.sync.set({ shortcuts: state.shortcuts }, resolve); });
+    renderShortcuts();
+    renderEditor();
+    chrome.tabs.sendMessage(state.tab.id, { type: 'CHEATER_SHORTCUTS', shortcuts: state.shortcuts }, function () {
+      void chrome.runtime.lastError;
+    });
+    el('status').innerHTML = 'shortcuts <b>reset</b>';
+  });
+
+  boot();
+})();

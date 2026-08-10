@@ -1,460 +1,351 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>VibeExtract — Export</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+<meta charset="utf-8">
+<title>Cheater — export</title>
+<style>
+/* ==========================================================================
+   Dark technical-instrument surface. Graphite, hairlines, one amber accent,
+   monospace for anything machine-ish. No gradients, no decorative shadows.
+   ========================================================================== */
+:root{
+  --bg:#0C0D0F;
+  --s1:#121316;
+  --s2:#16181B;
+  --s3:#1B1E22;
+  --line:#1E2126;
+  --line2:#2A2D33;
+  --fg:#E8E6E1;
+  --mut:#8A8F98;
+  --mut2:#6B7077;
+  --amber:#FFB224;
+  --amber-h:#FFC04A;
+  --red:#FF4A3D;
+  --green:#5FD08A;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13px;
+  display:flex;flex-direction:column;overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: #0a0a0a;
-      color: #e4e4e7;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
+/* ---------------------------------------------------------------- header --- */
+.hdr{
+  display:flex;align-items:center;gap:14px;padding:0 14px;height:38px;
+  background:var(--s1);border-bottom:1px solid var(--line2);flex:0 0 auto;
+}
+.brand{
+  font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--amber);
+  text-transform:uppercase;display:flex;align-items:center;gap:7px;
+}
+.brand::before{
+  content:"";width:7px;height:7px;background:var(--amber);
+  box-shadow:0 0 0 2px rgba(255,178,36,.18);
+}
+.src{
+  font-family:var(--mono);font-size:11px;color:var(--mut);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.src a{color:var(--mut);text-decoration:none}
+.src a:hover{color:var(--fg)}
+.ver{font-family:var(--mono);font-size:10px;color:var(--mut2);letter-spacing:.06em}
 
-    /* ── Top bar ── */
-    .topbar {
-      padding: 20px 32px 0;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .topbar-left {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    .logo {
-      width: 32px;
-      height: 32px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
-      border-radius: 9px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 17px;
-      font-weight: 600;
-      color: #fff;
-      letter-spacing: -0.5px;
-    }
-    .topbar h1 {
-      font-size: 16px;
-      font-weight: 600;
-      color: #fafafa;
-      letter-spacing: -0.4px;
-    }
-    .topbar .subtitle {
-      font-size: 12px;
-      color: #52525b;
-      margin-top: 1px;
-    }
-    .source-url {
-      font-size: 11px;
-      color: #3f3f46;
-      max-width: 300px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+/* ----------------------------------------------------------- diagnostics --- */
+.diag{flex:0 0 auto;background:var(--s1);border-bottom:1px solid var(--line)}
+.diag-bar{
+  display:flex;align-items:center;gap:10px;padding:7px 14px;cursor:pointer;
+  user-select:none;flex-wrap:wrap;
+}
+.diag-bar:hover{background:var(--s2)}
+.caret{
+  font-family:var(--mono);font-size:9px;color:var(--mut2);width:9px;flex:0 0 auto;
+  transition:transform .12s linear;
+}
+.diag.open .caret{transform:rotate(90deg)}
+.diag-title{
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--mut);flex:0 0 auto;margin-right:2px;
+}
+.pill{
+  font-family:var(--mono);font-size:10.5px;line-height:1;padding:4px 7px;
+  border:1px solid var(--line2);background:var(--s2);color:var(--mut);
+  display:inline-flex;gap:5px;align-items:center;white-space:nowrap;
+}
+.pill b{color:var(--fg);font-weight:400}
+.pill.on b{color:var(--amber)}
+.pill.warn{color:#E0B15C;border-color:#5E4715;background:#1C1608}
+.pill.warn b{color:var(--amber)}
+.pill.bad{color:#E8938B;border-color:#5E2420;background:#1C0F0E}
+.pill.bad b{color:var(--red)}
+.diag-body{display:none;padding:0 14px 12px}
+.diag.open .diag-body{display:block}
+.rows{border:1px solid var(--line);border-bottom:0}
+.row{
+  display:flex;align-items:center;gap:10px;padding:6px 9px;
+  border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11px;
+  background:var(--s2);
+}
+.row .tag{color:var(--amber);min-width:76px}
+.row .cls{color:var(--mut);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .dim{color:var(--mut2)}
+.badge{
+  font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;padding:2px 5px;
+  border:1px solid var(--line2);color:var(--mut);
+}
+.badge.w{border-color:#3A4759;color:#8FB0D6}
+.badge.d{border-color:#5E4715;color:#E0B15C}
+.notes{margin-top:9px;display:flex;flex-direction:column;gap:4px}
+.note{
+  font-family:var(--mono);font-size:10.5px;color:var(--mut);
+  padding-left:11px;position:relative;line-height:1.5;
+}
+.note::before{content:"—";position:absolute;left:0;color:var(--mut2)}
+.note.warn{color:#E0B15C}
 
-    /* ── Tab bar ── */
-    .tab-bar {
-      margin: 20px 32px 0;
-      display: flex;
-      gap: 2px;
-      border-bottom: 1px solid #1f1f23;
-    }
-    .tab {
-      padding: 10px 20px;
-      font-size: 13px;
-      font-weight: 500;
-      color: #52525b;
-      cursor: pointer;
-      border: none;
-      background: none;
-      font-family: inherit;
-      position: relative;
-      transition: color 0.15s;
-    }
-    .tab:hover {
-      color: #a1a1aa;
-    }
-    .tab.active {
-      color: #e4e4e7;
-    }
-    .tab.active::after {
-      content: "";
-      position: absolute;
-      bottom: -1px;
-      left: 0;
-      right: 0;
-      height: 2px;
-      background: #6366f1;
-      border-radius: 2px 2px 0 0;
-    }
-    .tab .tab-badge {
-      font-size: 9px;
-      font-weight: 600;
-      color: #6366f1;
-      background: rgba(99, 102, 241, 0.12);
-      padding: 1px 6px;
-      border-radius: 8px;
-      margin-left: 6px;
-      letter-spacing: 0.3px;
-      text-transform: uppercase;
-    }
+/* ------------------------------------------------------------------ tabs --- */
+.tabs{
+  display:flex;align-items:stretch;gap:0;background:var(--s1);
+  border-bottom:1px solid var(--line2);flex:0 0 auto;padding:0 8px;
+}
+.tab{
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--mut);padding:0 13px;height:33px;display:flex;align-items:center;gap:6px;
+  border-bottom:2px solid transparent;
+}
+.tab:hover{color:var(--fg)}
+.tab.sel{color:var(--fg);border-bottom-color:var(--amber)}
+.tab .llm{
+  font-size:8.5px;letter-spacing:.08em;padding:2px 4px;border:1px solid var(--line2);
+  color:var(--amber);
+}
+.tabs .spacer{flex:1}
+.tools{display:flex;align-items:center;gap:8px;padding-right:4px}
+.seg{display:flex;border:1px solid var(--line2);background:var(--s2)}
+.seg button{
+  font-family:var(--mono);font-size:10.5px;padding:4px 8px;color:var(--mut);
+  border-right:1px solid var(--line2);
+}
+.seg button:last-child{border-right:0}
+.seg button:hover{color:var(--fg);background:var(--s3)}
+.seg button.sel{color:var(--bg);background:var(--amber)}
+.meta{font-family:var(--mono);font-size:10.5px;color:var(--mut2)}
+.meta b{color:var(--mut);font-weight:400}
 
-    /* ── Content area ── */
-    .content {
-      flex: 1;
-      margin: 0 32px;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
+/* ----------------------------------------------------------------- panes --- */
+.panes{flex:1 1 auto;min-height:0;position:relative}
+.pane{position:absolute;inset:0;display:none;overflow:auto}
+.pane.sel{display:block}
 
-    .panel {
-      display: none;
-      flex: 1;
-      flex-direction: column;
-      min-height: 0;
-      padding: 16px 0;
-    }
-    .panel.active {
-      display: flex;
-    }
+/* Dot grid so a transparent or white component still reads as a component. */
+#preview-pane{
+  background-color:#0F1113;
+  background-image:radial-gradient(circle at 1px 1px, #24272C 1px, transparent 0);
+  background-size:14px 14px;
+  padding:22px;
+}
+#preview-pane.light{
+  background-color:#EDEEF0;
+  background-image:radial-gradient(circle at 1px 1px, #C9CCD1 1px, transparent 0);
+}
+.stage{margin:0 auto;transform-origin:top left}
+#frame{
+  display:block;border:1px solid var(--line2);background:#fff;width:100%;
+}
+#preview-pane.light #frame{border-color:#C9CCD1}
 
-    /* ── Code view ── */
-    .code-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 12px;
-    }
-    .code-meta {
-      font-size: 11px;
-      color: #3f3f46;
-      font-family: SF Mono, Menlo, Consolas, monospace;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .code-meta .font-name {
-      color: #a78bfa;
-      background: rgba(167, 139, 250, 0.08);
-      padding: 2px 8px;
-      border-radius: 5px;
-    }
-    .code-wrap {
-      flex: 1;
-      min-height: 0;
-      background: #111113;
-      border: 1px solid #1f1f23;
-      border-radius: 10px;
-      overflow: auto;
-      position: relative;
-    }
-    .code-wrap pre {
-      padding: 20px 24px;
-      font-family: SF Mono, Menlo, Consolas, "Liberation Mono", monospace;
-      font-size: 12px;
-      line-height: 1.65;
-      color: #a1a1aa;
-      white-space: pre;
-      tab-size: 2;
-      margin: 0;
-    }
+.code-head{
+  display:flex;align-items:center;gap:10px;padding:6px 12px;background:var(--s1);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2;
+}
+pre{
+  font-family:var(--mono);font-size:11.5px;line-height:1.62;padding:12px 14px 40px;
+  white-space:pre;tab-size:2;color:#C9CDD3;
+}
+.tk-tag{color:#7FB2E5}
+.tk-attr{color:#D9A85C}
+.tk-string{color:#8FC98F}
+.tk-punct{color:#6B7077}
+.tk-comment{color:#5C636B;font-style:italic}
+.tk-number{color:#C99A6B}
+.tk-value{color:#C79BD0}
+.tk-keyword{color:var(--amber)}
+.tk-cls{color:#7FB2E5}
 
-    /* ── Preview ── */
-    .preview-frame {
-      border: 1px solid #1f1f23;
-      border-radius: 10px;
-      overflow: hidden;
-      background: #fff;
-    }
-    .preview-frame iframe {
-      width: 100%;
-      min-height: 70vh;
-      border: none;
-      display: block;
-    }
+/* ---------------------------------------------------------------- footer --- */
+.ftr{
+  display:flex;align-items:center;gap:8px;padding:0 12px;height:42px;
+  background:var(--s1);border-top:1px solid var(--line2);flex:0 0 auto;
+}
+.btn{
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;padding:7px 12px;
+  border:1px solid var(--line2);background:var(--s2);color:var(--fg);
+}
+.btn:hover{border-color:#3A3E45;background:var(--s3)}
+.btn.pri{border-color:var(--amber);color:var(--amber)}
+.btn.pri:hover{background:rgba(255,178,36,.09);color:var(--amber-h);border-color:var(--amber-h)}
+.ftr .spacer{flex:1}
+.hint{font-family:var(--mono);font-size:10.5px;color:var(--mut2)}
 
-    /* ── Action bar (bottom) ── */
-    .action-bar {
-      padding: 16px 32px 24px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .dl-btn {
-      padding: 10px 22px;
-      border-radius: 9px;
-      border: 1px solid #27272a;
-      background: #141416;
-      color: #e4e4e7;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 500;
-      font-family: inherit;
-      transition: all 0.15s;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .dl-btn:hover {
-      background: #1c1c1f;
-      border-color: #3f3f46;
-    }
-    .dl-btn:active {
-      transform: scale(0.97);
-    }
-    .dl-btn .dl-icon {
-      font-size: 15px;
-      opacity: 0.5;
-    }
-    .dl-btn-primary {
-      background: linear-gradient(135deg, #6366f1, #7c3aed);
-      border-color: transparent;
-      color: #fff;
-    }
-    .dl-btn-primary:hover {
-      background: linear-gradient(135deg, #7577f5, #8b5cf6);
-      border-color: transparent;
-    }
-    .action-spacer {
-      flex: 1;
-    }
+.toast{
+  position:fixed;left:50%;bottom:56px;transform:translateX(-50%);
+  background:var(--s2);border:1px solid var(--line2);border-left:2px solid var(--amber);
+  padding:8px 13px;font-family:var(--mono);font-size:11px;color:var(--fg);
+  opacity:0;pointer-events:none;transition:opacity .14s linear;z-index:50;max-width:70vw;
+}
+.toast.show{opacity:1}
+.toast.bad{border-left-color:var(--red)}
 
-    /* ── Toast ── */
-    .toast {
-      position: fixed;
-      bottom: 28px;
-      left: 50%;
-      transform: translateX(-50%) translateY(80px);
-      background: #18181b;
-      border: 1px solid #27272a;
-      color: #e4e4e7;
-      padding: 10px 20px;
-      border-radius: 10px;
-      font-size: 13px;
-      font-weight: 500;
-      pointer-events: none;
-      opacity: 0;
-      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-      z-index: 999;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .toast.visible {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
-    .toast .toast-icon {
-      color: #22c55e;
-    }
-
-    /* ── Copy button (inside code view) ── */
-    .copy-btn {
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      padding: 5px 10px;
-      border-radius: 6px;
-      border: 1px solid #27272a;
-      background: #18181b;
-      color: #71717a;
-      cursor: pointer;
-      font-size: 11px;
-      font-family: inherit;
-      transition: all 0.15s;
-      z-index: 2;
-    }
-    .copy-btn:hover {
-      background: #27272a;
-      color: #a1a1aa;
-    }
-
-    /* ── Empty state ── */
-    .empty-state {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #27272a;
-      font-size: 14px;
-    }
-
-    /* ── Diagnostics ── */
-    .diag-wrap {
-      margin: 0 32px 12px;
-    }
-    .diag {
-      background: #111113;
-      border: 1px solid #1f1f23;
-      border-radius: 10px;
-      overflow: hidden;
-    }
-    .diag summary {
-      list-style: none;
-      cursor: pointer;
-      padding: 10px 16px;
-      font-size: 12px;
-      color: #a1a1aa;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      user-select: none;
-    }
-    .diag summary::-webkit-details-marker { display: none; }
-    .diag summary::before {
-      content: '▸';
-      font-size: 10px;
-      color: #52525b;
-      transition: transform 0.15s;
-      display: inline-block;
-    }
-    .diag[open] summary::before { transform: rotate(90deg); }
-    .diag .diag-pill {
-      background: #18181b;
-      border: 1px solid #27272a;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 11px;
-      color: #a1a1aa;
-      font-family: SF Mono, Menlo, Consolas, monospace;
-    }
-    .diag .diag-pill.warn { color: #fbbf24; border-color: #422006; background: rgba(251, 191, 36, 0.06); }
-    .diag .diag-body {
-      padding: 4px 16px 14px;
-      font-family: SF Mono, Menlo, Consolas, monospace;
-      font-size: 11px;
-      color: #a1a1aa;
-      border-top: 1px solid #1f1f23;
-      margin-top: 6px;
-    }
-    .diag-row {
-      display: flex;
-      gap: 14px;
-      padding: 6px 0;
-      border-bottom: 1px solid #1a1a1d;
-      align-items: baseline;
-    }
-    .diag-row:last-child { border-bottom: none; }
-    .diag-row .tag {
-      color: #a78bfa;
-      min-width: 60px;
-    }
-    .diag-row .meta {
-      color: #52525b;
-      flex: 1;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .diag-row .badge {
-      background: #18181b;
-      padding: 1px 6px;
-      border-radius: 4px;
-      color: #6366f1;
-      font-size: 10px;
-    }
-    .diag-row .badge.dropped {
-      color: #ef4444;
-    }
-  </style>
+.hist-btn{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:4px 9px;
+  border:1px solid var(--line2);color:var(--mut);background:var(--s2);flex:0 0 auto;
+}
+.hist-btn:hover{color:var(--fg);border-color:#3A3E45}
+.hist-btn.on{color:var(--bg);background:var(--amber);border-color:var(--amber)}
+.hist{
+  display:none;flex:0 0 auto;background:var(--s1);border-bottom:1px solid var(--line2);
+  padding:10px 14px 12px;max-height:44vh;overflow:auto;
+}
+.hist.open{display:block}
+.hist-head{display:flex;align-items:center;gap:8px;padding-bottom:8px}
+.hist-head .spacer{flex:1}
+.hist-rows{display:flex;flex-direction:column;gap:1px}
+.hrow{
+  display:flex;align-items:center;gap:11px;padding:7px 9px;background:var(--s2);
+  border:1px solid var(--line);font-family:var(--mono);font-size:11px;
+}
+.hrow.current{border-color:var(--amber)}
+.hrow .when{color:var(--mut2);width:104px;flex:0 0 auto}
+.hrow .what{color:var(--amber);width:150px;flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hrow .where{color:var(--mut);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hrow .dim{color:var(--mut2);flex:0 0 auto}
+.hrow .acts{display:flex;gap:5px;flex:0 0 auto}
+.hrow button{
+  font-family:var(--mono);font-size:10px;padding:3px 7px;border:1px solid var(--line2);
+  color:var(--mut);background:var(--s3);
+}
+.hrow button:hover{color:var(--fg);border-color:#3A3E45}
+.hrow button.open-btn:hover{color:var(--amber);border-color:var(--amber)}
+.hist-empty{font-family:var(--mono);font-size:10.5px;color:var(--mut2);padding:4px 0}
+.loading{
+  position:fixed;inset:0;z-index:60;background:rgba(12,13,15,.92);
+  display:flex;align-items:center;justify-content:center;
+}
+.loading.done{display:none}
+.loading-box{
+  min-width:320px;background:var(--s1);border:1px solid var(--line2);
+  border-left:2px solid var(--amber);padding:14px 16px 15px;
+}
+.loading-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.loading-label{font-family:var(--mono);font-size:11.5px;color:var(--fg);letter-spacing:.02em}
+.loading-pct{font-family:var(--mono);font-size:11.5px;color:var(--amber);font-variant-numeric:tabular-nums}
+.loading-track{margin-top:9px;height:2px;background:var(--line2);overflow:hidden}
+.loading-fill{height:100%;background:var(--amber);width:0%;transition:width .12s linear}
+.loading-sub{margin-top:8px;font-family:var(--mono);font-size:10.5px;color:var(--mut2)}
+.empty{
+  display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;
+  height:100%;font-family:var(--mono);font-size:12px;color:var(--mut);text-align:center;
+}
+.empty b{color:var(--amber);font-weight:400;letter-spacing:.1em;text-transform:uppercase;font-size:11px}
+.hidden{display:none !important}
+</style>
 </head>
 <body>
 
-  <!-- Top bar -->
-  <div class="topbar">
-    <div class="topbar-left">
-      <div class="logo">V</div>
-      <div>
-        <h1>Export</h1>
-        <div class="subtitle">Pick a format, then download.</div>
-      </div>
-    </div>
-    <div class="source-url" id="source-url"></div>
+<header class="hdr">
+  <span class="brand">Cheater</span>
+  <span class="src" id="src"></span>
+  <button class="hist-btn" id="hist-btn" title="Recent captures">History</button>
+  <span class="ver" id="ver"></span>
+</header>
+
+<section class="hist" id="hist">
+  <div class="hist-head">
+    <span class="diag-title">Recent captures</span>
+    <span class="spacer"></span>
+    <button class="btn" id="hist-clear">Clear all</button>
+    <button class="btn" id="hist-close">Close</button>
   </div>
+  <div class="hist-rows" id="hist-rows"></div>
+</section>
 
-  <!-- Tabs -->
-  <div class="tab-bar">
-    <button class="tab active" data-tab="preview">Preview</button>
-    <button class="tab" data-tab="html">HTML</button>
-    <button class="tab" data-tab="toon">TOON <span class="tab-badge">LLM</span></button>
+<section class="diag" id="diag">
+  <div class="diag-bar" id="diag-bar">
+    <span class="caret">▶</span>
+    <span class="diag-title">Diagnostics</span>
+    <span id="pills"></span>
   </div>
-
-  <!-- Diagnostics -->
-  <div class="diag-wrap">
-    <details class="diag" id="diag" hidden>
-      <summary id="diag-summary"></summary>
-      <div class="diag-body" id="diag-body"></div>
-    </details>
+  <div class="diag-body">
+    <div class="rows" id="rows"></div>
+    <div class="notes" id="notes"></div>
   </div>
+</section>
 
-  <!-- Panels -->
-  <div class="content">
-    <!-- Preview -->
-    <div class="panel active" id="panel-preview">
-      <div class="preview-frame">
-        <iframe id="preview-iframe" sandbox="allow-same-origin"></iframe>
-      </div>
+<nav class="tabs">
+  <button class="tab sel" data-tab="preview">Preview</button>
+  <button class="tab" data-tab="html">HTML</button>
+  <button class="tab" data-tab="toon">TOON <span class="llm">LLM</span></button>
+  <span class="spacer"></span>
+  <div class="tools" id="preview-tools">
+    <span class="meta">width</span>
+    <div class="seg" id="width-seg">
+      <button data-w="fit" class="sel">Fit</button>
+      <button data-w="1280">1280</button>
+      <button data-w="768">768</button>
+      <button data-w="375">375</button>
     </div>
-
-    <!-- HTML -->
-    <div class="panel" id="panel-html">
-      <div class="code-header">
-        <div class="code-meta" id="html-meta"></div>
-      </div>
-      <div class="code-wrap">
-        <button class="copy-btn" data-copy="html">Copy</button>
-        <pre id="html-code"></pre>
-      </div>
-    </div>
-
-    <!-- TOON -->
-    <div class="panel" id="panel-toon">
-      <div class="code-header">
-        <div class="code-meta" id="toon-meta"></div>
-      </div>
-      <div class="code-wrap">
-        <button class="copy-btn" data-copy="toon">Copy</button>
-        <pre id="toon-code"></pre>
-      </div>
+    <div class="seg" id="surface-seg">
+      <button data-surface="dark" class="sel">Dark</button>
+      <button data-surface="light">Light</button>
     </div>
   </div>
-
-  <!-- Bottom action bar -->
-  <div class="action-bar">
-    <button class="dl-btn" id="dl-html">
-      <span class="dl-icon">&darr;</span>
-      Save .html
-    </button>
-    <button class="dl-btn" id="dl-toon">
-      <span class="dl-icon">&darr;</span>
-      Save .toon
-    </button>
-    <button class="dl-btn" id="dl-fonts" hidden>
-      <span class="dl-icon">&darr;</span>
-      <span id="dl-fonts-label">Download fonts</span>
-    </button>
-    <div class="action-spacer"></div>
-    <button class="dl-btn dl-btn-primary" id="dl-both">
-      <span class="dl-icon">&darr;</span>
-      Save Both
-    </button>
+  <div class="tools hidden" id="code-tools">
+    <span class="meta" id="code-meta"></span>
+    <button class="btn" id="copy">Copy</button>
   </div>
+</nav>
 
-  <!-- Toast -->
-  <div class="toast" id="toast">
-    <span class="toast-icon">&#10003;</span>
-    <span id="toast-text">Saved</span>
+<main class="panes">
+  <div class="pane sel" id="preview-pane">
+    <div class="stage" id="stage">
+      <iframe id="frame" sandbox="allow-same-origin" title="Export preview"></iframe>
+    </div>
   </div>
+  <div class="pane" id="html-pane"><pre><code id="html-code"></code></pre></div>
+  <div class="pane" id="toon-pane"><pre><code id="toon-code"></code></pre></div>
+</main>
 
-  <script src="export.js"></script>
+<footer class="ftr">
+  <button class="btn pri" id="save-html">Save .html</button>
+  <button class="btn" id="save-toon">Save .toon</button>
+  <button class="btn" id="save-both">Save Both</button>
+  <button class="btn hidden" id="save-fonts">Download fonts</button>
+  <span class="spacer"></span>
+  <span class="hint" id="hint">saved path is copied to the clipboard</span>
+</footer>
+
+<div class="loading" id="loading">
+  <div class="loading-box">
+    <div class="loading-row">
+      <span class="loading-label" id="loading-label">Reading capture</span>
+      <span class="loading-pct" id="loading-pct">0%</span>
+    </div>
+    <div class="loading-track"><div class="loading-fill" id="loading-fill"></div></div>
+    <div class="loading-sub" id="loading-sub"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="lib/reset.js"></script>
+<script src="lib/html-writer.js"></script>
+<script src="lib/toon-writer.js"></script>
+<script src="lib/zip.js"></script>
+<script src="lib/highlight.js"></script>
+<script src="export.js"></script>
 </body>
 </html>

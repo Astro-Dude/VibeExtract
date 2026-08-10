@@ -1,22 +1,36 @@
 {
   "manifest_version": 3,
-  "name": "VibeExtract",
-  "version": "2.10.3",
-  "description": "Select elements on web pages and export them as a standalone HTML file with inline styles.",
-  "permissions": ["activeTab", "scripting", "webNavigation", "storage", "downloads", "clipboardWrite"],
+  "name": "Cheater",
+  "version": "3.0.0",
+  "description": "Point at any element on any page and extract it as a standalone, pixel-faithful HTML component or a compact TOON spec for an LLM.",
+  "minimum_chrome_version": "109",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "webNavigation",
+    "storage",
+    "downloads",
+    "clipboardWrite"
+  ],
   "host_permissions": ["<all_urls>"],
-  "action": {
-    "default_popup": "popup.html"
-  },
   "background": {
     "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Cheater — extract a component",
+    "default_popup": "popup.html"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["contentScript.js"],
+      "js": ["lib/reset.js", "contentScript.js"],
       "run_at": "document_idle",
       "all_frames": true
     }
-  ]
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
 }

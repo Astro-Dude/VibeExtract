@@ -1,464 +1,226 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>VibeExtract</title>
-  <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      width: 340px;
-      background: #0f0f0f;
-      color: #e4e4e7;
-      font-size: 13px;
-      overflow-x: hidden;
-    }
+<meta charset="utf-8">
+<style>
+:root{
+  --bg:#0C0D0F; --s1:#121316; --s2:#16181B; --s3:#1B1E22;
+  --line:#1E2126; --line2:#2A2D33;
+  --fg:#E8E6E1; --mut:#8A8F98; --mut2:#6B7077;
+  --amber:#FFB224; --amber-h:#FFC04A; --red:#FF4A3D; --green:#5FD08A;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  width:308px;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:12px;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 
-    /* Header */
-    .header {
-      padding: 16px 16px 12px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      border-bottom: 1px solid #1f1f23;
-    }
-    .logo {
-      width: 28px;
-      height: 28px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 15px;
-      flex-shrink: 0;
-    }
-    .header-text h1 {
-      font-size: 15px;
-      font-weight: 600;
-      color: #fafafa;
-      letter-spacing: -0.3px;
-    }
-    .header-text .version {
-      font-size: 10px;
-      color: #52525b;
-      margin-top: 1px;
-    }
+.hdr{
+  display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--s1);
+  border-bottom:1px solid var(--line2);
+}
+.brand{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;color:var(--amber);
+  text-transform:uppercase;
+}
+.hdr .spacer{flex:1}
+.ver{font-family:var(--mono);font-size:9.5px;color:var(--mut2);letter-spacing:.06em}
 
-    /* Status bar */
-    .status-bar {
-      padding: 10px 16px;
-      background: #18181b;
-      border-bottom: 1px solid #1f1f23;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #52525b;
-      flex-shrink: 0;
-      transition: background 0.2s;
-    }
-    .status-dot.active {
-      background: #22c55e;
-      box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
-    }
-    #status {
-      font-size: 12px;
-      color: #a1a1aa;
-    }
+.status{
+  display:flex;align-items:center;gap:8px;padding:10px 12px;
+  border-bottom:1px solid var(--line);background:var(--s2);
+}
+.dot{width:7px;height:7px;background:var(--mut2);flex:0 0 auto}
+.dot.on{background:var(--amber);box-shadow:0 0 0 2px rgba(255,178,36,.18)}
+.dot.bad{background:var(--red)}
+.status-text{font-family:var(--mono);font-size:11px;color:var(--mut)}
+.status-text b{color:var(--fg);font-weight:400}
 
-    /* Actions */
-    .actions {
-      padding: 12px 16px;
-      display: flex;
-      gap: 8px;
-    }
-    .btn {
-      flex: 1;
-      padding: 9px 6px;
-      border-radius: 8px;
-      border: 1px solid #27272a;
-      background: #18181b;
-      color: #e4e4e7;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 500;
-      transition: all 0.15s;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 4px;
-    }
-    .btn:hover {
-      background: #27272a;
-      border-color: #3f3f46;
-    }
-    .btn:active {
-      transform: scale(0.97);
-    }
-    .btn .icon {
-      font-size: 16px;
-      line-height: 1;
-    }
-    .btn-primary {
-      background: linear-gradient(135deg, #6366f1, #7c3aed);
-      border-color: #6366f1;
-      color: #fff;
-    }
-    .btn-primary:hover {
-      background: linear-gradient(135deg, #7c7cf7, #8b5cf6);
-      border-color: #818cf8;
-    }
-    .btn-danger {
-      color: #f87171;
-    }
-    .btn-danger:hover {
-      background: rgba(248, 113, 113, 0.1);
-      border-color: rgba(248, 113, 113, 0.3);
-    }
+.actions{display:flex;gap:6px;padding:10px 12px}
+.btn{
+  font-family:var(--mono);font-size:11px;letter-spacing:.05em;padding:7px 0;flex:1;
+  border:1px solid var(--line2);background:var(--s2);color:var(--fg);text-align:center;
+}
+.btn:hover:not(:disabled){border-color:#3A3E45;background:var(--s3)}
+.btn:disabled{opacity:.4;cursor:default}
+.btn.pri{border-color:var(--amber);color:var(--amber)}
+.btn.pri:hover:not(:disabled){background:rgba(255,178,36,.09);border-color:var(--amber-h);color:var(--amber-h)}
 
-    /* Shortcuts display */
-    .shortcuts-display {
-      padding: 8px 16px 12px;
-      border-bottom: 1px solid #1f1f23;
-    }
-    .shortcut-pills {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-    .shortcut-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 4px 8px;
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 6px;
-      font-size: 10px;
-    }
-    .shortcut-pill kbd {
-      font-family: SF Mono, Menlo, Consolas, monospace;
-      font-size: 10px;
-      color: #a78bfa;
-      background: #1e1b2e;
-      padding: 1px 5px;
-      border-radius: 3px;
-      border: 1px solid #2e2847;
-    }
-    .shortcut-pill .pill-label {
-      color: #71717a;
-    }
+.sect{padding:2px 12px 10px}
+.label{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--mut2);padding:8px 0 6px;
+}
+.keys{display:flex;flex-direction:column;gap:1px}
+.keyrow{
+  display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--s1);
+  border:1px solid var(--line);
+}
+.keyrow .name{font-family:var(--mono);font-size:10.5px;color:var(--mut);flex:1}
+.kbd{
+  font-family:var(--mono);font-size:10px;padding:3px 6px;background:var(--s3);
+  border:1px solid var(--line2);color:var(--fg);white-space:nowrap;
+}
 
-    /* Tips */
-    .tips {
-      padding: 10px 16px;
-      border-bottom: 1px solid #1f1f23;
-    }
-    .tips-title {
-      font-size: 10px;
-      font-weight: 600;
-      color: #52525b;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 6px;
-    }
-    .tip-item {
-      font-size: 11px;
-      color: #71717a;
-      padding: 2px 0;
-      display: flex;
-      align-items: baseline;
-      gap: 6px;
-    }
-    .tip-item::before {
-      content: ">";
-      color: #3f3f46;
-      font-family: SF Mono, Menlo, monospace;
-      font-size: 10px;
-      flex-shrink: 0;
-    }
+.toggle{
+  display:flex;align-items:center;gap:7px;width:100%;padding:7px 8px;
+  font-family:var(--mono);font-size:10.5px;color:var(--mut);
+  border:1px solid var(--line);background:var(--s1);
+}
+.toggle:hover{color:var(--fg);background:var(--s2)}
+.toggle .caret{font-size:8.5px;color:var(--mut2);transition:transform .12s linear}
+.toggle.open .caret{transform:rotate(90deg)}
 
-    /* Settings toggle */
-    .settings-toggle-wrap {
-      padding: 10px 16px;
-    }
-    .settings-toggle {
-      font-size: 11px;
-      color: #6366f1;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      transition: color 0.15s;
-      background: none;
-      border: none;
-      font-family: inherit;
-    }
-    .settings-toggle:hover {
-      color: #818cf8;
-    }
-    .settings-toggle .arrow {
-      transition: transform 0.2s;
-      font-size: 9px;
-    }
-    .settings-toggle.open .arrow {
-      transform: rotate(90deg);
-    }
+.hist-count{
+  margin-left:auto;font-size:9.5px;color:var(--mut2);
+}
+.toggle.open .hist-count{color:var(--amber)}
+.histbox{display:none;padding-top:6px}
+.histbox.open{display:block}
+.hist-list{display:flex;flex-direction:column;gap:1px}
+.hitem{
+  display:flex;align-items:baseline;gap:7px;padding:6px 8px;width:100%;text-align:left;
+  background:var(--s1);border:1px solid var(--line);font-family:var(--mono);font-size:10.5px;
+  color:var(--mut);
+}
+.hitem:hover{background:var(--s2);border-color:#3A3E45;color:var(--fg)}
+.hitem:hover .hi-what{color:var(--amber-h)}
+.hi-when{color:var(--mut2);flex:0 0 auto;width:52px}
+.hi-what{color:var(--amber);flex:0 0 auto;max-width:112px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.hi-where{color:var(--mut2);flex:1;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.hist-empty{
+  font-family:var(--mono);font-size:9.5px;color:var(--mut2);padding:6px 8px;
+  background:var(--s1);border:1px solid var(--line);line-height:1.5;
+}
+.hist-clear{
+  margin-top:5px;width:100%;font-family:var(--mono);font-size:9.5px;padding:5px 0;
+  border:1px solid var(--line);background:var(--s1);color:var(--mut2);
+}
+.hist-clear:hover{color:#E8938B;border-color:#5E2420}
+.editor{display:none;padding-top:8px}
+.editor.open{display:block}
+.edrow{
+  display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--s1);
+  border:1px solid var(--line);border-bottom:0;
+}
+.edrow:last-of-type{border-bottom:1px solid var(--line)}
+.edrow .name{font-family:var(--mono);font-size:10px;color:var(--mut);width:58px;flex:0 0 auto}
+.chk{
+  display:flex;align-items:center;gap:3px;font-family:var(--mono);font-size:9.5px;
+  color:var(--mut2);cursor:pointer;user-select:none;
+}
+.chk input{
+  appearance:none;-webkit-appearance:none;width:11px;height:11px;border:1px solid var(--line2);
+  background:var(--s3);cursor:pointer;position:relative;
+}
+.chk input:checked{background:var(--amber);border-color:var(--amber)}
+.chk input:checked::after{
+  content:"";position:absolute;left:2px;top:2px;width:5px;height:5px;background:var(--bg);
+}
+.chk.on{color:var(--fg)}
+.cap{
+  font-family:var(--mono);font-size:10px;width:38px;flex:0 0 auto;text-align:center;
+  padding:4px 0;background:var(--s3);border:1px solid var(--line2);color:var(--fg);
+}
+.cap:focus{outline:none;border-color:var(--amber);color:var(--amber)}
+.cap.capturing{border-color:var(--amber);color:var(--amber)}
+.edactions{display:flex;gap:6px;padding-top:8px}
 
-    /* Settings panel */
-    #settings-panel {
-      display: none;
-      padding: 0 16px 14px;
-    }
-    #settings-panel.visible {
-      display: block;
-    }
-    .settings-section-title {
-      font-size: 10px;
-      font-weight: 600;
-      color: #52525b;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 10px;
-    }
-
-    .shortcut-row {
-      display: flex;
-      align-items: center;
-      margin: 0 0 8px;
-      padding: 8px 10px;
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 8px;
-    }
-    .shortcut-row label {
-      min-width: 75px;
-      font-size: 11px;
-      color: #a1a1aa;
-      font-weight: 500;
-    }
-    .shortcut-input {
-      flex: 1;
-      display: flex;
-      gap: 6px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    .mod-checkbox {
-      display: flex;
-      align-items: center;
-      gap: 3px;
-      font-size: 10px;
-      color: #71717a;
-      cursor: pointer;
-    }
-    .mod-checkbox input[type="checkbox"] {
-      appearance: none;
-      -webkit-appearance: none;
-      width: 14px;
-      height: 14px;
-      border: 1px solid #3f3f46;
-      border-radius: 3px;
-      background: #09090b;
-      cursor: pointer;
-      position: relative;
-      transition: all 0.15s;
-    }
-    .mod-checkbox input[type="checkbox"]:checked {
-      background: #6366f1;
-      border-color: #6366f1;
-    }
-    .mod-checkbox input[type="checkbox"]:checked::after {
-      content: "";
-      position: absolute;
-      left: 4px;
-      top: 1px;
-      width: 4px;
-      height: 8px;
-      border: solid #fff;
-      border-width: 0 1.5px 1.5px 0;
-      transform: rotate(45deg);
-    }
-    .shortcut-input input[type="text"] {
-      width: 52px;
-      padding: 4px 6px;
-      border: 1px solid #3f3f46;
-      border-radius: 5px;
-      font-size: 11px;
-      text-align: center;
-      background: #09090b;
-      color: #e4e4e7;
-      font-family: SF Mono, Menlo, Consolas, monospace;
-      transition: all 0.15s;
-    }
-    .shortcut-input input[type="text"]:focus {
-      outline: none;
-      border-color: #6366f1;
-      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
-    }
-
-    .settings-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 12px;
-    }
-    .btn-save {
-      flex: 1;
-      padding: 8px 12px;
-      background: linear-gradient(135deg, #6366f1, #7c3aed);
-      border: none;
-      border-radius: 6px;
-      color: #fff;
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.15s;
-      font-family: inherit;
-    }
-    .btn-save:hover {
-      background: linear-gradient(135deg, #7c7cf7, #8b5cf6);
-    }
-    .btn-reset {
-      padding: 8px 12px;
-      background: transparent;
-      border: 1px solid #27272a;
-      border-radius: 6px;
-      color: #71717a;
-      font-size: 11px;
-      cursor: pointer;
-      transition: all 0.15s;
-      font-family: inherit;
-    }
-    .btn-reset:hover {
-      border-color: #3f3f46;
-      color: #a1a1aa;
-    }
-
-    .mac-only {
-      display: none;
-    }
-    body.is-mac .mac-only {
-      display: flex;
-    }
-  </style>
+.note{
+  font-family:var(--mono);font-size:9.5px;color:var(--mut2);line-height:1.55;
+  padding:8px 12px 12px;border-top:1px solid var(--line);
+}
+.note b{color:var(--mut);font-weight:400}
+.blocked{
+  margin:10px 12px;padding:9px 10px;border:1px solid #5E2420;background:#1C0F0E;
+  font-family:var(--mono);font-size:10.5px;color:#E8938B;line-height:1.55;
+}
+.hidden{display:none !important}
+</style>
 </head>
 <body>
 
-  <!-- Header -->
-  <div class="header">
-    <div class="logo">V</div>
-    <div class="header-text">
-      <h1>VibeExtract</h1>
-      <div class="version">v2.10.3</div>
-    </div>
-  </div>
+<div class="hdr">
+  <span class="brand">Cheater</span>
+  <span class="spacer"></span>
+  <span class="ver" id="ver"></span>
+</div>
 
-  <!-- Status -->
-  <div class="status-bar">
-    <div class="status-dot" id="status-dot"></div>
-    <div id="status">Idle</div>
-  </div>
+<div class="status">
+  <span class="dot" id="dot"></span>
+  <span class="status-text" id="status">checking page…</span>
+</div>
 
-  <!-- Action buttons -->
+<div id="blocked" class="blocked hidden"></div>
+
+<div id="main">
   <div class="actions">
-    <button class="btn btn-primary" id="start">
-      <span class="icon">+</span>
-      Select
-    </button>
-    <button class="btn" id="export">
-      <span class="icon">&darr;</span>
-      Export
-    </button>
-    <button class="btn btn-danger" id="clear">
-      <span class="icon">&times;</span>
-      Clear
-    </button>
+    <button class="btn pri" id="start">Start</button>
+    <button class="btn" id="clear">Clear</button>
+    <button class="btn" id="export">Export</button>
   </div>
 
-  <!-- Current shortcuts pills -->
-  <div class="shortcuts-display">
-    <div class="shortcut-pills" id="current-shortcuts"></div>
-  </div>
-
-  <!-- Tips -->
-  <div class="tips">
-    <div class="tips-title">How to use</div>
-    <div class="tip-item">Hover to preview, click to select</div>
-    <div class="tip-item">Shift+Click for multi-select</div>
-    <div class="tip-item">Alt+Arrow Up/Down to traverse DOM</div>
-    <div class="tip-item">Exports .toon (for LLMs) + .html (preview)</div>
-  </div>
-
-  <!-- Settings toggle -->
-  <div class="settings-toggle-wrap">
-    <button class="settings-toggle" id="toggle-settings">
-      <span class="arrow">&#9654;</span> Customize Shortcuts
+  <div class="sect">
+    <button class="toggle" id="hist-toggle">
+      <span class="caret">▶</span><span>Recent captures</span>
+      <span class="hist-count" id="hist-count"></span>
     </button>
-  </div>
+    <div class="histbox" id="histbox">
+      <div class="hist-list" id="hist-list"></div>
+      <button class="hist-clear" id="hist-clear">Clear history</button>
+    </div>
 
-  <!-- Settings panel -->
-  <div id="settings-panel">
-    <div class="settings-section-title">Keyboard Shortcuts</div>
+    <div class="label">Shortcuts</div>
+    <div class="keys" id="keys"></div>
 
-    <div class="shortcut-row">
-      <label>Select</label>
-      <div class="shortcut-input">
-        <span class="mod-checkbox"><input type="checkbox" id="start-ctrl"><span class="mod-ctrl-label">Ctrl</span></span>
-        <span class="mod-checkbox mac-only"><input type="checkbox" id="start-meta"><span>Cmd</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="start-shift"><span>Shift</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="start-alt"><span class="mod-alt-label">Alt</span></span>
-        <input type="text" id="start-key" placeholder="Key" maxlength="20">
+    <div style="height:8px"></div>
+    <button class="toggle" id="customize-toggle">
+      <span class="caret">▶</span><span>Customize shortcuts</span>
+    </button>
+    <div class="editor" id="editor">
+      <div class="edrow" data-action="start">
+        <span class="name">Start</span>
+        <label class="chk"><input type="checkbox" data-mod="primary"><span class="mod-label"></span></label>
+        <label class="chk"><input type="checkbox" data-mod="shift"><span>Shift</span></label>
+        <label class="chk"><input type="checkbox" data-mod="alt"><span class="alt-label"></span></label>
+        <input class="cap" data-key readonly>
+      </div>
+      <div class="edrow" data-action="export">
+        <span class="name">Export</span>
+        <label class="chk"><input type="checkbox" data-mod="primary"><span class="mod-label"></span></label>
+        <label class="chk"><input type="checkbox" data-mod="shift"><span>Shift</span></label>
+        <label class="chk"><input type="checkbox" data-mod="alt"><span class="alt-label"></span></label>
+        <input class="cap" data-key readonly>
+      </div>
+      <div class="edrow" data-action="fullpage">
+        <span class="name">Full page</span>
+        <label class="chk"><input type="checkbox" data-mod="primary"><span class="mod-label"></span></label>
+        <label class="chk"><input type="checkbox" data-mod="shift"><span>Shift</span></label>
+        <label class="chk"><input type="checkbox" data-mod="alt"><span class="alt-label"></span></label>
+        <input class="cap" data-key readonly>
+      </div>
+      <div class="edrow" data-action="history">
+        <span class="name">History</span>
+        <label class="chk"><input type="checkbox" data-mod="primary"><span class="mod-label"></span></label>
+        <label class="chk"><input type="checkbox" data-mod="shift"><span>Shift</span></label>
+        <label class="chk"><input type="checkbox" data-mod="alt"><span class="alt-label"></span></label>
+        <input class="cap" data-key readonly>
+      </div>
+      <div class="edactions">
+        <button class="btn pri" id="save-keys">Save</button>
+        <button class="btn" id="reset-keys">Reset</button>
       </div>
     </div>
-
-    <div class="shortcut-row">
-      <label>Clear</label>
-      <div class="shortcut-input">
-        <span class="mod-checkbox"><input type="checkbox" id="clear-ctrl"><span class="mod-ctrl-label">Ctrl</span></span>
-        <span class="mod-checkbox mac-only"><input type="checkbox" id="clear-meta"><span>Cmd</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="clear-shift"><span>Shift</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="clear-alt"><span class="mod-alt-label">Alt</span></span>
-        <input type="text" id="clear-key" placeholder="Key" maxlength="20">
-      </div>
-    </div>
-
-    <div class="shortcut-row">
-      <label>Export</label>
-      <div class="shortcut-input">
-        <span class="mod-checkbox"><input type="checkbox" id="export-ctrl"><span class="mod-ctrl-label">Ctrl</span></span>
-        <span class="mod-checkbox mac-only"><input type="checkbox" id="export-meta"><span>Cmd</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="export-shift"><span>Shift</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="export-alt"><span class="mod-alt-label">Alt</span></span>
-        <input type="text" id="export-key" placeholder="Key" maxlength="20">
-      </div>
-    </div>
-
-    <div class="shortcut-row">
-      <label>Full Page</label>
-      <div class="shortcut-input">
-        <span class="mod-checkbox"><input type="checkbox" id="extract-ctrl"><span class="mod-ctrl-label">Ctrl</span></span>
-        <span class="mod-checkbox mac-only"><input type="checkbox" id="extract-meta"><span>Cmd</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="extract-shift"><span>Shift</span></span>
-        <span class="mod-checkbox"><input type="checkbox" id="extract-alt"><span class="mod-alt-label">Alt</span></span>
-        <input type="text" id="extract-key" placeholder="Key" maxlength="20">
-      </div>
-    </div>
-
-    <div class="settings-actions">
-      <button class="btn-save" id="save-shortcuts">Save Shortcuts</button>
-      <button class="btn-reset" id="reset-shortcuts">Reset</button>
-    </div>
   </div>
 
-  <script src="popup.js"></script>
+  <div class="note" id="note"></div>
+</div>
+
+<script src="popup.js"></script>
 </body>
 </html>

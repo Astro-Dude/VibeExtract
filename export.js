@@ -1,581 +1,719 @@
-// ── State ──
-let htmlContent = '';        // Original captured HTML (no @font-face injected)
-let toonContent = '';
-let sourceUrl = '';
-let fontFaces = [];          // [{ family, weight, style, format, url, base64?, ok? }]
+/**
+ * Cheater — export tab.
+ *
+ * Pulls the payload the service worker staged, renders Preview / HTML / TOON,
+ * shows diagnostics, and saves files. Everything it needs is already in the
+ * payload; this file makes no DOM reads against the captured page and no network
+ * calls except a late single font re-fetch when a binary failed earlier.
+ */
 
-// ── Elements ──
-const tabs = document.querySelectorAll('.tab');
-const panels = document.querySelectorAll('.panel');
-const toast = document.getElementById('toast');
-const toastText = document.getElementById('toast-text');
+'use strict';
 
-// ── Load data from storage ──
-chrome.storage.local.get([
-  'exportHTML', 'exportTOON', 'exportSourceURL', 'exportDiagnostics', 'exportFontFaces'
-], (data) => {
-  htmlContent = data.exportHTML || '';
-  toonContent = data.exportTOON || '';
-  sourceUrl = data.exportSourceURL || '';
-  fontFaces = Array.isArray(data.exportFontFaces) ? data.exportFontFaces : [];
-  const diagnostics = data.exportDiagnostics || null;
+(function () {
+  var HtmlWriter = window.CheaterHtmlWriter;
+  var ToonWriter = window.CheaterToonWriter;
+  var Zip = window.CheaterZip;
+  var Highlight = window.CheaterHighlight;
 
-  // Show source url
-  if (sourceUrl) {
-    document.getElementById('source-url').textContent = sourceUrl;
+  var el = function (id) { return document.getElementById(id); };
+
+  var state = {
+    payload: null,
+    exportId: null,
+    savedHtml: '',
+    previewHtml: '',
+    toon: '',
+    width: 'fit',
+    surface: 'dark',
+    tab: 'preview'
+  };
+
+  /* ---------------------------------------------------------------- helpers */
+
+  function toast(text, bad) {
+    var node = el('toast');
+    node.textContent = text;
+    node.className = 'toast show' + (bad ? ' bad' : '');
+    clearTimeout(node._timer);
+    node._timer = setTimeout(function () { node.className = 'toast'; }, 2600);
   }
 
-  // Stitch the bundled-fonts count into the diagnostics object so the warn
-  // pill collapses ("font fallback") when we successfully fetched the font.
-  if (diagnostics) {
-    diagnostics.bundledFontCount = fontFaces.filter(f => f.ok).length;
-    diagnostics.failedFontCount = fontFaces.filter(f => f.ok === false).length;
+  function formatBytes(count) {
+    if (count < 1024) return count + ' B';
+    if (count < 1024 * 1024) return (count / 1024).toFixed(1) + ' KB';
+    return (count / (1024 * 1024)).toFixed(2) + ' MB';
   }
-  renderDiagnostics(diagnostics);
 
-  // Reveal the "Download fonts" button only when we actually have bundled
-  // font binaries to ship. The label includes the count so the user knows
-  // how many files will be inside the zip.
-  const fontsBtn = document.getElementById('dl-fonts');
-  const fontsLabel = document.getElementById('dl-fonts-label');
-  const okFonts = fontFaces.filter(f => f.ok && f.base64);
-  if (okFonts.length > 0) {
-    fontsBtn.hidden = false;
-    if (fontsLabel) {
-      fontsLabel.textContent = `Download fonts (${okFonts.length})`;
+  function byteLength(text) {
+    return new TextEncoder().encode(text).length;
+  }
+
+  /**
+   * Staged progress for the export tab.
+   *
+   * A full-page payload means megabytes of HTML and TOON to build and highlight,
+   * which is seconds of synchronous work. Percentages here are STAGE-based, not
+   * measured — each stage is named so the number is honest about what it means
+   * rather than pretending to track bytes.
+   */
+  function setStage(label, pct, sub) {
+    var box = el('loading');
+    if (!box || box.classList.contains('done')) return;
+    el('loading-label').textContent = label;
+    el('loading-pct').textContent = Math.round(pct) + '%';
+    el('loading-fill').style.width = Math.round(pct) + '%';
+    if (sub != null) el('loading-sub').textContent = sub;
+  }
+
+  function finishStages() {
+    var box = el('loading');
+    if (box) box.classList.add('done');
+  }
+
+  // Let the browser paint between stages, otherwise the bar jumps straight from
+  // 0 to 100 and the whole exercise is pointless.
+  function paint() {
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () { requestAnimationFrame(resolve); });
+    });
+  }
+
+  /* ------------------------------------------------------------ diagnostics */
+
+  function pill(label, value, tone) {
+    var cls = 'pill' + (tone ? ' ' + tone : '') + (value ? ' on' : '');
+    return '<span class="' + cls + '">' + label + ' <b>' + value + '</b></span>';
+  }
+
+  function renderDiagnostics() {
+    var diag = state.payload.diagnostics || {};
+    var fonts = state.payload.fonts || {};
+    var pills = [];
+
+    pills.push(pill('selections', diag.topLevel || 0));
+    if (diag.frames > 1) pills.push(pill('frames', diag.frames));
+    pills.push(pill('wraps', diag.wraps || 0));
+    pills.push(pill('dropped', diag.dropped || 0));
+    pills.push(pill('styles', diag.styleCount || 0));
+    pills.push(pill('pseudos', diag.pseudoCount || 0));
+    if (diag.hoverCount) pills.push(pill('hovers', diag.hoverCount));
+    if (diag.iconNodes) pills.push(pill('icons', diag.iconNodes));
+    if (diag.iconsRasterized) pills.push(pill('icons rasterized', diag.iconsRasterized));
+    if (diag.iconsLost) pills.push(pill('icons lost', diag.iconsLost, 'bad'));
+    if (diag.pixelsRecovered) pills.push(pill('pixels recovered', diag.pixelsRecovered));
+    if (diag.pixelsFailed) pills.push(pill('pixels failed', diag.pixelsFailed, 'warn'));
+    pills.push(pill('fonts', diag.fontsBundled || 0));
+    if (diag.fontFailures) pills.push(pill('font fails', diag.fontFailures, 'bad'));
+    if (diag.canvasPlaceholders) pills.push(pill('canvas gaps', diag.canvasPlaceholders, 'warn'));
+    if (diag.imagesDropped) pills.push(pill('imgs dropped', diag.imagesDropped, 'warn'));
+    if (fonts.primary && !fonts.primaryLoadable) {
+      pills.push(pill('font not loadable', fonts.primary, 'warn'));
     }
+    el('pills').innerHTML = pills.join('');
+
+    var rows = (diag.selections || []).map(function (sel) {
+      var badges = '';
+      if (sel.wrapped) badges += '<span class="badge w">wrapped</span>';
+      if (sel.dropped) badges += '<span class="badge d">' + sel.dropped + ' dropped</span>';
+      return '<div class="row">' +
+        '<span class="tag">' + escapeHtml(sel.tag || '?') + '</span>' +
+        '<span class="cls">' + (sel.classes ? '.' + escapeHtml(sel.classes) : '<span class="dim">no classes</span>') + '</span>' +
+        '<span class="dim">' + sel.w + '×' + sel.h + '</span>' +
+        '<span class="dim">@ ' + sel.x + ',' + sel.y + '</span>' +
+        '<span class="dim">' + (sel.nodes || 0) + ' nodes</span>' +
+        badges +
+        '</div>';
+    });
+    el('rows').innerHTML = rows.join('') || '<div class="row"><span class="dim">no selections recorded</span></div>';
+
+    // Per-family icon report. When icons come out blank this is the fact that
+    // actually identifies the cause: which font, what kind of glyph, and what was
+    // decided about it.
+    var families = diag.iconFamilies || {};
+    var familyKeys = Object.keys(families);
+    if (familyKeys.length) {
+      el('rows').innerHTML += familyKeys.sort().map(function (key) {
+        var parts = key.split(' | ');
+        var tone = parts[2] === 'lost' ? 'd' : (parts[2] === 'linked' ? 'w' : '');
+        return '<div class="row">' +
+          '<span class="tag">icon font</span>' +
+          '<span class="cls">' + escapeHtml(parts[0]) + '</span>' +
+          '<span class="dim">' + escapeHtml(parts[1]) + '</span>' +
+          '<span class="dim">x' + families[key] + '</span>' +
+          '<span class="badge ' + tone + '">' + escapeHtml(parts[2]) + '</span>' +
+          '</div>';
+      }).join('');
+    }
+
+    // Notes explain what to DO about a number, which is the difference between
+    // a diagnostic and a statistic.
+    var notes = [];
+    if (diag.dropped) {
+      notes.push({
+        text: diag.dropped + ' node(s) filtered out (hidden, zero-size, or non-rendered markup like ' +
+          '<script>/<noscript>). Use Alt+Click for exact targeting if you want the filtered nodes included.'
+      });
+    }
+    if (diag.fontsBundled) {
+      notes.push({ text: diag.fontsBundled + ' self-hosted font file(s) bundled — unzip the fonts next to the saved HTML so it renders offline with matching text widths.' });
+    }
+    if (diag.fontFailures) {
+      notes.push({ warn: true, text: diag.fontFailures + ' font file(s) failed to fetch. "Download fonts" will retry them; a tokenized CDN URL may simply have expired.' });
+    }
+    if (state.payload.fonts && state.payload.fonts.primary && !state.payload.fonts.primaryLoadable) {
+      notes.push({
+        warn: true,
+        text: 'Primary font "' + state.payload.fonts.primary + '" is not auto-loadable. ' +
+          'Fallback metrics change text widths, which is the usual cause of an export looking like it overflows when the original did not.'
+      });
+    }
+    if (diag.iconsRasterized) {
+      notes.push({ text: diag.iconsRasterized + ' icon glyph(s) came from a font that cannot travel ' +
+        '(loaded via the JS FontFace API, or from a CORS-restricted stylesheet, so there is no ' +
+        '@font-face to bundle). They were rendered to images at 2x so they still display — the ' +
+        'trade-off is that they no longer scale as text.' });
+    }
+    var linkedPua = Object.keys(diag.iconFamilies || {}).filter(function (k) {
+      return / \| pua \| linked$/.test(k);
+    });
+    if (linkedPua.length) {
+      notes.push({ warn: true, text: 'A private-use icon codepoint is being linked from a public ' +
+        'CDN font (' + linkedPua.map(function (k) { return k.split(' | ')[0]; }).join(', ') + '). ' +
+        'Codepoints are font-specific, so this may render the wrong glyph or none at all.' });
+    }
+    if (diag.pixelsRecovered) {
+      notes.push({ text: diag.pixelsRecovered + ' element(s) could not be reproduced from source ' +
+        '(unreadable canvas, cross-origin frame, an icon whose font cannot travel, or a box that ' +
+        'would have rendered empty) and were recovered as cropped pixels from a screenshot of the ' +
+        'tab. They look right but are images, not markup.' });
+    }
+    if (diag.pixelsFailed) {
+      notes.push({ warn: true, text: diag.pixelsFailed + ' element(s) could not be recovered even ' +
+        'as pixels — the tab screenshot was unavailable (the tab must be active and visible, and ' +
+        'Chrome rate-limits it). Re-running the export usually succeeds.' });
+    }
+    if (diag.iconsLost) {
+      notes.push({ warn: true, text: diag.iconsLost + ' icon glyph(s) could not be shipped or ' +
+        'rasterized and will render blank. This usually means the icon font was never actually ' +
+        'loaded in the page.' });
+    }
+    if (diag.canvasPlaceholders) {
+      notes.push({ warn: true, text: diag.canvasPlaceholders + ' canvas element(s) could not be read (cross-origin taint, or a WebGL context without preserveDrawingBuffer) and became correctly-sized placeholders.' });
+    }
+    if (diag.imagesDropped) {
+      notes.push({ text: diag.imagesDropped + ' image(s) had no resolvable source and were dropped — a broken-image glyph would have wrecked the row layout.' });
+    }
+    if (diag.imagesTainted) {
+      notes.push({ text: diag.imagesTainted + ' image(s) are cross-origin without CORS, so they kept their absolute URL instead of being inlined and need network to render.' });
+    }
+    if (diag.wraps) {
+      notes.push({ text: diag.wraps + ' selection(s) were wrapped in a synthetic container carrying the real parent\'s flex/grid layout, so they still flow correctly.' });
+    }
+    if (diag.frames > 1) {
+      notes.push({ text: 'Merged from ' + diag.frames + ' frames; each frame\'s style classes were renamed to avoid collisions.' });
+    }
+    if (!notes.length) notes.push({ text: 'Nothing filtered or degraded — the capture is complete.' });
+
+    el('notes').innerHTML = notes.map(function (note) {
+      return '<div class="note' + (note.warn ? ' warn' : '') + '">' + escapeHtml(note.text) + '</div>';
+    }).join('');
   }
 
-  // Populate code views — show the *download* HTML (relative font paths)
-  // so users copying the textarea get a portable file. Preview uses a
-  // separate version with inline data: URIs since `<iframe srcdoc>` has no
-  // base URL for relative paths to resolve against.
-  const downloadHtml = htmlWithFontFaces(htmlContent, 'relative');
-  const previewHtml = htmlWithFontFaces(htmlContent, 'inline');
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
 
-  document.getElementById('html-code').textContent = downloadHtml;
-  document.getElementById('toon-code').textContent = toonContent;
+  /* ---------------------------------------------------------------- preview */
 
-  // Detect primary font from the exported CSS
-  const primaryFont = detectPrimaryFont(htmlContent);
-  const fontLabel = primaryFont ? primaryFont : 'System default';
+  function renderPreview() {
+    var frame = el('frame');
+    var html = HtmlWriter.build(state.payload, {
+      fontMode: 'inline',            // accurate preview needs the real binaries
+      surface: state.surface
+    });
+    state.previewHtml = html;
+    frame.srcdoc = html;
+  }
 
-  // Size + font info
-  setMeta('html-meta', downloadHtml.length, fontLabel);
-  setMeta('toon-meta', toonContent.length, fontLabel);
+  /**
+   * Auto-size the iframe to its content, and scale it down when a fixed viewport
+   * width does not fit the pane. Same-origin srcdoc is what makes reading
+   * scrollHeight possible at all (scripts stay blocked — no allow-scripts).
+   */
+  function fitFrame() {
+    var frame = el('frame');
+    var stage = el('stage');
+    var pane = el('preview-pane');
+    var doc;
+    try { doc = frame.contentDocument; } catch (_) { doc = null; }
 
-  // Preview iframe — auto-resize to content height
-  const iframe = document.getElementById('preview-iframe');
-  iframe.addEventListener('load', () => {
-    try {
-      const body = iframe.contentDocument.body;
-      const html = iframe.contentDocument.documentElement;
-      const height = Math.max(
-        body.scrollHeight, body.offsetHeight,
-        html.scrollHeight, html.offsetHeight
+    var available = Math.max(200, pane.clientWidth - 44);
+    var target = state.width === 'fit' ? available : parseInt(state.width, 10);
+
+    frame.style.width = target + 'px';
+    stage.style.width = target + 'px';
+
+    var height = 200;
+    if (doc && doc.documentElement) {
+      // Collapse to measure, so shrinking content shrinks the frame too.
+      frame.style.height = '0px';
+      height = Math.max(
+        doc.documentElement.scrollHeight,
+        doc.body ? doc.body.scrollHeight : 0,
+        40
       );
-      iframe.style.height = Math.max(height + 32, 400) + 'px';
-    } catch (e) {
-      // cross-origin fallback — keep min-height
     }
-  });
-  iframe.srcdoc = previewHtml;
+    frame.style.height = height + 'px';
 
-  // Clean up storage after loading
-  chrome.storage.local.remove([
-    'exportHTML', 'exportTOON', 'exportSourceURL', 'exportDiagnostics', 'exportFontFaces'
-  ]);
-});
+    var scale = target > available ? available / target : 1;
+    stage.style.transform = scale === 1 ? 'none' : 'scale(' + scale + ')';
+    stage.style.height = (height * scale) + 'px';
+    stage.style.marginLeft = scale === 1 ? 'auto' : '0';
+    stage.style.marginRight = scale === 1 ? 'auto' : '0';
+  }
 
-// Build the CSS @font-face block. Mode `inline` embeds woff2 binaries as
-// data: URIs (works in srcdoc preview, no external files needed). Mode
-// `relative` references sibling files like `./preview-CentraNo2-400.woff2`
-// (smaller HTML, but the user must keep the saved files together).
-function buildFontFaceBlock(faces, mode, fileNameFor) {
-  let css = '';
-  for (const face of faces) {
-    if (!face.ok || !face.base64) continue;
-    let src;
-    if (mode === 'inline') {
-      const mime = `font/${face.format === 'truetype' ? 'ttf' : face.format === 'opentype' ? 'otf' : face.format}`;
-      src = `url('data:${mime};base64,${face.base64}') format('${face.format}')`;
-    } else {
-      const filename = fileNameFor(face);
-      src = `url('./${filename}') format('${face.format}')`;
+  /* ------------------------------------------------------------------ code */
+
+  function renderCode() {
+    var htmlResult = Highlight.highlight(state.savedHtml, 'html');
+    el('html-code').innerHTML = htmlResult.html;
+    var toonResult = Highlight.highlight(state.toon, 'toon');
+    el('toon-code').innerHTML = toonResult.html;
+    state.highlightSkipped = !htmlResult.highlighted || !toonResult.highlighted;
+  }
+
+  function updateCodeMeta() {
+    var fonts = state.payload.fonts || {};
+    var isHtml = state.tab === 'html';
+    var source = isHtml ? state.savedHtml : state.toon;
+    var parts = [formatBytes(byteLength(source))];
+    if (fonts.primary) {
+      parts.push('font <b>' + escapeHtml(fonts.primary) + '</b>' + (fonts.primaryLoadable ? '' : ' (not loadable)'));
     }
-    css += `@font-face { font-family: '${face.family}'; src: ${src}; font-weight: ${face.weight}; font-style: ${face.style}; font-display: swap; }\n`;
-  }
-  return css;
-}
-
-// Inject the @font-face block into the export HTML right after its
-// `<style>` opening tag so captured classes can resolve their `font-family`
-// to the bundled font instead of the system fallback.
-function htmlWithFontFaces(html, mode) {
-  const block = buildFontFaceBlock(fontFaces, mode, fontFileName);
-  if (!block) return html;
-  return html.replace(/(<style\b[^>]*>)/, `$1\n${block}`);
-}
-
-function fontFileName(face) {
-  const safeFam = face.family.replace(/[^A-Za-z0-9]/g, '');
-  const styleSuffix = face.style && face.style !== 'normal' ? `-${face.style}` : '';
-  return `preview-${safeFam}-${face.weight}${styleSuffix}.${face.format === 'truetype' ? 'ttf' : face.format === 'opentype' ? 'otf' : face.format}`;
-}
-
-function renderDiagnostics(d) {
-  const wrap = document.getElementById('diag');
-  if (!d) return;
-  wrap.hidden = false;
-
-  const summary = document.getElementById('diag-summary');
-  summary.innerHTML = '';
-
-  const label = document.createElement('span');
-  label.textContent = 'Diagnostics';
-  summary.appendChild(label);
-
-  const sel = document.createElement('span');
-  sel.className = 'diag-pill';
-  sel.textContent = `${d.selectionCount} selection${d.selectionCount === 1 ? '' : 's'}`;
-  summary.appendChild(sel);
-
-  if (d.wrapperCount > 0) {
-    const wr = document.createElement('span');
-    wr.className = 'diag-pill';
-    wr.textContent = `${d.wrapperCount} parent-wrap${d.wrapperCount === 1 ? '' : 's'}`;
-    summary.appendChild(wr);
-  }
-
-  if (d.filteredCount > 0 || d.emptySpansSkipped > 0) {
-    const flt = document.createElement('span');
-    flt.className = 'diag-pill warn';
-    flt.textContent = `${d.filteredCount + d.emptySpansSkipped} dropped`;
-    summary.appendChild(flt);
-  }
-
-  const styles = document.createElement('span');
-  styles.className = 'diag-pill';
-  styles.textContent = `${d.styleCount} styles`;
-  summary.appendChild(styles);
-
-  if (d.pseudoStyleCount > 0) {
-    const ps = document.createElement('span');
-    ps.className = 'diag-pill';
-    ps.textContent = `${d.pseudoStyleCount} pseudo`;
-    summary.appendChild(ps);
-  }
-
-  // Font status pill: show "N bundled" when we successfully fetched font
-  // binaries; otherwise fall back to the legacy "font fallback: <name>"
-  // warning when the primary font isn't loadable.
-  if (d.bundledFontCount > 0) {
-    const fp = document.createElement('span');
-    fp.className = 'diag-pill';
-    fp.textContent = `${d.bundledFontCount} font${d.bundledFontCount === 1 ? '' : 's'} bundled`;
-    summary.appendChild(fp);
-  } else if (d.primaryFont && !d.primaryFontWillLoad) {
-    const fp = document.createElement('span');
-    fp.className = 'diag-pill warn';
-    fp.textContent = `font fallback: ${d.primaryFont}`;
-    summary.appendChild(fp);
-  }
-  if (d.failedFontCount > 0) {
-    const fp = document.createElement('span');
-    fp.className = 'diag-pill warn';
-    fp.textContent = `${d.failedFontCount} font fetch failed`;
-    summary.appendChild(fp);
-  }
-
-  // Body: list each selection
-  const body = document.getElementById('diag-body');
-  body.innerHTML = '';
-
-  if (d.filteredCount > 0 || d.emptySpansSkipped > 0) {
-    const note = document.createElement('div');
-    note.className = 'diag-row';
-    note.style.color = '#fbbf24';
-    note.innerHTML = `<span class="meta">Filtered out ${d.filteredCount} hidden node${d.filteredCount === 1 ? '' : 's'} and ${d.emptySpansSkipped} empty span${d.emptySpansSkipped === 1 ? '' : 's'} from descendants. Use Alt+Click for exact targeting if you want them included.</span>`;
-    body.appendChild(note);
-  }
-
-  if (d.bundledFontCount > 0) {
-    const note = document.createElement('div');
-    note.className = 'diag-row';
-    note.style.color = '#a1a1aa';
-    note.innerHTML = `<span class="meta">Detected and bundled <strong>${d.bundledFontCount}</strong> @font-face binar${d.bundledFontCount === 1 ? 'y' : 'ies'} from the page. Use the <strong>Download fonts</strong> button to grab them as one zip; unzip it next to the saved .html so the page can render with the original font when opened offline.</span>`;
-    body.appendChild(note);
-  } else if (d.primaryFont && !d.primaryFontWillLoad) {
-    const note = document.createElement('div');
-    note.className = 'diag-row';
-    note.style.color = '#fbbf24';
-    note.innerHTML = `<span class="meta">Primary font <strong>${d.primaryFont}</strong> is not on Google Fonts and isn't being auto-loaded — the export will fall back to the system stack and text widths may differ from the original. Add the font manually if precise metrics matter.</span>`;
-    body.appendChild(note);
-  }
-
-  if (!d.selections || d.selections.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'diag-row';
-    empty.innerHTML = `<span class="meta">No top-level selections recorded.</span>`;
-    body.appendChild(empty);
-    return;
-  }
-
-  for (const s of d.selections) {
-    const row = document.createElement('div');
-    row.className = 'diag-row';
-
-    const tag = document.createElement('span');
-    tag.className = 'tag';
-    tag.textContent = `<${s.tag}>`;
-    row.appendChild(tag);
-
-    const meta = document.createElement('span');
-    meta.className = 'meta';
-    const cls = s.className ? `.${s.className.replace(/\s+/g, '.')}` : '';
-    meta.textContent = `${cls} — ${s.w}×${s.h} at (${s.x}, ${s.y})`;
-    row.appendChild(meta);
-
-    if (s.wrapped) {
-      const b = document.createElement('span');
-      b.className = 'badge';
-      b.textContent = 'wrapped';
-      row.appendChild(b);
+    if (state.highlightSkipped && source.length > Highlight.SIZE_LIMIT) {
+      parts.push('highlighting skipped (large)');
     }
-    if (!s.kept) {
-      const b = document.createElement('span');
-      b.className = 'badge dropped';
-      b.textContent = 'dropped';
-      row.appendChild(b);
-    }
-
-    body.appendChild(row);
+    el('code-meta').innerHTML = parts.join(' · ');
   }
-}
 
-// ── Tabs ──
-tabs.forEach((tab) => {
-  tab.addEventListener('click', () => {
-    tabs.forEach((t) => t.classList.remove('active'));
-    panels.forEach((p) => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
-  });
-});
+  /* -------------------------------------------------------------------- tabs */
 
-// ── Copy buttons (inside code panels) ──
-document.querySelectorAll('.copy-btn').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const text = btn.dataset.copy === 'html'
-      ? htmlWithFontFaces(htmlContent, 'relative')
-      : toonContent;
-    navigator.clipboard.writeText(text).then(() => {
-      btn.textContent = 'Copied';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  function selectTab(name) {
+    state.tab = name;
+    Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (tab) {
+      tab.classList.toggle('sel', tab.dataset.tab === name);
     });
-  });
-});
+    el('preview-pane').classList.toggle('sel', name === 'preview');
+    el('html-pane').classList.toggle('sel', name === 'html');
+    el('toon-pane').classList.toggle('sel', name === 'toon');
+    el('preview-tools').classList.toggle('hidden', name !== 'preview');
+    el('code-tools').classList.toggle('hidden', name === 'preview');
+    if (name === 'preview') fitFrame();
+    else updateCodeMeta();
+  }
 
-// ── Downloads ──
-document.getElementById('dl-html').addEventListener('click', () => downloadFile('html'));
-document.getElementById('dl-toon').addEventListener('click', () => downloadFile('toon'));
-document.getElementById('dl-fonts').addEventListener('click', () => downloadFontsZip());
-document.getElementById('dl-both').addEventListener('click', () => {
-  downloadFile('toon');
-  // small delay so chrome doesn't swallow the second download
-  setTimeout(() => downloadFile('html'), 120);
-});
+  /* --------------------------------------------------------------- download */
 
-function downloadFile(type) {
-  const isHTML = type === 'html';
-  // For the saved HTML use the relative-path @font-face block; the woff2
-  // files come down as one separate "Download fonts" zip the user can
-  // unzip alongside this HTML so we don't fire N parallel font downloads.
-  const content = isHTML ? htmlWithFontFaces(htmlContent, 'relative') : toonContent;
-  const filename = isHTML ? 'preview.html' : 'component.toon';
-  const mime = isHTML ? 'text/html' : 'application/octet-stream';
-
-  // Use chrome downloads API so we can get the real file path
-  const blob = new Blob([content], { type: mime });
-  const reader = new FileReader();
-  reader.onload = () => {
-    chrome.downloads.download({
-      url: reader.result,
-      filename: filename,
-      saveAs: false,
-      conflictAction: 'uniquify'
-    }, (downloadId) => {
-      if (!downloadId) return;
-      // Watch for completion, then copy path to clipboard
-      const listener = (delta) => {
-        if (delta.id === downloadId && delta.state && delta.state.current === 'complete') {
-          chrome.downloads.onChanged.removeListener(listener);
-          chrome.downloads.search({ id: downloadId }, (results) => {
-            if (results && results[0] && results[0].filename) {
-              const filePath = results[0].filename;
-              copyToClipboard(filePath).then(() => {
-                showToast('Saved — path copied to clipboard');
-              }).catch(() => {
-                showToast('Saved to ' + filePath);
-              });
+  /**
+   * Downloads go through a blob URL: chrome.downloads.download rejects data:
+   * URLs from extension pages, and a blob keeps large exports off the stack.
+   * The absolute path is then copied so it can be pasted straight into a prompt.
+   */
+  function download(filename, content, mime) {
+    return new Promise(function (resolve) {
+      var blob = content instanceof Uint8Array
+        ? new Blob([content], { type: mime })
+        : new Blob([content], { type: mime + ';charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      chrome.downloads.download({ url: url, filename: filename, saveAs: false }, function (id) {
+        if (chrome.runtime.lastError || id == null) {
+          URL.revokeObjectURL(url);
+          toast('Download failed: ' + ((chrome.runtime.lastError || {}).message || 'unknown'), true);
+          resolve(null);
+          return;
+        }
+        // The path only exists once the download completes.
+        var poll = setInterval(function () {
+          chrome.downloads.search({ id: id }, function (items) {
+            var item = items && items[0];
+            if (!item) return;
+            if (item.state === 'complete') {
+              clearInterval(poll);
+              URL.revokeObjectURL(url);
+              resolve(item.filename || filename);
+            } else if (item.state === 'interrupted') {
+              clearInterval(poll);
+              URL.revokeObjectURL(url);
+              resolve(null);
             }
           });
-        }
-      };
-      chrome.downloads.onChanged.addListener(listener);
+        }, 120);
+        setTimeout(function () { clearInterval(poll); URL.revokeObjectURL(url); }, 8000);
+      });
     });
-  };
-  reader.readAsDataURL(blob);
-}
-
-// Build a single .zip containing every fetched font binary and trigger
-// one download for it. The zip's entries match the relative `./preview-…`
-// paths in the saved HTML's @font-face block, so unzipping alongside the
-// saved HTML makes the page render with the real font.
-function downloadFontsZip() {
-  const ok = fontFaces.filter(f => f.ok && f.base64);
-  if (ok.length === 0) {
-    showToast('No bundled fonts to download');
-    return;
-  }
-  const entries = ok.map(face => ({
-    name: fontFileName(face),
-    data: base64ToBytes(face.base64),
-  }));
-  const zipBytes = buildZip(entries);
-  const blob = new Blob([zipBytes], { type: 'application/zip' });
-  const reader = new FileReader();
-  reader.onload = () => {
-    chrome.downloads.download({
-      url: reader.result,
-      filename: 'preview-fonts.zip',
-      saveAs: false,
-      conflictAction: 'overwrite'
-    }, (downloadId) => {
-      if (!downloadId) {
-        showToast('Font zip download failed');
-        return;
-      }
-      const listener = (delta) => {
-        if (delta.id === downloadId && delta.state && delta.state.current === 'complete') {
-          chrome.downloads.onChanged.removeListener(listener);
-          chrome.downloads.search({ id: downloadId }, (results) => {
-            const path = results && results[0] && results[0].filename;
-            if (path) {
-              copyToClipboard(path).then(
-                () => showToast(`Saved ${ok.length} font${ok.length === 1 ? '' : 's'} — path copied`),
-                () => showToast(`Saved ${ok.length} font${ok.length === 1 ? '' : 's'} to ${path}`)
-              );
-            } else {
-              showToast(`Saved ${ok.length} font${ok.length === 1 ? '' : 's'}`);
-            }
-          });
-        }
-      };
-      chrome.downloads.onChanged.addListener(listener);
-    });
-  };
-  reader.readAsDataURL(blob);
-}
-
-function base64ToBytes(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-// Minimal in-browser ZIP encoder (STORED, no compression). Enough to bundle
-// a handful of font binaries; saves us shipping a JSZip dependency.
-function buildZip(entries) {
-  const enc = new TextEncoder();
-  const localChunks = [];
-  const centralChunks = [];
-  let offset = 0;
-
-  for (const entry of entries) {
-    const nameBytes = enc.encode(entry.name);
-    const data = entry.data;
-    const crc = crc32(data);
-    const size = data.length;
-
-    // Local file header (30 bytes + name)
-    const local = new Uint8Array(30 + nameBytes.length);
-    const lv = new DataView(local.buffer);
-    lv.setUint32(0, 0x04034b50, true);
-    lv.setUint16(4, 20, true);          // version needed
-    lv.setUint16(6, 0, true);           // flags
-    lv.setUint16(8, 0, true);           // method (stored)
-    lv.setUint16(10, 0, true);          // mtime
-    lv.setUint16(12, 0, true);          // mdate
-    lv.setUint32(14, crc, true);
-    lv.setUint32(18, size, true);
-    lv.setUint32(22, size, true);
-    lv.setUint16(26, nameBytes.length, true);
-    lv.setUint16(28, 0, true);          // extra length
-    local.set(nameBytes, 30);
-    localChunks.push(local, data);
-
-    // Central directory entry (46 bytes + name)
-    const central = new Uint8Array(46 + nameBytes.length);
-    const cv = new DataView(central.buffer);
-    cv.setUint32(0, 0x02014b50, true);
-    cv.setUint16(4, 20, true);          // version made by
-    cv.setUint16(6, 20, true);          // version needed
-    cv.setUint16(8, 0, true);
-    cv.setUint16(10, 0, true);
-    cv.setUint16(12, 0, true);
-    cv.setUint16(14, 0, true);
-    cv.setUint32(16, crc, true);
-    cv.setUint32(20, size, true);
-    cv.setUint32(24, size, true);
-    cv.setUint16(28, nameBytes.length, true);
-    cv.setUint16(30, 0, true);
-    cv.setUint16(32, 0, true);
-    cv.setUint16(34, 0, true);
-    cv.setUint16(36, 0, true);
-    cv.setUint32(38, 0, true);
-    cv.setUint32(42, offset, true);     // local header offset
-    central.set(nameBytes, 46);
-    centralChunks.push(central);
-
-    offset += local.length + size;
   }
 
-  const centralStart = offset;
-  let centralSize = 0;
-  for (const c of centralChunks) centralSize += c.length;
-
-  // End-of-central-directory record (22 bytes)
-  const eocd = new Uint8Array(22);
-  const ev = new DataView(eocd.buffer);
-  ev.setUint32(0, 0x06054b50, true);
-  ev.setUint16(4, 0, true);
-  ev.setUint16(6, 0, true);
-  ev.setUint16(8, entries.length, true);
-  ev.setUint16(10, entries.length, true);
-  ev.setUint32(12, centralSize, true);
-  ev.setUint32(16, centralStart, true);
-  ev.setUint16(20, 0, true);
-
-  let total = offset + centralSize + eocd.length;
-  const out = new Uint8Array(total);
-  let pos = 0;
-  for (const chunk of localChunks) { out.set(chunk, pos); pos += chunk.length; }
-  for (const chunk of centralChunks) { out.set(chunk, pos); pos += chunk.length; }
-  out.set(eocd, pos);
-  return out;
-}
-
-// Standard CRC32/PKZIP polynomial 0xedb88320, table-based.
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i++) {
-    let c = i;
-    for (let j = 0; j < 8; j++) {
-      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-    }
-    table[i] = c;
-  }
-  return table;
-})();
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < bytes.length; i++) {
-    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ bytes[i]) & 0xff];
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-// ── Toast ──
-let toastTimer = null;
-function showToast(msg) {
-  if (toastTimer) clearTimeout(toastTimer);
-  toastText.textContent = msg;
-  toast.classList.add('visible');
-  toastTimer = setTimeout(() => {
-    toast.classList.remove('visible');
-  }, 2800);
-}
-
-// ── Helpers ──
-function formatSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  return (bytes / 1024).toFixed(1) + ' KB';
-}
-
-function setMeta(id, size, font) {
-  const el = document.getElementById(id);
-  el.innerHTML = '';
-  const sizeSpan = document.createElement('span');
-  sizeSpan.textContent = formatSize(size);
-  el.appendChild(sizeSpan);
-
-  const dot = document.createTextNode(' · ');
-  el.appendChild(dot);
-
-  const label = document.createTextNode('Font: ');
-  el.appendChild(label);
-
-  const fontSpan = document.createElement('span');
-  fontSpan.className = 'font-name';
-  fontSpan.textContent = font;
-  el.appendChild(fontSpan);
-}
-
-function copyToClipboard(text) {
-  // Try the modern API first, fall back to execCommand
-  return navigator.clipboard.writeText(text).catch(() => {
-    return new Promise((resolve, reject) => {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
+  async function copyPath(path) {
+    if (!path) return false;
+    try {
+      await navigator.clipboard.writeText(path);
+      return true;
+    } catch (_) {
+      // Fall back for contexts where the async clipboard is unavailable.
       try {
-        document.execCommand('copy');
-        resolve();
-      } catch (e) {
-        reject(e);
-      } finally {
-        document.body.removeChild(ta);
+        var area = document.createElement('textarea');
+        area.value = path;
+        area.setAttribute('readonly', '');
+        area.style.cssText = 'position:fixed;left:-9999px;top:0';
+        document.body.appendChild(area);
+        area.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(area);
+        return ok;
+      } catch (_) {
+        return false;
       }
-    });
-  });
-}
-
-function detectPrimaryFont(html) {
-  // Pull all font-family declarations from the CSS inside the HTML
-  const fontRegex = /font-family:\s*([^;}"]+)/gi;
-  const counts = {};
-  let match;
-
-  while ((match = fontRegex.exec(html)) !== null) {
-    // Grab the first font in the stack (the primary one)
-    const raw = match[1].trim();
-    const first = raw.split(',')[0].trim().replace(/["']/g, '');
-
-    // Skip generic keywords, icon fonts, and the body default
-    const lower = first.toLowerCase();
-    if (['sans-serif', 'serif', 'monospace', 'cursive', 'fantasy', 'inherit', 'initial',
-         '-apple-system', 'blinkmacsystemfont', 'material icons', 'material symbols outlined',
-         'google material icons', 'fontawesome'].includes(lower)) continue;
-    if (lower.includes('material') || lower.includes('icon') || lower.includes('fontawesome')) continue;
-
-    counts[first] = (counts[first] || 0) + 1;
-  }
-
-  // Return the most frequently used font
-  let best = null;
-  let bestCount = 0;
-  for (const [font, count] of Object.entries(counts)) {
-    if (count > bestCount) {
-      best = font;
-      bestCount = count;
     }
   }
-  return best;
-}
+
+  async function saveOne(filename, content, mime) {
+    var path = await download(filename, content, mime);
+    if (!path) return null;
+    var copied = await copyPath(path);
+    toast(copied ? 'Saved · path copied → ' + path : 'Saved → ' + path);
+    return path;
+  }
+
+  async function saveBoth() {
+    var htmlPath = await download('preview.html', state.savedHtml, 'text/html');
+    var toonPath = await download('component.toon', state.toon, 'text/plain');
+    var path = htmlPath || toonPath;
+    if (!path) return;
+    var copied = await copyPath(path);
+    toast(copied ? 'Saved both · path copied → ' + path : 'Saved both → ' + path);
+  }
+
+  /**
+   * Fonts zip. Entry names are the same relative paths the SAVED html
+   * references, so unzipping next to it makes the export render offline.
+   * Anything that failed at capture time gets one late retry — tokenized CDN
+   * URLs routinely expire between capture and save.
+   */
+  async function saveFonts() {
+    var faces = state.payload.fontFaces || [];
+    var binaries = state.payload.fontBinaries || [];
+    var byUrl = {};
+    binaries.forEach(function (binary) { if (binary && binary.ok) byUrl[binary.url] = binary; });
+
+    var retried = 0;
+    for (var i = 0; i < faces.length; i += 1) {
+      var face = faces[i];
+      if (byUrl[face.url] || face.inline) continue;
+      var fresh = await sendMessage({
+        type: 'CHEATER_FETCH_FONT', url: face.url, path: face.path, mime: face.mime
+      });
+      if (fresh && fresh.ok) { byUrl[face.url] = fresh; retried += 1; }
+    }
+
+    var files = [];
+    var seen = {};
+    faces.forEach(function (face) {
+      var binary = byUrl[face.url];
+      if (!binary || seen[face.path]) return;
+      seen[face.path] = true;
+      files.push({ name: face.path, base64: binary.base64 });
+    });
+
+    if (!files.length) { toast('No font binaries available to zip', true); return; }
+
+    var bytes = Zip.build(files);
+    var path = await download('preview-fonts.zip', bytes, 'application/zip');
+    if (!path) return;
+    var copied = await copyPath(path);
+    toast((copied ? 'Saved ' : 'Saved ') + files.length + ' font(s)' +
+      (retried ? ' (' + retried + ' re-fetched)' : '') + ' → ' + path);
+  }
+
+  function sendMessage(message) {
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage(message, function (response) {
+          if (chrome.runtime.lastError) resolve(null);
+          else resolve(response);
+        });
+      } catch (_) { resolve(null); }
+    });
+  }
+
+  /**
+   * Build every view from state.payload. Shared by the initial boot and by
+   * opening an entry from history, so a reopened capture goes through exactly the
+   * same path as a fresh one.
+   */
+  async function renderPayload() {
+    var nodeCount = (state.payload.diagnostics || {}).nodes || 0;
+    var scale = nodeCount ? nodeCount.toLocaleString() + ' nodes' : '';
+
+    setStage('Building HTML', 25, scale);
+    await paint();
+    state.savedHtml = HtmlWriter.build(state.payload, { fontMode: 'relative', surface: 'auto' });
+
+    setStage('Building TOON', 45, formatBytes(byteLength(state.savedHtml)) + ' of HTML');
+    await paint();
+    state.toon = ToonWriter.toToon(state.payload);
+
+    setStage('Diagnostics', 58, formatBytes(byteLength(state.toon)) + ' of TOON');
+    await paint();
+    renderDiagnostics();
+
+    setStage('Highlighting source', 72,
+      state.savedHtml.length > Highlight.SIZE_LIMIT ? 'too large — showing plain source' : '');
+    await paint();
+    renderCode();
+
+    setStage('Rendering preview', 90);
+    await paint();
+    renderPreview();
+
+    setStage('Ready', 100);
+
+    var url = state.payload.url || '';
+    el('src').innerHTML = url
+      ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noreferrer">' + escapeHtml(url) + '</a>'
+      : '<span class="dim">unknown source</span>';
+
+    var bundled = (state.payload.diagnostics || {}).fontsBundled || 0;
+    var fontButton = el('save-fonts');
+    fontButton.textContent = 'Download fonts (' + bundled + ')';
+    fontButton.classList.toggle('hidden', bundled === 0);
+  }
+
+  /* ---------------------------------------------------------------- history */
+
+  function timeAgo(ms) {
+    var seconds = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (seconds < 60) return seconds + 's ago';
+    if (seconds < 3600) return Math.round(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.round(seconds / 3600) + 'h ago';
+    return Math.round(seconds / 86400) + 'd ago';
+  }
+
+  async function renderHistory() {
+    var response = await sendMessage({ type: 'CHEATER_HISTORY_LIST' });
+    var rows = el('hist-rows');
+
+    if (!response || !response.ok) {
+      rows.innerHTML = '<div class="hist-empty">History unavailable' +
+        (response && response.reason ? ': ' + escapeHtml(response.reason) : '') + '</div>';
+      return;
+    }
+    if (!response.entries.length) {
+      rows.innerHTML = '<div class="hist-empty">No captures recorded yet. ' +
+        'The last 10 exports are kept here.</div>';
+      return;
+    }
+
+    rows.innerHTML = response.entries.map(function (entry) {
+      var isCurrent = entry.id === state.exportId;
+      var size = entry.width && entry.height ? entry.width + '×' + entry.height : '';
+      return '<div class="hrow' + (isCurrent ? ' current' : '') + '" data-id="' + escapeHtml(entry.id) + '">' +
+        '<span class="when">' + escapeHtml(timeAgo(entry.createdAt)) + '</span>' +
+        '<span class="what">' + escapeHtml(entry.label || 'selection') + '</span>' +
+        '<span class="where">' + escapeHtml(entry.url || '') + '</span>' +
+        '<span class="dim">' + escapeHtml(size) + '</span>' +
+        '<span class="dim">' + (entry.nodes || 0) + ' nodes</span>' +
+        '<span class="dim">' + formatBytes(entry.bytes || 0) + '</span>' +
+        '<span class="acts">' +
+          (isCurrent ? '<button disabled>Open</button>'
+                     : '<button class="open-btn" data-act="open">Open</button>') +
+          '<button data-act="delete">Delete</button>' +
+        '</span></div>';
+    }).join('');
+  }
+
+  async function openHistoryEntry(id) {
+    var response = await sendMessage({ type: 'CHEATER_HISTORY_GET', id: id });
+    if (!response || !response.ok || !response.payload) {
+      toast('Could not open that capture' + (response && response.reason ? ': ' + response.reason : ''), true);
+      return false;
+    }
+    // Reset the loading overlay so the staged progress is visible again.
+    el('loading').classList.remove('done');
+    state.payload = response.payload;
+    state.exportId = id;
+    await renderPayload();
+    finishStages();
+
+    // Get out of the way: you opened a capture to look at it, and the panel
+    // covers the preview. It re-renders (with the new "current" marker) whenever
+    // it is opened again, so nothing is stale.
+    el('hist').classList.remove('open');
+    el('hist-btn').classList.remove('on');
+
+    selectTab('preview');
+    toast('Opened capture from history');
+    return true;
+  }
+
+  /* ------------------------------------------------------------------- boot */
+
+  function showEmpty(message) {
+    finishStages();
+    document.querySelector('.panes').innerHTML =
+      '<div class="empty"><b>No capture</b><div>' + escapeHtml(message) + '</div></div>';
+    el('diag').classList.add('hidden');
+    document.querySelector('.ftr').classList.add('hidden');
+    document.querySelector('.tabs').classList.add('hidden');
+    // #hist deliberately stays visible: with no capture loaded, history is the
+    // only thing on this page worth interacting with.
+  }
+
+  async function boot() {
+    el('ver').textContent = 'v' + chrome.runtime.getManifest().version;
+
+    var params = new URLSearchParams(location.search);
+    var historyParam = params.get('history');
+
+    // Opened from the popup or the history shortcut rather than from a capture.
+    if (historyParam) {
+      finishStages();
+      if (historyParam !== 'list') {
+        var opened = await openHistoryEntry(historyParam);
+        if (opened) return;
+      }
+      showEmpty('Pick a capture from History above.');
+      el('hist').classList.add('open');
+      el('hist-btn').classList.add('on');
+      await renderHistory();
+      return;
+    }
+
+    state.exportId = params.get('id');
+    if (!state.exportId) { showEmpty('No export id in the URL.'); return; }
+
+    setStage('Reading capture', 8);
+    await paint();
+    var response = await sendMessage({ type: 'CHEATER_GET_PAYLOAD', id: state.exportId });
+    if (!response || !response.ok || !response.payload) {
+      showEmpty('The capture payload has expired. Re-run the export from the page.');
+      return;
+    }
+    state.payload = response.payload;
+
+    // The worker's copy is only needed until now.
+    sendMessage({ type: 'CHEATER_RELEASE_PAYLOAD', id: state.exportId });
+
+    await renderPayload();
+
+    var bundled = (state.payload.diagnostics || {}).fontsBundled || 0;
+    var fontButton = el('save-fonts');
+    if (bundled > 0) {
+      fontButton.textContent = 'Download fonts (' + bundled + ')';
+      fontButton.classList.remove('hidden');
+    }
+
+    // The preview iframe reports back through its load handler; hide the overlay
+    // now that everything measurable is done.
+    finishStages();
+
+    // Diagnostics start open when something needs attention.
+    var diag = state.payload.diagnostics || {};
+    var fonts = state.payload.fonts || {};
+    if (diag.dropped || diag.fontFailures || diag.canvasPlaceholders || diag.imagesDropped ||
+        (fonts.primary && !fonts.primaryLoadable)) {
+      el('diag').classList.add('open');
+    }
+  }
+
+  /* ------------------------------------------------------------------ wiring */
+
+  el('hist-btn').addEventListener('click', async function () {
+    var panel = el('hist');
+    var open = !panel.classList.contains('open');
+    panel.classList.toggle('open', open);
+    el('hist-btn').classList.toggle('on', open);
+    if (open) await renderHistory();
+    if (state.tab === 'preview') requestAnimationFrame(fitFrame);
+  });
+
+  el('hist-close').addEventListener('click', function () {
+    el('hist').classList.remove('open');
+    el('hist-btn').classList.remove('on');
+    if (state.tab === 'preview') requestAnimationFrame(fitFrame);
+  });
+
+  el('hist-clear').addEventListener('click', async function () {
+    await sendMessage({ type: 'CHEATER_HISTORY_DELETE' });
+    await renderHistory();
+    toast('History cleared');
+  });
+
+  el('hist-rows').addEventListener('click', async function (event) {
+    var button = event.target.closest('button[data-act]');
+    if (!button) return;
+    var row = button.closest('.hrow');
+    if (!row) return;
+    if (button.dataset.act === 'open') { await openHistoryEntry(row.dataset.id); return; }
+    await sendMessage({ type: 'CHEATER_HISTORY_DELETE', id: row.dataset.id });
+    await renderHistory();
+  });
+
+  el('diag-bar').addEventListener('click', function () {
+    el('diag').classList.toggle('open');
+    if (state.tab === 'preview') requestAnimationFrame(fitFrame);
+  });
+
+  document.querySelectorAll('.tab').forEach(function (tab) {
+    tab.addEventListener('click', function () { selectTab(tab.dataset.tab); });
+  });
+
+  el('width-seg').addEventListener('click', function (event) {
+    var button = event.target.closest('button');
+    if (!button) return;
+    state.width = button.dataset.w;
+    el('width-seg').querySelectorAll('button').forEach(function (b) {
+      b.classList.toggle('sel', b === button);
+    });
+    fitFrame();
+  });
+
+  el('surface-seg').addEventListener('click', function (event) {
+    var button = event.target.closest('button');
+    if (!button) return;
+    state.surface = button.dataset.surface;
+    el('surface-seg').querySelectorAll('button').forEach(function (b) {
+      b.classList.toggle('sel', b === button);
+    });
+    el('preview-pane').classList.toggle('light', state.surface === 'light');
+    renderPreview();
+  });
+
+  el('frame').addEventListener('load', function () {
+    fitFrame();
+    // Content can settle after load (webfont swap changes text height).
+    setTimeout(fitFrame, 120);
+    setTimeout(fitFrame, 600);
+  });
+
+  el('copy').addEventListener('click', async function () {
+    var source = state.tab === 'toon' ? state.toon : state.savedHtml;
+    var ok = await copyPath(source);
+    toast(ok ? 'Copied ' + state.tab.toUpperCase() + ' to clipboard' : 'Copy failed', !ok);
+  });
+
+  el('save-html').addEventListener('click', function () {
+    saveOne('preview.html', state.savedHtml, 'text/html');
+  });
+  el('save-toon').addEventListener('click', function () {
+    saveOne('component.toon', state.toon, 'text/plain');
+  });
+  el('save-both').addEventListener('click', saveBoth);
+  el('save-fonts').addEventListener('click', saveFonts);
+
+  window.addEventListener('resize', function () {
+    if (state.tab === 'preview') fitFrame();
+  });
+
+  boot();
+})();
