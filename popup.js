@@ -20,7 +20,8 @@
     fullpage: { primary: true, shift: true, alt: false, key: 'X' },
     history: { primary: true, shift: true, alt: false, key: 'H' },
     pause: { primary: true, shift: true, alt: false, key: 'P' },
-    grab: { primary: true, shift: true, alt: false, key: 'G' }
+    grab: { primary: true, shift: true, alt: false, key: 'G' },
+    diagnose: { primary: true, shift: true, alt: false, key: 'D' }
   };
 
   // Pages where no extension content script can run. Saying so plainly beats
@@ -87,6 +88,7 @@
       ['Recent captures', comboLabel(state.shortcuts.history)],
       ['Select / interact mode', comboLabel(state.shortcuts.pause)],
       ['Grab what you hover', comboLabel(state.shortcuts.grab)],
+      ['Diagnose what is visible', comboLabel(state.shortcuts.diagnose)],
       ['Clear / exit', 'Esc'],
       ['Exact target', ALT_LABEL + '+Click'],
       ['Multi-select', 'Shift+Click'],
@@ -341,7 +343,10 @@
   });
 
   el('save-keys').addEventListener('click', async function () {
-    var next = {};
+    // Start from the defaults rather than an empty object: the editor is built from
+    // the rows present in the markup, so an action whose row is missing would be
+    // deleted from the saved config and its key would silently stop working.
+    var next = Object.assign({}, DEFAULT_SHORTCUTS, state.shortcuts);
     var valid = true;
     document.querySelectorAll('.edrow').forEach(function (row) {
       var config = { primary: false, shift: false, alt: false, key: '' };

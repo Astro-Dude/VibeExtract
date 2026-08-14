@@ -203,6 +203,120 @@
   </div>
 </div>
 
+<!-- 13. A treemap-style HOVER CARD: portal-rendered at <body>, positioned next to
+     the cursor, with NO aria relationship to the tile and no aria-expanded
+     anywhere. Every explicit adoption signal finds nothing here, which is exactly
+     why "it appeared while I was pointing at this" has to be a signal of its own. -->
+<h2>13 · portal hover card (chart tooltip shape)</h2>
+<style>
+  .treemap{display:flex;gap:3px;width:520px;height:150px}
+  .tile{flex:1;background:#12305c;color:#fff;padding:10px;font-size:12px;cursor:default}
+  .tile.big{flex:3;background:#0b1c33}
+  .tile b{display:block;font-size:13px;margin-bottom:4px}
+  .hovercard{
+    position:absolute;z-index:80;width:340px;padding:18px 20px;
+    background:#fff;color:#0f172a;border-radius:8px;
+    box-shadow:0 18px 44px rgba(15,23,42,.28);font-size:13px;line-height:1.5
+  }
+  .hovercard h4{margin:0 0 8px;font-size:17px;color:#0f172a}
+  .hovercard dl{display:grid;grid-template-columns:auto auto;gap:4px 18px;margin:12px 0 0}
+  .hovercard dt{font-weight:600}
+  .hovercard dd{margin:0;font-variant-numeric:tabular-nums}
+</style>
+<div class="treemap" data-test="treemap">
+  <div class="tile big" data-test="tile-genai"><b>Generative AI</b>12,104 Companies</div>
+  <div class="tile" data-test="tile-twins"><b>Digital Twins</b>2,726 Companies</div>
+  <div class="tile" data-test="tile-rpa"><b>Robotic Process Automation</b>1,585 Co...</div>
+</div>
+<script>
+  (function () {
+    var card = null;
+    var facts = {
+      'tile-genai': ['Generative AI', 'A field of artificial intelligence that predicts human-like content across various domains using multimodal models.', '12,104', '17,453', '$1.64Tn'],
+      'tile-twins': ['Digital Twins', 'Virtual replicas of physical assets kept in sync with live telemetry.', '2,726', '3,981', '$210.4B'],
+      'tile-rpa': ['Robotic Process Automation', 'Software robots that carry out repetitive rule-based office work.', '1,585', '2,402', '$88.7B']
+    };
+    document.querySelectorAll('.tile').forEach(function (tile) {
+      tile.addEventListener('mouseenter', function (event) {
+        var f = facts[tile.getAttribute('data-test')];
+        card = document.createElement('div');
+        card.className = 'hovercard';
+        card.setAttribute('data-test', 'hovercard');
+        card.innerHTML = '<h4>' + f[0] + '</h4><p style="margin:0">' + f[1] + '</p>' +
+          '<dl><dt>Company Count:</dt><dd>' + f[2] + '</dd>' +
+          '<dt>Deal Count:</dt><dd>' + f[3] + '</dd>' +
+          '<dt>Capital Invested:</dt><dd>' + f[4] + '</dd></dl>';
+        // Positioned next to the cursor and appended at body level — a portal.
+        card.style.left = (event.clientX + window.scrollX + 12) + 'px';
+        card.style.top = (event.clientY + window.scrollY + 12) + 'px';
+        document.body.appendChild(card);
+      });
+      tile.addEventListener('mouseleave', function () {
+        if (card && card.parentNode) card.parentNode.removeChild(card);
+        card = null;
+      });
+    });
+  })();
+</script>
+
+<!-- 14. A sidebar MEGA-MENU flyout: it opens beside the rail, not beside the link.
+     The hovered link is narrow and indented, so the panel is ~230px away from it
+     horizontally and nowhere near the pointer — it is anchored to the RAIL. Any
+     placement test measured against the hovered element alone rejects it. -->
+<h2>14 · sidebar flyout anchored to the rail, not the link</h2>
+<style>
+  .shell{display:flex;position:relative;height:230px;font-size:13px}
+  .rail{width:230px;background:#0f2744;padding:12px 0;flex:0 0 230px}
+  .rail a{display:block;width:150px;margin:0 0 2px 14px;padding:6px 10px;color:#dbeafe;text-decoration:none;border-radius:4px}
+  .rail a:hover{background:#1c3c63;color:#fff}
+  .flyout{
+    position:absolute;left:250px;top:10px;z-index:60;width:420px;padding:22px 26px;
+    background:#fff;border-radius:10px;box-shadow:0 20px 50px rgba(15,23,42,.3);color:#0f172a
+  }
+  .flyout h4{margin:0 0 16px;font-size:17px;color:#1d4ed8;font-weight:600}
+  .flyout .cols{display:grid;grid-template-columns:1fr 1fr;gap:10px 24px}
+  .flyout a{color:#1d4ed8;text-decoration:none;display:block}
+  .flyout hr{border:0;border-top:1px solid #e2e8f0;margin:18px 0}
+</style>
+<div class="shell" data-test="shell">
+  <div class="rail" data-test="rail">
+    <a href="#c" data-test="rail-conferences">Conferences</a>
+    <a href="#p" data-test="rail-public">Public Companies</a>
+    <a href="#people" class="nav-list-item__button" data-test="rail-people">People</a>
+    <a href="#s" data-test="rail-service">Service Providers</a>
+  </div>
+</div>
+<script>
+  (function () {
+    var shell = document.querySelector('[data-test="shell"]');
+    var panel = null;
+    var items = {
+      'rail-people': ['All People', ['Women Founders', 'Investment Professionals at LPs',
+        'Board Members', 'Execs at VC-Backed Companies', 'MDs & Partners at GPs',
+        'Execs at PE-Backed Companies'], 'Build a custom People screen'],
+      'rail-public': ['All Public Companies', ['By Index', 'By Sector'], 'Build a custom screen']
+    };
+    shell.querySelectorAll('.rail a').forEach(function (link) {
+      link.addEventListener('mouseenter', function () {
+        var spec = items[link.getAttribute('data-test')];
+        if (!spec) return;
+        panel = document.createElement('div');
+        panel.className = 'flyout';
+        panel.setAttribute('data-test', 'flyout');
+        panel.innerHTML = '<h4>' + spec[0] + ' &rsaquo;</h4><div class="cols">' +
+          spec[1].map(function (t) { return '<a href="#x">' + t + '</a>'; }).join('') +
+          '</div><hr><a href="#build">' + spec[2] + '</a>';
+        // Anchored to the RAIL, which is why it lands far from the link itself.
+        shell.appendChild(panel);
+      });
+      link.addEventListener('mouseleave', function () {
+        if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+        panel = null;
+      });
+    });
+  })();
+</script>
+
 <!-- 12. A button that only does something on a real click, used to prove interact
      mode actually hands clicks back to the page. -->
 <h2>12 · a button that needs a real click</h2>

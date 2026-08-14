@@ -575,6 +575,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         guard(runExport(tabId, null), 'collect+export').then(sendResponse);
         return true;
       }
+      if (message.cmd === 'grab') {
+        // Every frame is asked; the one whose pointer is over something answers with
+        // grabbed:true. Needed because the keystroke lands in the focused frame and
+        // the hover lives in the frame under the cursor — different frames whenever
+        // the target is inside an iframe.
+        guard(
+          broadcast(tabId, { type: 'CHEATER_GRAB', exact: !!message.exact }).then((replies) => {
+            // broadcast() hands back { frameId, reply } wrappers, not bare replies.
+            const hit = (replies || []).find((entry) => entry.reply && entry.reply.grabbed);
+            return {
+              ok: true,
+              grabbed: !!hit,
+              frameId: hit ? hit.frameId : null,
+              frame: hit ? hit.reply.frame : null
+            };
+          }),
+          'grab'
+        ).then(sendResponse);
+        return true;
+      }
       if (message.cmd === 'fullpage') {
         // Select <body> everywhere, then collect. Frames without a body reply null.
         guard(

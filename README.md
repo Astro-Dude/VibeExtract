@@ -46,7 +46,7 @@ straight into Claude Code.
 
 ### Shortcuts
 
-All six main shortcuts are customizable in the popup and persist via `chrome.storage.sync`.
+All seven main shortcuts are customizable in the popup and persist via `chrome.storage.sync`.
 
 | Action | macOS | Windows / Linux |
 |---|---|---|
@@ -57,6 +57,7 @@ All six main shortcuts are customizable in the popup and persist via `chrome.sto
 | Recent captures | `Cmd+Shift+H` | `Ctrl+Shift+H` |
 | Select ⇄ Interact mode | `Cmd+Shift+P` | `Ctrl+Shift+P` |
 | **Grab what you hover** | `Cmd+Shift+G` | `Ctrl+Shift+G` |
+| Diagnose what is visible | `Cmd+Shift+D` | `Ctrl+Shift+D` |
 | Exact target (no expansion) | `Opt+Click` | `Alt+Click` |
 | Multi-select | `Shift+Click` | `Shift+Click` |
 | Parent / child of the selection | `Opt+↑` / `Opt+↓` | `Alt+↑` / `Alt+↓` |
@@ -160,6 +161,8 @@ So the capture looks *outside* the selection, most reliable signal first:
 | `aria-describedby` | tooltips and help bubbles |
 | `:popover-open` | native popovers |
 | `dialog:modal` | `showModal()` dialogs, which live in the top layer |
+| **it appeared since you started pointing here**, next to the element or one of its containers | hover cards, chart tooltips and sidebar mega-menus, none of which carry any ARIA relationship |
+| **a floating layer under the pointer** | a tooltip already in the DOM and merely revealed by CSS, where there is no mutation to see |
 | geometry — a positioned layer horizontally overlapping and vertically adjacent | everything else, and **only** when the selection actually has something open |
 
 Each candidate must be visible, outside the selection, and smaller than 60% of the
@@ -203,6 +206,86 @@ events**, unlike synthetic clicks, which can submit forms, navigate, or hit dest
 controls. It is capped at six menus per capture, and hidden subtrees that are *not*
 menu-shaped stay dropped — capturing every hidden thing on a page would bloat exports and
 carry along content nobody selected.
+
+### Hover cards and chart tooltips
+
+The hardest case, and the one every earlier signal misses. A treemap tile's card — the
+PitchBook/Highcharts shape — is portal-rendered at `<body>` level, positioned next to the
+cursor, carries **no ARIA relationship** to the tile, and its trigger has no `aria-expanded`
+anywhere. So explicit wiring finds nothing, and the open-trigger gate stops geometry from
+even running. Grabbing under the cursor gets you the tile, not the card.
+
+The only honest evidence is **"this appeared while I was pointing here"**, so that is
+recorded: while selection mode is active, a `MutationObserver` notes floating layers as they
+show up. At capture time, any layer that appeared in the last six seconds and is placed like a
+tooltip — near the pointer, or overlapping the element — is adopted alongside the selection.
+
+It is kept cheap and kept honest:
+
+- Candidates are prefiltered with a **string test**, not a selector match — running a large
+  selector against every mutation on a busy app would cost more than the feature is worth. The
+  strongest structural signal is free: portals are appended directly to `<body>`.
+- Recency alone is never enough. A notification toast in the far corner that appeared at the
+  same moment is rejected on placement, and any layer that is or contains a **landmark**
+  (`header`, `nav`, `main`, `footer`) is rejected outright as page furniture.
+- The observer runs only while selection mode is on, and its attribute filter is narrow.
+  Whole-page capture of the 9,000-rule stress fixture still completes in ~120ms.
+
+**Grab captures what appeared, not what you pointed at.** You hover a nav link in order to see
+its flyout; the flyout is the thing you want and the link is just how you got there. So when a
+layer appeared for this hover, that layer becomes the selection on its own. Hold **Alt** to take
+exactly what is under the cursor instead, panel excluded.
+
+In practice: switch to **Interact**, hover until the panel appears, then `Cmd/Ctrl+Shift+G`. The
+pointer never moves, so the panel stays up.
+
+**Placement is measured against the element's containers, not just the element.** A sidebar
+mega-menu is the case that forces this: the link you hover is narrow and indented, so the panel
+opens beside the **rail** and can sit 200px+ from the link and nowhere near the pointer.
+Measured against the link it looks unrelated; measured against the rail it is obviously its
+flyout. The walk up is capped by *size* rather than depth — a page-sized ancestor adjoins
+everything, so anything above 60% of the viewport stops it.
+
+**Recency is measured from when the hover began**, not on a wall clock. A layer only counts if
+it appeared *after* you started pointing at this element. Getting that wrong meant every layer
+the page built at load time qualified, which over-adopted badly — the existing portal fixtures
+caught it immediately.
+
+**Grab is broadcast to every frame, not handled where the keystroke lands.** `composedPath()`
+does not cross a frame boundary, so when the cursor is inside an iframe the top frame sees no
+hover at all — no pointer, no hovered element, and its `MutationObserver` never sees the card
+because the card lives in the frame's own document. Meanwhile the keystroke goes to whichever
+frame holds keyboard *focus*, which is the top one. Those are different frames for any chart
+embedded in an iframe, so every frame is asked and the one whose pointer is over something
+answers. Without this, an in-frame hover card was silently uncapturable.
+
+### When hover capture doesn't work: `Cmd/Ctrl+Shift+D`
+
+Every failure mode here looks identical from the outside — nothing happens. The diagnose key
+prints a report to the console and copies it to the clipboard, naming which frame you are in,
+whether the pointer is being tracked at all, every floating layer it can see, and **why each
+one was or was not adopted**:
+
+```
+cheater: 3.1.0 · interact mode
+frame: TOP https://example.com/chart
+pointer: 170,255
+hovered: div.tile.big [292x150 @ 24,180]
+layers seen appearing: 1
+element at pointer: div.tile.big [292x150 @ 24,180]
+
+floating layers in this frame: 13
+  div.hovercard [380x207 @ 182,267] -> WOULD BE ADOPTED
+  div.menu [224x119 @ 37,-914] -> not visible
+  ...
+adoption result: div.hovercard [380x207 @ 182,267] (appeared on hover)
+shadow roots known: 0
+same-origin frames seen: 0
+```
+
+It also calls out the two cases nothing can fix: a pointer over a `<canvas>` (a canvas-drawn
+tooltip has no DOM at all — pixels are the only option) and a pointer over a cross-origin
+`<iframe>` (that frame owns the hover).
 
 ### Dropdowns you can actually open in the export
 
@@ -540,8 +623,9 @@ test/fixtures.html       every module type on one page
 test/run-fixtures.js     189 capture assertions
 test/dropdowns.html      twelve shapes of closed dropdown
 test/iframes.html        nine iframe shapes, incl. a real second origin
-test/run-iframes.js      63 iframe assertions
-test/run-dropdowns.js    103 dropdown + interact-mode assertions
+test/run-iframes.js      71 iframe assertions
+test/run-dropdowns.js    131 dropdown, interact-mode, hover-card + flyout assertions
+test/frame-tooltip.html  a chart with a hover card, inside a frame
 test/run-fonts.js        34 font-fidelity assertions
 test/cdp-runner.js       runs the browser suites against headless Chrome, no deps
 ```
@@ -601,14 +685,14 @@ Seven suites:
   byte budget, payload round-trip and deletion.
 
 
-- **`test/run-worker.js`** — 12 assertions, plain Node (`node test/run-worker.js`), no
+- **`test/run-worker.js`** — 16 assertions, plain Node (`node test/run-worker.js`), no
   browser. Loads `background.js` against a stubbed `chrome.*` and drives the export path.
   This one exists because a worker failure reaches the page as nothing but "Export failed":
   the worker has no console anyone watches, and a rejected promise in a message handler
   simply closes the port with no response at all.
 
 
-- **`test/run-dropdowns.js`** — 103 assertions over `test/dropdowns.html`, which holds twelve
+- **`test/run-dropdowns.js`** — 131 assertions over `test/dropdowns.html`, which holds fourteen
   shapes of **closed** dropdown: hidden by inline `display`, by `visibility`, by the `hidden`
   attribute, by a stylesheet class with `!important`, a menu of links, a non-focusable div
   trigger, a menu nested deeper than its trigger, twin dropdowns that must stay independent,
@@ -619,15 +703,20 @@ Seven suites:
   possible failure here. The last block covers interact mode with a **real cursor**: the
   driver moves the actual pointer (synthetic events cannot, so `:hover` never matches), the
   hover-only menu genuinely appears, and it is captured with the grab key without a single
-  click.
-- **`test/run-iframes.js`** — 63 assertions over `test/iframes.html`: `srcdoc`, a same-origin
+  click. The last block covers the chart-tooltip shape: it first asserts that every other
+  adoption signal genuinely fails on that fixture — no ARIA wiring, no open trigger — so the
+  test cannot pass for the wrong reason, then checks the card is adopted, and that an unrelated
+  toast and a landmark-bearing layer are both rejected.
+- **`test/run-iframes.js`** — 71 assertions over `test/iframes.html`: `srcdoc`, a same-origin
   URL, a **genuinely** cross-origin frame (the runner serves a second origin on port 8932 so it
   is real rather than simulated), nested frames, `about:blank` written by script, a sandboxed
   opaque origin, a scrolled frame, a frame as the capture root, and a full document four times
   taller than its frame — where all 20 rows and the footer past the fold must be captured, and
   the rendered box must genuinely scroll to reach them. Ends with a fidelity comparison: the
   same element's computed style read in the original frame and in the rendered export and
-  required to match, including rendered text width.
+  required to match, including rendered text width. A final block puts a hover card **inside**
+  a frame and asserts the top frame genuinely cannot see it while the frame's own instance can
+  — the fact that forces grab to be broadcast.
 - **`test/run-fixtures.js`** — 189 capture assertions over `test/fixtures.html`, one per
   capture path. The interactive-dropdown assertions at the end are behavioural rather than
   textual: the generated export is rendered in an iframe carrying **the same sandbox
@@ -641,7 +730,7 @@ Seven suites:
   `pointer-events:none` icon `<svg>`). Covers capture performance, progress reporting, the
   yield behaviour, overlap rejection, wheel gating and Alt+Arrow anchoring.
 
-Current status: **189/189 + 103/103 + 63/63 + 34/34 + 22/22 + 13/13 + 12/12 = 436 passing**, with every sampled
+Current status: **189/189 + 131/131 + 71/71 + 34/34 + 22/22 + 13/13 + 16/16 = 476 passing**, with every sampled
 component rendering pixel-identically to its original and a whole-page capture of the
 9,000-rule stress fixture completing in ~100ms.
 

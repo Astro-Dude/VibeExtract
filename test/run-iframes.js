@@ -387,6 +387,78 @@ async (page) => {
     return out;
   });
 
+  /* ============ a hover card INSIDE a frame ================================= */
+  // composedPath() does not cross a frame boundary, so the top frame sees no hover
+  // at all when the cursor is inside an iframe: no state.hovered, no pointer, and
+  // its MutationObserver never sees the card because the card is in the frame's
+  // document. The frame's own instance has all of it — which is why grab is
+  // broadcast to every frame rather than handled where the keystroke landed.
+  const frameHover = await (async () => {
+    const spot = await page.evaluate((base) => new Promise((resolve) => {
+      const f = document.querySelector('[data-test="frame-tip"]');
+      f.scrollIntoView({ block: 'center' });
+      const d = f.contentDocument;
+      let left = 2;
+      for (const src of ['lib/reset.js', 'contentScript.js']) {
+        const el = d.createElement('script');
+        el.src = base + '/' + src + '?v=' + Date.now();
+        el.onload = () => {
+          if (--left) return;
+          f.contentWindow.__cheater.activate();
+          f.contentWindow.__cheater.setPaused(true);
+          const tile = d.querySelector('[data-test="iframe-tile"]');
+          const fr = f.getBoundingClientRect();
+          const ir = tile.getBoundingClientRect();
+          resolve({ x: Math.round(fr.left + ir.left + ir.width / 2),
+                    y: Math.round(fr.top + ir.top + ir.height / 2) });
+        };
+        d.head.appendChild(el);
+      }
+    }), BASE);
+
+    await page.mouse.move(spot.x, spot.y);
+    await page.waitForTimeout(250);
+
+    return page.evaluate(async () => {
+      const res = [];
+      const ok = (name, pass, detail) => res.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
+      const f = document.querySelector('[data-test="frame-tip"]');
+      const inner = f.contentWindow.__cheater;
+      const W = window.CheaterHtmlWriter;
+
+      ok('frame hover: the card really appeared inside the frame',
+        !!f.contentDocument.querySelector('[data-test="iframe-card"]'),
+        'the fixture card never appeared');
+      // The fact that forces the broadcast to exist.
+      ok('frame hover: the TOP frame sees no hover at all',
+        window.__cheater.state.hovered === null,
+        'the top frame somehow tracked a hover across a frame boundary');
+      ok('frame hover: the FRAME does see it',
+        !!inner.state.hovered, 'the frame instance is not tracking the hover either');
+      ok('frame hover: the frame noticed the card appearing',
+        inner.state.appeared.size >= 1, 'appeared=' + inner.state.appeared.size);
+
+      inner.clearSelection();
+      const grabbed = await inner.grabHovered();
+      const payload = inner.buildPayload() || { nodes: [], diagnostics: {} };
+      const source = W.build(payload, { fontMode: 'relative' });
+
+      ok('frame hover: the frame grabs successfully', grabbed === true);
+      ok('frame hover: the CARD is in the export', source.includes('17,453'),
+        'the in-frame hover card is missing');
+      // Grab takes what appeared, not the tile it appeared from.
+      ok('frame hover: the card alone, one selection',
+        (payload.nodes || []).length === 1, (payload.nodes || []).length + ' selections');
+      ok('frame hover: the tile itself was not captured', !source.includes('12,104'),
+        'the trigger came along too');
+
+      inner.deactivate();
+      return res;
+    });
+  })();
+
+  results.push(...frameHover);
+
   const failed = results.filter((r) => !r.pass);
   const lines = [
     `${results.length - failed.length}/${results.length} passed`,

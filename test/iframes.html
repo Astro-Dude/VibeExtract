@@ -90,6 +90,13 @@
   <iframe data-test="frame-doc" src="frame-doc.html" width="340" height="160" title="Whole document"></iframe>
 </div>
 
+<!-- 10. A chart with a hover card INSIDE a frame. composedPath() does not cross a
+     frame boundary, so the top frame never sees this hover at all. -->
+<h2>10 · hover card inside a frame</h2>
+<div class="card" data-test="frame-tip-host">
+  <iframe data-test="frame-tip" src="frame-tooltip.html" width="420" height="140" title="Chart frame"></iframe>
+</div>
+
 <script>
   // Write into the blank frame after load, so it exercises the no-src path.
   (function () {

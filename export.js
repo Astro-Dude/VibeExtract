@@ -194,7 +194,9 @@
       notes.push({ text: diag.adoptedOverlays + ' open menu/popover(s) were rendered outside the ' +
         'selected element (a portal at <body> level, as React/Radix/MUI do) and were pulled in ' +
         'automatically. Their absolute offsets were neutralized so they sit under their trigger ' +
-        'in the export rather than pinned to a page corner.' });
+        'in the export rather than pinned to a page corner. A row reading "appeared on hover" or ' +
+        '"under the pointer" is a hover card or chart tooltip: those carry no ARIA relationship to ' +
+        'what they describe, so they are identified by having shown up while you were pointing there.' });
     }
     if (!el('menu-seg').classList.contains('hidden')) {
       notes.push({ text: state.interactive

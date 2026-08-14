@@ -400,6 +400,242 @@ async (page) => {
 
   results.push(...hoverResults);
 
+  /* ============ portal hover card: the chart-tooltip shape ================== */
+  // A treemap tile's card is portal-rendered next to the cursor, has no aria
+  // relationship to the tile, and no aria-expanded anywhere on the page. Explicit
+  // adoption finds nothing and the open-trigger gate stops geometry from running,
+  // so this needs a real cursor and the appearance signal.
+  const cardResults = await (async () => {
+    await page.evaluate(() => {
+      const C = window.__cheater;
+      C.clearSelection();
+      C.activate();
+      C.setPaused(true);                          // interact mode: the page owns hover
+      document.querySelector('[data-test="tile-genai"]').scrollIntoView({ block: 'center' });
+    });
+    // Park the cursor away from the fixture first: scrolling under a stationary
+    // pointer fires enter/leave on whatever slides beneath it.
+    await page.mouse.move(2, 2);
+    await page.waitForTimeout(120);
+
+    const spot = await page.evaluate(() => {
+      const r = document.querySelector('[data-test="tile-genai"]').getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    });
+    // A real pointer, so mouseenter fires and the card is actually created.
+    await page.mouse.move(spot.x, spot.y);
+    await page.waitForTimeout(250);
+
+    return page.evaluate(async () => {
+      const C = window.__cheater;
+      const W = window.CheaterHtmlWriter;
+      const res = [];
+      const ok = (name, pass, detail) => res.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
+
+      const card = document.querySelector('[data-test="hovercard"]');
+      ok('hovercard: hovering the tile really created the card', !!card,
+        'the fixture card never appeared, so nothing below proves anything');
+      if (!card) return res;
+
+      // Establish that every earlier signal genuinely fails here — otherwise this
+      // test would pass for the wrong reason.
+      const tile = document.querySelector('[data-test="tile-genai"]');
+      ok('hovercard: the tile has no aria wiring to the card',
+        !tile.getAttribute('aria-controls') && !tile.getAttribute('aria-describedby') &&
+        !tile.getAttribute('aria-owns'), 'the fixture has explicit wiring after all');
+      ok('hovercard: nothing on the page is an "open trigger"',
+        C.hasOpenTrigger(tile) === false && C.hasOpenTrigger(document.body) === false,
+        'an open trigger exists, so the geometry pass would have caught it anyway');
+      ok('hovercard: it is portal-rendered at body level',
+        card.parentElement === document.body);
+
+      const found = C.findAttachedOverlays(tile);
+      ok('hovercard: the card IS found', found.some((f) => f.el === card),
+        'found ' + found.length + ': ' + found.map((f) => f.why).join(', '));
+      const why = (found.find((f) => f.el === card) || {}).why;
+      ok('hovercard: attributed to appearing on hover',
+        why === 'appeared on hover' || why === 'under the pointer', 'why=' + why);
+      ok('hovercard: the sibling tiles were not dragged in',
+        !found.some((f) => f.el.getAttribute && f.el.getAttribute('data-test') === 'tile-rpa'));
+
+      // Grab the tile and check the card comes with it.
+      C.clearSelection();
+      await C.grabHovered();
+      const payload = C.buildPayload() || { nodes: [], diagnostics: {} };
+      const source = W.build(payload, { fontMode: 'relative', interactive: true });
+
+      ok('hovercard: grabbed with no click at all', (payload.nodes || []).length >= 1);
+      ok('hovercard: the card text is in the export',
+        source.includes('17,453') && source.includes('$1.64Tn'),
+        'the hover card content is missing from the export');
+      // Grab takes what APPEARED, not what the cursor was resting on: you point at
+      // the tile in order to see the card, and the card is the thing you wanted.
+      ok('hovercard: exactly one selection — the card',
+        (payload.nodes || []).length === 1, (payload.nodes || []).length + ' selections');
+      ok('hovercard: the tile itself was not captured',
+        !source.includes('12,104 Companies'), 'the trigger came along too');
+      ok('hovercard: the card keeps its elevation', source.includes('box-shadow'));
+      ok('hovercard: its definition list layout survived',
+        source.includes('grid-template-columns'), 'the dl grid is missing');
+
+      // Alt is the way to get the tile instead.
+      C.clearSelection();
+      await C.grabHovered(true);
+      const tileOnly = W.build(C.buildPayload() || { nodes: [] }, { fontMode: 'relative' });
+      ok('hovercard: Alt+grab takes the tile instead',
+        tileOnly.includes('12,104 Companies') && !tileOnly.includes('17,453'),
+        'Alt did not switch to the element under the cursor');
+
+      C.setPaused(false);
+      C.clearSelection();
+      C.deactivate();
+      return res;
+    });
+  })();
+
+  results.push(...cardResults);
+
+  /* ---- a layer that appeared but belongs to nothing must NOT be adopted ---- */
+  const negativeResults = await page.evaluate(async () => {
+    const C = window.__cheater;
+    const res = [];
+    const ok = (name, pass, detail) => res.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
+
+    C.clearSelection();
+    C.activate();
+
+    // A toast in the far corner, appearing at the same time. Recency alone must not
+    // be enough, or every capture on a page with live notifications drags them in.
+    const toast = document.createElement('div');
+    toast.className = 'notification-popover';
+    toast.setAttribute('data-test', 'far-toast');
+    toast.style.cssText = 'position:fixed;right:8px;bottom:8px;width:180px;height:60px;background:#111;color:#fff';
+    toast.textContent = 'unrelated toast';
+    document.body.appendChild(toast);
+    C.noteAppeared(toast);
+
+    const tile = document.querySelector('[data-test="tile-twins"]');
+    tile.scrollIntoView({ block: 'center' });
+    // Pointer parked on the tile, nowhere near the toast.
+    const r = tile.getBoundingClientRect();
+    C.state.pointer = { x: Math.round(r.left + 10), y: Math.round(r.top + 10) };
+
+    ok('negative: a far-off layer is rejected on placement',
+      C.layerBelongsToHover(tile, toast) === false, 'the unrelated toast would be adopted');
+    ok('negative: adoption does not include it',
+      !C.findAttachedOverlays(tile).some((f) => f.el === toast));
+
+    // A landmark is page furniture, never a tooltip — even if it appears and is
+    // positioned right where the pointer is.
+    const shell = document.createElement('div');
+    shell.className = 'app-overlay';
+    shell.style.cssText = 'position:fixed;left:0;top:0;width:200px;height:120px;background:#eee';
+    shell.innerHTML = '<nav>site nav</nav>';
+    document.body.appendChild(shell);
+    C.noteAppeared(shell);
+    C.state.pointer = { x: 20, y: 20 };
+    ok('negative: a layer containing a landmark is rejected',
+      C.layerBelongsToHover(tile, shell) === false, 'page furniture would be adopted');
+
+    toast.remove();
+    shell.remove();
+    C.deactivate();
+    return res;
+  });
+
+  results.push(...negativeResults);
+
+  /* ========= sidebar flyout: anchored to the RAIL, not the link ============== */
+  // The shape that defeated placement tests measured against the hovered element:
+  // the link is narrow and indented, so the panel opens 60px+ to its right and
+  // nowhere near the pointer. It is obviously the rail's flyout, not the link's.
+  const flyoutResults = await (async () => {
+    // Order-independence matters here: the real cursor is still parked wherever the
+    // previous block left it, and scrolling moves the page underneath a stationary
+    // pointer — which fires enter/leave on whatever slides under it. So scroll
+    // first, park the cursor somewhere neutral, and only then read the rect and
+    // hover the link.
+    await page.evaluate(() => {
+      const C = window.__cheater;
+      C.clearSelection();
+      C.activate();
+      C.setPaused(true);
+      document.querySelector('[data-test="rail-people"]').scrollIntoView({ block: 'center' });
+    });
+    await page.mouse.move(2, 2);
+    await page.waitForTimeout(120);
+
+    const spot = await page.evaluate(() => {
+      const r = document.querySelector('[data-test="rail-people"]').getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    });
+    await page.mouse.move(spot.x, spot.y);
+    await page.waitForTimeout(250);
+
+    return page.evaluate(async () => {
+      const C = window.__cheater;
+      const W = window.CheaterHtmlWriter;
+      const res = [];
+      const ok = (name, pass, detail) => res.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
+
+      const link = document.querySelector('[data-test="rail-people"]');
+      const panel = document.querySelector('[data-test="flyout"]');
+      ok('flyout: hovering the link opened the panel', !!panel);
+      if (!panel) return res;
+
+      // The geometry that makes this case hard, asserted so the test cannot pass by
+      // accident on a fixture that happens to overlap.
+      const lr = link.getBoundingClientRect();
+      const pr = panel.getBoundingClientRect();
+      ok('flyout: the panel does NOT touch the hovered link',
+        pr.left > lr.right + 20,
+        'gap is only ' + Math.round(pr.left - lr.right) + 'px, so this is not the hard case');
+      ok('flyout: the panel is nowhere near the pointer',
+        Math.abs(pr.left - C.state.pointer.x) > 60,
+        'pointer is ' + Math.round(pr.left - C.state.pointer.x) + 'px from the panel edge');
+      ok('flyout: but it does adjoin the rail',
+        C.layerBelongsToHover(link, panel) === true,
+        'placement still rejects it — the ancestor walk is not working');
+
+      const found = C.findAttachedOverlays(link);
+      ok('flyout: the panel is adopted', found.some((f) => f.el === panel),
+        'found ' + found.length + ': ' + found.map((f) => f.why).join(', '));
+
+      // The behaviour asked for: grab takes the PANEL, not the link.
+      C.clearSelection();
+      await C.grabHovered();
+      const payload = C.buildPayload() || { nodes: [], diagnostics: {} };
+      const source = W.build(payload, { fontMode: 'relative' });
+
+      ok('flyout: grab captures the panel only, one selection',
+        (payload.nodes || []).length === 1, (payload.nodes || []).length + ' selections');
+      ok('flyout: the panel contents are all there',
+        source.includes('Investment Professionals at LPs') &&
+        source.includes('Execs at PE-Backed Companies') &&
+        source.includes('Build a custom People screen'),
+        'panel content missing');
+      ok('flyout: the rail was NOT dragged in', !source.includes('Service Providers'),
+        'the sidebar came along too');
+      ok('flyout: its two-column layout survived', source.includes('grid-template-columns'));
+      ok('flyout: its elevation survived', source.includes('box-shadow'));
+
+      // Alt means exactly what is under the cursor, panel included out.
+      C.clearSelection();
+      await C.grabHovered(true);
+      const exact = W.build(C.buildPayload() || { nodes: [] }, { fontMode: 'relative' });
+      ok('flyout: Alt+grab takes the link itself instead',
+        exact.includes('People') && !exact.includes('Investment Professionals at LPs'),
+        'Alt still pulled the panel along');
+
+      C.setPaused(false);
+      C.clearSelection();
+      C.deactivate();
+      return res;
+    });
+  })();
+
+  results.push(...flyoutResults);
+
   const failed = results.filter((r) => !r.pass);
   const lines = [
     `${results.length - failed.length}/${results.length} passed`,

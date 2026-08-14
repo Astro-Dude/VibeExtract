@@ -348,6 +348,16 @@
     capturing: false,
     shadowRoots: new Set(),
     styleSheetCache: null,
+    // Where the pointer is, and which floating layers appeared recently. Together
+    // these are what identify a hover tooltip: it has no ARIA wiring and no open
+    // trigger, so the only honest evidence is "it showed up when I hovered here".
+    pointer: { x: -1, y: -1 },
+    // When the current hover began. A layer only counts as "this hover produced it"
+    // if it appeared AFTER that moment — a wall-clock window instead lets anything
+    // the page built at load time qualify, which over-adopts badly.
+    hoverStamp: 0,
+    appeared: new Map(),
+    appearedObserver: null,
     // Same-origin iframe documents reached during a capture. Tracked like shadow
     // roots: each is its own stylesheet source and its own querySelectorAll scope.
     frameDocs: new Set()
@@ -377,7 +387,11 @@
     // Capture whatever the cursor is over, without clicking. The point of a key
     // rather than a click: a hover-opened menu closes the moment you move the
     // mouse off it, so the gesture that captures it cannot involve the mouse.
-    grab: { primary: true, shift: true, alt: false, key: 'G' }
+    grab: { primary: true, shift: true, alt: false, key: 'G' },
+    // Reports what is actually under the cursor and why each floating layer was or
+    // was not adopted, and copies it to the clipboard. Exists because "the hover
+    // thing didn't get captured" has too many possible causes to guess at.
+    diagnose: { primary: true, shift: true, alt: false, key: 'D' }
   };
 
   /* ======================================================================== *
@@ -390,6 +404,7 @@
     try { return el.getBoundingClientRect(); } catch (_) { return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0 }; }
   };
   const areaOf = (r) => Math.max(0, r.width) * Math.max(0, r.height);
+  const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
   const tagOf = (el) => (el && el.tagName ? el.tagName.toLowerCase() : '');
 
   function isOurs(node) {
@@ -4041,6 +4056,150 @@
     '[class*="autocomplete"]', '[class*="combobox"]', '[class*="tooltip"]', '[class*="flyout"]'
   ].join(',');
 
+  // Names that mark a floating layer, used as a cheap prefilter on mutations —
+  // running a big selector against every mutation on a busy app would cost more
+  // than the feature is worth.
+  const LAYER_HINT_RE = /(tooltip|popover|popper|flyout|dropdown|overlay|hovercard|hover-card|\bmenu\b|\btip\b|hint)/i;
+
+  // How recently a layer must have appeared to count as "this hover produced it".
+  const APPEARED_WINDOW_MS = 6000;
+  const APPEARED_MAX = 240;          // a cap, so a chatty page cannot grow this forever
+
+  // Landmarks are page furniture. A tooltip is never one, and adopting one would
+  // drag a header or a whole app shell into the capture.
+  const LANDMARK_SELECTOR = 'header,nav,main,footer,aside,[role="banner"],[role="navigation"],[role="main"],[role="contentinfo"]';
+
+  function looksLikeLayer(el) {
+    if (!el || el.nodeType !== 1 || isOurs(el)) return false;
+    // Portals are appended at the top of the document, which is the single most
+    // reliable structural signal and costs nothing to test.
+    if (el.parentElement === document.body || el.parentElement === document.documentElement) return true;
+    const role = (el.getAttribute && el.getAttribute('role')) || '';
+    if (role === 'tooltip' || role === 'menu' || role === 'listbox' || role === 'dialog') return true;
+    if (el.hasAttribute && el.hasAttribute('popover')) return true;
+    const hints = ((el.getAttribute && el.getAttribute('class')) || '') + ' ' +
+      ((el.getAttribute && el.getAttribute('data-testid')) || '') + ' ' + (el.id || '');
+    return LAYER_HINT_RE.test(hints);
+  }
+
+  function noteAppeared(el) {
+    if (!looksLikeLayer(el)) return;
+    if (state.appeared.size >= APPEARED_MAX) {
+      // Drop the oldest; Map preserves insertion order.
+      const oldest = state.appeared.keys().next();
+      if (!oldest.done) state.appeared.delete(oldest.value);
+    }
+    state.appeared.set(el, now());
+  }
+
+  /**
+   * Watch for floating layers appearing, so a hover tooltip can be captured.
+   *
+   * A chart tooltip is the case this exists for: it is portal-rendered next to the
+   * cursor, carries no ARIA relationship to the thing you are hovering, and its
+   * trigger has no aria-expanded — so explicit wiring finds nothing and the
+   * open-trigger gate keeps geometry from even running. "It appeared while I was
+   * hovering here" is the only real evidence available, so it is recorded.
+   *
+   * Deliberately cheap: attribute filter is narrow, and every candidate goes
+   * through a string test rather than a selector match.
+   */
+  function startAppearanceWatch() {
+    if (state.appearedObserver || typeof MutationObserver !== 'function') return;
+    try {
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          if (record.type === 'childList') {
+            for (const node of record.addedNodes) noteAppeared(node);
+          } else if (record.target) {
+            noteAppeared(record.target);
+          }
+        }
+      });
+      observer.observe(document, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class', 'hidden', 'aria-hidden', 'data-state', 'open', 'popover']
+      });
+      state.appearedObserver = observer;
+    } catch (_) { state.appearedObserver = null; }
+  }
+
+  function stopAppearanceWatch() {
+    if (state.appearedObserver) {
+      try { state.appearedObserver.disconnect(); } catch (_) { /* noop */ }
+    }
+    state.appearedObserver = null;
+    state.appeared = new Map();
+  }
+
+  /**
+   * Is this layer plausibly the tooltip or card for what we are capturing?
+   *
+   * Positioned, not page furniture, and either sitting near the pointer or
+   * overlapping the thing being captured — which is how tooltips are placed.
+   */
+  function layerBelongsToHover(el, candidate) {
+    if (!isPositionedLayer(candidate)) return false;
+    if (!overlayIsPlausible(el, candidate, false)) return false;
+    try {
+      if (candidate.matches(LANDMARK_SELECTOR) || candidate.querySelector(LANDMARK_SELECTOR)) return false;
+    } catch (_) { /* noop */ }
+
+    const rect = rectOf(candidate);
+    const point = state.pointer || { x: -1, y: -1 };
+    if (point.x >= 0) {
+      const margin = 32;
+      const nearPointer = point.x >= rect.left - margin && point.x <= rect.right + margin &&
+        point.y >= rect.top - margin && point.y <= rect.bottom + margin;
+      if (nearPointer) return true;
+    }
+
+    // Anchored to the element, or to one of its containers.
+    //
+    // A sidebar mega-menu is the case that forces the ancestor walk: the link you
+    // hover is narrow and indented, and the panel opens beside the RAIL, so it can
+    // sit 200px+ away from the link and nowhere near the pointer. Measured against
+    // the link alone it looks unrelated; measured against the rail it is obviously
+    // its flyout.
+    //
+    // Climbing is capped by SIZE rather than by depth, because a page-sized ancestor
+    // is adjacent to everything and would let any stray layer through.
+    let anchor = el;
+    for (let depth = 0; depth < 5 && anchor && anchor.nodeType === 1; depth += 1) {
+      const host = rectOf(anchor);
+      if (areaOf(host) > vw() * vh() * 0.6) break;
+      if (overlapsOrAdjoins(host, rect)) return true;
+      anchor = parentOrHost(anchor);
+    }
+    return false;
+  }
+
+  /**
+   * Do these two boxes overlap, or sit next to each other with only a hairline gap?
+   *
+   * Both orientations matter: a dropdown opens below its trigger (horizontal overlap,
+   * small vertical gap) and a flyout opens beside its rail (vertical overlap, small
+   * horizontal gap). Only ever asked about a layer that already passed the recency
+   * and plausibility checks, so the tolerance can be generous.
+   */
+  function overlapsOrAdjoins(host, rect, tolerance) {
+    const gap = tolerance == null ? 28 : tolerance;
+    const overlapX = Math.min(rect.right, host.right) - Math.max(rect.left, host.left);
+    const overlapY = Math.min(rect.bottom, host.bottom) - Math.max(rect.top, host.top);
+    if (overlapX > 0 && overlapY > 0) return true;
+    if (overlapY > 0) {
+      const sideGap = rect.left >= host.right ? rect.left - host.right : host.left - rect.right;
+      if (sideGap >= -2 && sideGap <= gap) return true;
+    }
+    if (overlapX > 0) {
+      const stackGap = rect.top >= host.bottom ? rect.top - host.bottom : host.top - rect.bottom;
+      if (stackGap >= -2 && stackGap <= gap) return true;
+    }
+    return false;
+  }
+
   /** Does the selection contain something that is currently open? */
   function hasOpenTrigger(el) {
     if (!el || el.nodeType !== 1) return false;
@@ -4403,7 +4562,39 @@
       if (modal) add(dialog, 'modal', true);
     }
 
-    // 5. Geometry, last and least trusted, and only when the selection actually has
+    // 5. Layers that APPEARED while we were pointing here. This is the hover
+    //    tooltip case: a chart tile's card is portal-rendered next to the cursor
+    //    with no ARIA relationship to the tile and no aria-expanded anywhere, so
+    //    every signal above finds nothing. Recency plus placement is the evidence.
+    // Only meaningful if a hover is actually being tracked: this pass attributes a
+    // layer to "the thing I am pointing at", and with no pointer there is nothing to
+    // attribute it to. Without this guard the window falls back to wall-clock time
+    // and everything the page built at load qualifies.
+    if (state.hoverStamp > 0) {
+      // Must have appeared since this hover began, and within the outer window. The
+      // first keeps page furniture out; the second stops a stale entry qualifying
+      // after you have wandered away and come back.
+      const cutoff = Math.max(now() - APPEARED_WINDOW_MS, state.hoverStamp - 150);
+      for (const [candidate, stamp] of state.appeared) {
+        if (stamp < cutoff) continue;
+        if (seen.has(candidate) || !candidate.isConnected) continue;
+        if (!layerBelongsToHover(el, candidate)) continue;
+        add(candidate, 'appeared on hover', false);
+      }
+    }
+
+    // 6. Still nothing, but a floating layer is sitting right under the pointer.
+    //    Covers a tooltip that was already in the DOM and merely revealed by CSS,
+    //    where there is no mutation to observe at all.
+    if (!found.length && state.pointer.x >= 0) {
+      for (const candidate of queryAllScopes(FLOATING_SELECTOR)) {
+        if (seen.has(candidate)) continue;
+        if (ownedByAnotherTrigger(el, candidate)) continue;
+        if (layerBelongsToHover(el, candidate)) add(candidate, 'under the pointer', false);
+      }
+    }
+
+    // 7. Geometry, last and least trusted, and only when the selection actually has
     //    something open — otherwise every floating tooltip on the page qualifies.
     if (hasOpenTrigger(el)) {
       for (const candidate of queryAllScopes(FLOATING_SELECTOR)) {
@@ -4418,7 +4609,7 @@
     return found;
   }
 
-  async function addSelection(el, replace) {
+  async function addSelection(el, replace, options) {
     if (!el) return;
     if (state.capturing) return;
 
@@ -4461,7 +4652,8 @@
     state.selections.push({ el, raw, diag });
     renderSelection();
 
-    await adoptAttachedOverlays(el);
+    // Alt means "exactly this element", so it must not quietly bring a panel along.
+    if (!(options && options.noAdopt)) await adoptAttachedOverlays(el);
   }
 
   /**
@@ -4676,6 +4868,7 @@
     state.paused = false;
     state.styleSheetCache = null;
     state.frameDocs = new Set();
+    startAppearanceWatch();
     buildUI();
     applyCursor();
     reportActiveState();
@@ -4685,6 +4878,8 @@
     state.active = false;
     state.paused = false;
     state.hovered = null;
+    state.pointer = { x: -1, y: -1 };
+    stopAppearanceWatch();
     clearSelection();
     teardownUI();
     destroyProbe();
@@ -4742,6 +4937,7 @@
     // you what the grab key would capture. Killing it in interact mode is what made
     // hover-revealed menus impossible to capture at all.
     if (!state.active) return;
+    state.pointer = { x: event.clientX, y: event.clientY };
     avoidPointer(event.clientX, event.clientY);
     const target = hitTarget(event);
 
@@ -4754,6 +4950,7 @@
     }
     if (target === state.hovered) return;
     state.hovered = target;
+    state.hoverStamp = now();
 
     // Deliberately does NOT re-anchor the navigation path when a selection
     // exists: Alt+Arrow walks the SELECTION, and nudging the mouse must not
@@ -4868,12 +5065,20 @@
     // it, or reaching for a button — destroys the thing being captured. A key does
     // not move the pointer. Works in both modes, since it is strictly better than
     // clicking whenever the page reacts to clicks.
+    if (matchesShortcut(event, shortcuts.diagnose)) {
+      if (state.active) {
+        event.preventDefault();
+        event.stopPropagation();
+        diagnose();
+      }
+      return;
+    }
     if (matchesShortcut(event, shortcuts.grab)) {
       if (state.active) {
         event.preventDefault();
         event.stopPropagation();
         if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-        grabHovered();
+        requestGrab(event.altKey);
       }
       return;
     }
@@ -4927,6 +5132,140 @@
    * Uses smart expansion like a click does, so pointing at a menu row still gives
    * the menu. Alt held takes the exact node instead, matching Alt+Click.
    */
+  /**
+   * Ask every frame to grab, not just this one.
+   *
+   * The frame that receives the keystroke is the one with keyboard focus; the frame
+   * that knows what the cursor is over is the one containing the cursor. Those are
+   * different frames whenever the thing you are pointing at lives in an iframe,
+   * which is how a charting widget is usually embedded. Broadcasting removes the
+   * question entirely.
+   */
+  function requestGrab(exact) {
+    // If this frame is itself hovering something, it is the right answer and there
+    // is no reason to involve the worker.
+    if (state.hovered) { grabHovered(exact); return; }
+
+    sendToWorker({ type: 'CHEATER_CMD', cmd: 'grab', exact: !!exact }).then((result) => {
+      if (result && result.grabbed) return;
+      toast('Nothing under the cursor. Point at the thing you want — in Interact mode the ' +
+        'outline shows what will be captured.');
+    });
+  }
+
+  /**
+   * Explain, in this frame, exactly what the extension can see right now.
+   *
+   * Every failure mode of hover capture looks identical from the outside — nothing
+   * happens. This distinguishes them: is the pointer even being tracked, is the
+   * layer in a closed shadow root or another frame, did it get rejected for size or
+   * placement, is it a canvas with no DOM at all. Copied to the clipboard so it can
+   * be pasted somewhere useful.
+   */
+  function diagnose() {
+    const lines = [];
+    const say = (label, value) => lines.push(label + ': ' + value);
+    const describe = (el) => {
+      if (!el) return 'none';
+      const cls = labelClasses(el).slice(0, 3).join('.');
+      const r = rectOf(el);
+      return tagOf(el) + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : '') +
+        ' [' + Math.round(r.width) + 'x' + Math.round(r.height) + ' @ ' +
+        Math.round(r.left) + ',' + Math.round(r.top) + ']';
+    };
+
+    say('cheater', (chrome.runtime.getManifest ? chrome.runtime.getManifest().version : '?') +
+      (state.paused ? ' · interact mode' : ' · select mode'));
+    say('frame', (window.top === window ? 'TOP' : 'SUBFRAME') + ' ' + location.href.slice(0, 120));
+    say('pointer', state.pointer.x < 0 ? 'NEVER MOVED IN THIS FRAME' : state.pointer.x + ',' + state.pointer.y);
+    say('hovered', describe(state.hovered));
+    say('selections', state.selections.length);
+    say('layers seen appearing', state.appeared.size);
+
+    // Is the pointer over an iframe? Then this frame cannot see the hover at all and
+    // the frame underneath is the one that matters.
+    let under = null;
+    try { under = document.elementFromPoint(state.pointer.x, state.pointer.y); } catch (_) { under = null; }
+    say('element at pointer', describe(under));
+    if (under && (tagOf(under) === 'iframe' || tagOf(under) === 'canvas')) {
+      say('WARNING', tagOf(under) === 'canvas'
+        ? 'the pointer is over a <canvas> — a canvas-drawn tooltip has no DOM at all and can only be recovered as pixels'
+        : 'the pointer is over an <iframe> — that frame owns the hover; grab is broadcast so it should still answer');
+    }
+
+    // Every floating layer in this frame, with a verdict.
+    const host = state.hovered || document.body;
+    let candidates = [];
+    try { candidates = Array.from(queryAllScopes(FLOATING_SELECTOR)); } catch (_) { candidates = []; }
+    for (const [el] of state.appeared) if (candidates.indexOf(el) === -1) candidates.push(el);
+
+    const verdictOf = (candidate) => {
+      if (!candidate.isConnected) return 'detached';
+      if (!isVisible(candidate)) return 'not visible';
+      if (!isPositionedLayer(candidate)) return 'not positioned (absolute/fixed)';
+      if (host.contains(candidate)) return 'inside the selection already';
+      if (!overlayIsPlausible(host, candidate, false)) return 'rejected: too large, or too small';
+      if (!layerBelongsToHover(host, candidate)) return 'rejected: not near the pointer or the element';
+      return 'WOULD BE ADOPTED';
+    };
+
+    // Rank by how much the line tells you. A page has dozens of hidden menus and
+    // exactly one interesting layer, and truncating the list at random order buries
+    // the one you needed — which it did the first time this ran.
+    const RANK = {
+      'WOULD BE ADOPTED': 0,
+      'rejected: not near the pointer or the element': 1,
+      'rejected: too large, or too small': 2,
+      'inside the selection already': 3,
+      'not positioned (absolute/fixed)': 4,
+      'not visible': 5,
+      detached: 6
+    };
+    const judged = candidates
+      .filter((candidate) => !isOurs(candidate))
+      .map((candidate) => ({ candidate, verdict: verdictOf(candidate) }))
+      .sort((a, b) => RANK[a.verdict] - RANK[b.verdict]);
+
+    lines.push('');
+    say('floating layers in this frame', judged.length);
+    const boring = judged.filter((entry) => RANK[entry.verdict] >= 5).length;
+    for (const entry of judged.slice(0, 12)) {
+      lines.push('  ' + describe(entry.candidate) + ' -> ' + entry.verdict);
+    }
+    if (judged.length > 12) lines.push('  … ' + (judged.length - 12) + ' more');
+    if (boring) say('(of those, hidden or detached)', boring);
+
+    let adopted = [];
+    try { adopted = findAttachedOverlays(host); } catch (error) { adopted = []; }
+    lines.push('');
+    say('adoption result', adopted.length
+      ? adopted.map((a) => describe(a.el) + ' (' + a.why + ')').join('; ')
+      : 'NOTHING ADOPTED');
+    say('shadow roots known', state.shadowRoots.size);
+    say('same-origin frames seen', state.frameDocs.size);
+
+    const report = lines.join('\n');
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(report);
+    } catch (_) { /* clipboard needs focus; the console copy below always works */ }
+    // eslint-disable-next-line no-console
+    console.log('%c[cheater diagnose]%c\n' + report, 'color:#FFB224;font-weight:700', 'color:inherit');
+    toast('Diagnostic copied to the clipboard, and printed to the console (paste it somewhere useful).');
+    return report;
+  }
+
+  const HOVER_WHYS = ['appeared on hover', 'under the pointer'];
+
+  /**
+   * Capture what the pointer produced, in preference to what it is resting on.
+   *
+   * You point at a nav link to make its flyout appear; the flyout is the thing you
+   * want, and the link is just how you got there. So when a layer appeared for this
+   * hover, that layer becomes the selection on its own rather than a second one
+   * tacked onto the trigger.
+   *
+   * Hold Alt to take exactly what is under the cursor instead, matching Alt+Click.
+   */
   async function grabHovered(exact) {
     if (!state.active) return false;
     const target = state.hovered;
@@ -4934,9 +5273,25 @@
       toast('Nothing under the cursor — point at something and the outline will show what gets captured.');
       return false;
     }
+
+    if (!exact) {
+      let layers = [];
+      try { layers = findAttachedOverlays(target); } catch (_) { layers = []; }
+      const appeared = layers.find((layer) => HOVER_WHYS.indexOf(layer.why) !== -1);
+      if (appeared) {
+        resetNav(appeared.el);
+        await addSelection(appeared.el, true);
+        showHover(appeared.el);
+        toast('Captured the panel that appeared (' + appeared.why + '). ' +
+          shortcutLabel((state.shortcuts || DEFAULT_SHORTCUTS).grab) +
+          ' with Alt takes what is under the cursor instead.');
+        return true;
+      }
+    }
+
     const chosen = exact ? target : smartExpand(target);
     resetNav(chosen);
-    await addSelection(chosen, true);
+    await addSelection(chosen, true, { noAdopt: !!exact });
     showHover(chosen);
     return true;
   }
@@ -5091,6 +5446,23 @@
         sendResponse({ ok: true });
         return true;
 
+      /**
+       * Grab, asked of EVERY frame.
+       *
+       * The key lands in whichever frame holds keyboard focus, which is almost never
+       * the frame the cursor is in — composedPath() does not cross a frame boundary,
+       * so a chart inside an iframe is hovered by that frame alone while the key goes
+       * to the top document. Every frame is asked; only the one with something under
+       * its pointer answers.
+       */
+      case 'CHEATER_GRAB':
+        if (!state.active || !state.hovered) { sendResponse({ ok: false, grabbed: false }); return true; }
+        grabHovered(!!message.exact).then(
+          (grabbed) => sendResponse({ ok: true, grabbed, frame: location.href }),
+          () => sendResponse({ ok: false, grabbed: false })
+        );
+        return true;   // async response
+
       case 'CHEATER_SELECT_BODY':
         selectBody().then((ok) => sendResponse({ ok }), () => sendResponse({ ok: false }));
         return true;   // async response
@@ -5177,6 +5549,9 @@
     deactivate: deactivate,
     setPaused: setPaused,
     grabHovered: grabHovered,
+    diagnose: diagnose,
+    noteAppeared: noteAppeared,
+    layerBelongsToHover: layerBelongsToHover,
     revealTemporarily: revealTemporarily,
     findMenuTrigger: findMenuTrigger,
     findAttachedOverlays: findAttachedOverlays,

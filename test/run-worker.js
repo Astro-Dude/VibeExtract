@@ -227,7 +227,54 @@ function samplePayload(extra) {
       JSON.stringify(res && { ok: res.ok, bytes: res.bytes }));
   }
 
-  /* 10. unknown message types must not claim the port */
+  /* 10. grab must reach EVERY frame, not just the focused one */
+  {
+    // The keystroke lands in whichever frame has keyboard focus; the hover lives in
+    // whichever frame contains the cursor. For a chart embedded in an iframe those
+    // are different frames, and the frame that can see the hover never gets asked
+    // unless the worker fans the request out.
+    const stub = makeChrome({
+      frames: [{ frameId: 0 }, { frameId: 3 }, { frameId: 8 }],
+      // Only frame 3 is hovering something, which is the whole point.
+      frameReplies: {
+        0: { ok: false, grabbed: false },
+        3: { ok: true, grabbed: true, frame: 'https://example.com/chart' },
+        8: null
+      }
+    });
+    loadWorker(stub);
+    const res = await send(stub, { type: 'CHEATER_CMD', cmd: 'grab', tabId: 7 });
+    ok('grab: fanned out to every frame, and the hovering frame wins',
+      res && res.ok === true && res.grabbed === true, JSON.stringify(res));
+    ok('grab: names which frame answered',
+      res && res.frame === 'https://example.com/chart', JSON.stringify(res));
+  }
+  {
+    // Nothing hovered anywhere: report it rather than claiming success, so the page
+    // can say so instead of appearing to do nothing.
+    const stub = makeChrome({
+      frames: [{ frameId: 0 }, { frameId: 3 }],
+      frameReplies: { 0: { ok: false, grabbed: false }, 3: { ok: false, grabbed: false } }
+    });
+    loadWorker(stub);
+    const res = await send(stub, { type: 'CHEATER_CMD', cmd: 'grab', tabId: 7 });
+    ok('grab: reports honestly when no frame is hovering',
+      res && res.ok === true && res.grabbed === false, JSON.stringify(res));
+  }
+  {
+    // A frame with no content script throws on sendMessage. That must not sink the
+    // whole grab — the frame that IS hovering still has to win.
+    const stub = makeChrome({
+      frames: [{ frameId: 0 }, { frameId: 5 }],
+      frameReplies: { 0: 'throw', 5: { ok: true, grabbed: true, frame: 'f5' } }
+    });
+    loadWorker(stub);
+    const res = await send(stub, { type: 'CHEATER_CMD', cmd: 'grab', tabId: 7 });
+    ok('grab: a dead frame does not sink the request',
+      res && res.grabbed === true, JSON.stringify(res));
+  }
+
+  /* 11. unknown message types must not claim the port */
   {
     const stub = makeChrome({});
     loadWorker(stub);

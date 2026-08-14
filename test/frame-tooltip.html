@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>chart in a frame</title>
+<style>
+  body{margin:0;font:13px system-ui,sans-serif;background:#fff}
+  .tm{display:flex;gap:3px;height:120px}
+  .t{flex:1;background:#12305c;color:#fff;padding:8px;font-size:11px}
+  .t.big{flex:3;background:#0b1c33}
+  .card{position:absolute;z-index:50;width:220px;padding:14px;background:#fff;
+        border-radius:8px;box-shadow:0 14px 34px rgba(15,23,42,.3);color:#0f172a}
+</style></head>
+<body>
+  <div class="tm">
+    <div class="t big" data-test="iframe-tile"><b>Generative AI</b><br>12,104 Companies</div>
+    <div class="t" data-test="iframe-tile-2"><b>Digital Twins</b><br>2,726 Companies</div>
+  </div>
+<script>
+  var card=null;
+  document.querySelectorAll('.t').forEach(function(t){
+    t.addEventListener('mouseenter', function(e){
+      card=document.createElement('div');
+      card.className='card'; card.setAttribute('data-test','iframe-card');
+      card.innerHTML='<b>In-frame hover card</b><div>Deal Count: 17,453</div>';
+      card.style.left=(e.clientX+10)+'px'; card.style.top=(e.clientY+10)+'px';
+      document.body.appendChild(card);
+    });
+    t.addEventListener('mouseleave', function(){ if(card&&card.parentNode) card.parentNode.removeChild(card); card=null; });
+  });
+</script>
+</body></html>
