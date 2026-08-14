@@ -18,7 +18,9 @@
     start: { primary: true, shift: true, alt: false, key: 'S' },
     export: { primary: true, shift: true, alt: false, key: 'E' },
     fullpage: { primary: true, shift: true, alt: false, key: 'X' },
-    history: { primary: true, shift: true, alt: false, key: 'H' }
+    history: { primary: true, shift: true, alt: false, key: 'H' },
+    pause: { primary: true, shift: true, alt: false, key: 'P' },
+    grab: { primary: true, shift: true, alt: false, key: 'G' }
   };
 
   // Pages where no extension content script can run. Saying so plainly beats
@@ -26,7 +28,7 @@
   var BLOCKED_SCHEMES = ['chrome:', 'chrome-extension:', 'about:', 'data:', 'edge:', 'devtools:', 'view-source:'];
   var BLOCKED_HOSTS = ['chrome.google.com', 'chromewebstore.google.com'];
 
-  var state = { tab: null, shortcuts: DEFAULT_SHORTCUTS, blocked: false, history: [] };
+  var state = { tab: null, shortcuts: DEFAULT_SHORTCUTS, blocked: false, history: [], status: null };
 
   /* ---------------------------------------------------------------- helpers */
 
@@ -83,6 +85,8 @@
       ['Export selection', comboLabel(state.shortcuts.export)],
       ['Extract full page', comboLabel(state.shortcuts.fullpage)],
       ['Recent captures', comboLabel(state.shortcuts.history)],
+      ['Select / interact mode', comboLabel(state.shortcuts.pause)],
+      ['Grab what you hover', comboLabel(state.shortcuts.grab)],
       ['Clear / exit', 'Esc'],
       ['Exact target', ALT_LABEL + '+Click'],
       ['Multi-select', 'Shift+Click'],
@@ -109,14 +113,27 @@
       text.innerHTML = 'content script not loaded — <b>reload the page</b>';
       return;
     }
-    dot.className = 'dot' + (status.active ? ' on' : '');
-    if (status.active && status.count) {
-      text.innerHTML = 'selecting · <b>' + status.count + '</b> element' + (status.count === 1 ? '' : 's') + ' held';
+    var held = status.count
+      ? ' · <b>' + status.count + '</b> element' + (status.count === 1 ? '' : 's') + ' held'
+      : '';
+
+    if (status.paused) {
+      dot.className = 'dot paused';
+      text.innerHTML = 'interact · <b>the page has your clicks</b>' + held;
+      el('start').textContent = 'Select mode';
+      el('start').classList.add('pri');
     } else if (status.active) {
-      text.innerHTML = 'selecting · <b>click an element</b>';
+      dot.className = 'dot on';
+      text.innerHTML = status.count ? 'selecting' + held : 'selecting · <b>click an element</b>';
+      el('start').textContent = 'Interact mode';
+      el('start').classList.remove('pri');
     } else {
+      dot.className = 'dot';
       text.innerHTML = 'idle';
+      el('start').textContent = 'Start';
+      el('start').classList.add('pri');
     }
+    state.status = status;
     el('export').disabled = !status.count;
   }
 
@@ -247,7 +264,15 @@
   /* ------------------------------------------------------------------ wiring */
 
   el('start').addEventListener('click', async function () {
-    await sendToWorker({ type: 'CHEATER_CMD', cmd: 'start', tabId: state.tab.id });
+    var status = state.status || {};
+    if (status.active) {
+      // Toggling pause from here is convenient, but note the caveat in the hint:
+      // closing the popup is a mouse action and can dismiss the very menu you are
+      // trying to capture, so the keyboard shortcut is the reliable route.
+      await sendToTab({ type: 'CHEATER_PAUSE', paused: !status.paused });
+    } else {
+      await sendToWorker({ type: 'CHEATER_CMD', cmd: 'start', tabId: state.tab.id });
+    }
     renderStatus(await sendToTab({ type: 'CHEATER_STATUS' }));
   });
 

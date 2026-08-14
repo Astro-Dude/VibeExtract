@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>a whole document in a frame</title>
+<style>
+  /* The backdrop lives on <html>, and <body> paints nothing. A very common shape,
+     and the one that renders transparent in an export unless <html> is consulted:
+     CSS propagates the html background to the canvas, and there is no canvas left
+     once the frame becomes a div. */
+  html{background:#1e1b4b}
+  body{margin:0;font:13px/1.5 system-ui,sans-serif;color:#ede9fe}
+  header{padding:12px 14px;background:#6d28d9;color:#fff;font-weight:600}
+  .row{padding:9px 14px;border-bottom:1px solid #312e81;display:flex;justify-content:space-between}
+  .row:nth-child(even){background:#2e1065}
+  footer{padding:12px 14px;background:#ede9fe;color:#5b21b6;font-family:ui-monospace,monospace;font-size:11px}
+</style></head>
+<body>
+  <header>Full document inside a frame</header>
+  <div class="row"><span>Row 01</span><span>value-01</span></div>
+  <div class="row"><span>Row 02</span><span>value-02</span></div>
+  <div class="row"><span>Row 03</span><span>value-03</span></div>
+  <div class="row"><span>Row 04</span><span>value-04</span></div>
+  <div class="row"><span>Row 05</span><span>value-05</span></div>
+  <div class="row"><span>Row 06</span><span>value-06</span></div>
+  <div class="row"><span>Row 07</span><span>value-07</span></div>
+  <div class="row"><span>Row 08</span><span>value-08</span></div>
+  <div class="row"><span>Row 09</span><span>value-09</span></div>
+  <div class="row"><span>Row 10</span><span>value-10</span></div>
+  <div class="row"><span>Row 11</span><span>value-11</span></div>
+  <div class="row"><span>Row 12</span><span>value-12</span></div>
+  <div class="row"><span>Row 13</span><span>value-13</span></div>
+  <div class="row"><span>Row 14</span><span>value-14</span></div>
+  <div class="row"><span>Row 15</span><span>value-15</span></div>
+  <div class="row"><span>Row 16</span><span>value-16</span></div>
+  <div class="row"><span>Row 17</span><span>value-17</span></div>
+  <div class="row"><span>Row 18</span><span>value-18</span></div>
+  <div class="row"><span>Row 19</span><span>value-19</span></div>
+  <div class="row"><span>Row 20</span><span>value-20</span></div>
+  <footer>end of document — row 20 is the last one</footer>
+</body></html>

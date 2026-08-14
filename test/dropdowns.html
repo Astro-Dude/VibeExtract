@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cheater — closed-dropdown fixture</title>
+<!--
+  Every dropdown on this page is CLOSED, which is the case that actually matters.
+
+  The portal fixture in fixtures.html §41/§42 covers menus that are already open when
+  you select their trigger. Real usage is the opposite: you point at a dropdown, its
+  menu is `display:none`, and the capture has to produce something that can still be
+  opened in the export. Each section below is a different way libraries hide a menu.
+-->
+<style>
+  body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:24px;background:#f8fafc;color:#0f172a}
+  h2{font:600 12px ui-monospace,monospace;color:#64748b;margin:28px 0 8px;text-transform:uppercase;letter-spacing:.06em}
+  .bar{display:flex;gap:10px;align-items:center;padding:12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px}
+
+  /* Shared menu look, so a fidelity regression is obvious. */
+  .menu{
+    position:absolute;top:calc(100% + 4px);left:0;z-index:40;
+    display:flex;flex-direction:column;gap:2px;
+    min-width:210px;padding:6px;background:#fff;
+    border:1px solid #e2e8f0;border-radius:8px;
+    box-shadow:0 12px 28px rgba(15,23,42,.18);
+  }
+  .menu a,.menu div[role="option"],.menu div[role="menuitem"]{
+    padding:7px 10px;border-radius:5px;color:#0f172a;text-decoration:none;font-size:13px
+  }
+  .menu [aria-selected="true"]{background:#eef2ff;color:#1d4ed8;font-weight:500}
+  .trigger{
+    display:inline-flex;align-items:center;gap:6px;padding:8px 12px;
+    border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;
+    font:inherit;cursor:pointer
+  }
+  .trigger::after{content:"";width:0;height:0;border:4px solid transparent;border-top-color:#64748b;margin-top:2px}
+
+  /* Author-level [hidden], the way normalize.css and every CSS reset ships it.
+     Without this the UA's own [hidden] rule loses to `.menu{display:flex}` and
+     section 3 would not actually be hidden at all — which is a real trap, not a
+     hypothetical one. */
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+
+<!-- 1. display:none — Bootstrap's mechanism, and the single most common one. -->
+<h2>1 · closed via display:none (bootstrap-shaped)</h2>
+<div class="bar">
+  <div class="dropdown" data-test="dd-display" style="position:relative">
+    <button class="trigger" data-test="dd-display-trigger" aria-expanded="false" aria-haspopup="true">Sector</button>
+    <div class="menu dropdown-menu" data-test="dd-display-menu" role="menu" style="display:none">
+      <div role="menuitem">Technology</div>
+      <div role="menuitem" aria-selected="true">Healthcare</div>
+      <div role="menuitem">Financial Services</div>
+    </div>
+  </div>
+</div>
+
+<!-- 2. visibility:hidden + opacity, the usual "animatable" variant. -->
+<h2>2 · closed via visibility:hidden (animatable variant)</h2>
+<div class="bar">
+  <div data-test="dd-visibility" style="position:relative">
+    <button class="trigger" data-test="dd-visibility-trigger" aria-expanded="false">Region</button>
+    <div class="menu" data-test="dd-visibility-menu" role="listbox"
+         style="visibility:hidden;opacity:0;transition:opacity .15s">
+      <div role="option">Americas</div>
+      <div role="option" aria-selected="true">EMEA</div>
+      <div role="option">Asia Pacific</div>
+    </div>
+  </div>
+</div>
+
+<!-- 3. The hidden attribute. -->
+<h2>3 · closed via the hidden attribute</h2>
+<div class="bar">
+  <div data-test="dd-attr" style="position:relative">
+    <button class="trigger" data-test="dd-attr-trigger" aria-expanded="false">Currency</button>
+    <div class="menu" data-test="dd-attr-menu" role="menu" hidden>
+      <div role="menuitem" aria-selected="true">USD</div>
+      <div role="menuitem">EUR</div>
+      <div role="menuitem">GBP</div>
+    </div>
+  </div>
+</div>
+
+<!-- 4. A link menu — navigation, the thing worth having interactive at all. -->
+<h2>4 · closed nav menu of real links</h2>
+<div class="bar">
+  <nav data-test="dd-links" style="position:relative">
+    <button class="trigger" data-test="dd-links-trigger" aria-expanded="false">Products</button>
+    <div class="menu" data-test="dd-links-menu" role="menu" style="display:none">
+      <a href="https://example.com/funds" role="menuitem">Funds</a>
+      <a href="https://example.com/stocks" role="menuitem">Stocks</a>
+      <a href="https://example.com/etfs" role="menuitem">ETFs</a>
+    </div>
+  </nav>
+</div>
+
+<!-- 5. Menu hidden by a class rule rather than an inline style: the declaration
+     lives in a stylesheet, so unhiding it inline is not enough on its own. -->
+<h2>5 · closed by a stylesheet class, not an inline style</h2>
+<style>
+  .js-collapsed{display:none !important}
+</style>
+<div class="bar">
+  <div data-test="dd-class" style="position:relative">
+    <button class="trigger" data-test="dd-class-trigger" aria-expanded="false">Rating</button>
+    <div class="menu js-collapsed" data-test="dd-class-menu" role="listbox">
+      <div role="option">5 stars</div>
+      <div role="option" aria-selected="true">4 stars and up</div>
+    </div>
+  </div>
+</div>
+
+<!-- 6. A hidden thing that is NOT a menu. Must stay dropped: capturing every
+     hidden subtree on a page would bloat exports and leak content. -->
+<h2>6 · hidden non-menu (must stay dropped)</h2>
+<div class="bar">
+  <div data-test="dd-notmenu" style="position:relative">
+    <button class="trigger" data-test="dd-notmenu-trigger">Account</button>
+    <div data-test="hidden-tracking" class="analytics-pixel-wrap" style="display:none">
+      <span>tracking beacon markup that must never be exported</span>
+    </div>
+    <div data-test="hidden-modal-body" class="signup-promo" style="display:none">
+      <p>Seasonal promo copy nobody selected</p>
+    </div>
+  </div>
+</div>
+
+<!-- 7. Two sibling dropdowns, both closed. Each must get its own independent
+     open state — one shared rule would open both at once. -->
+<h2>7 · two independent closed dropdowns side by side</h2>
+<div class="bar">
+  <div data-test="dd-twin-a" style="position:relative">
+    <button class="trigger" data-test="dd-twin-a-trigger" aria-expanded="false">Twin A</button>
+    <div class="menu" data-test="dd-twin-a-menu" role="menu" style="display:none">
+      <div role="menuitem">A one</div><div role="menuitem">A two</div>
+    </div>
+  </div>
+  <div data-test="dd-twin-b" style="position:relative">
+    <button class="trigger" data-test="dd-twin-b-trigger" aria-expanded="false">Twin B</button>
+    <div class="menu" data-test="dd-twin-b-menu" role="menu" style="display:none">
+      <div role="menuitem">B one</div><div role="menuitem">B two</div>
+    </div>
+  </div>
+</div>
+
+<!-- 8. A non-focusable div trigger with the menu as a sibling of the trigger
+     rather than a child — Morningstar's shape. -->
+<h2>8 · div trigger, menu as sibling</h2>
+<div class="bar">
+  <div data-test="dd-div" style="position:relative">
+    <div class="trigger" role="button" data-test="dd-div-trigger" tabindex="-1">Time period</div>
+    <div class="menu" data-test="dd-div-menu" role="listbox" style="display:none">
+      <div role="option">1 day</div>
+      <div role="option" aria-selected="true">1 year</div>
+      <div role="option">5 years</div>
+    </div>
+  </div>
+</div>
+
+<!-- 9. <details>/<summary>: natively interactive, needs no help at all. Included
+     so a regression that wraps it unnecessarily is caught. -->
+<h2>9 · native details/summary (already interactive)</h2>
+<div class="bar">
+  <details data-test="dd-details">
+    <summary class="trigger">Advanced filters</summary>
+    <div class="menu" style="position:static;margin-top:6px">
+      <div role="option">Include closed funds</div>
+    </div>
+  </details>
+</div>
+
+<!-- 10. Deeply nested menu: the trigger is not the menu's direct sibling. -->
+<h2>10 · menu nested deeper than the trigger's sibling</h2>
+<div class="bar">
+  <div data-test="dd-nested" style="position:relative">
+    <div class="head"><span><button class="trigger" data-test="dd-nested-trigger" aria-expanded="false">Nested</button></span></div>
+    <div class="layer"><div class="inner">
+      <div class="menu" data-test="dd-nested-menu" role="menu" style="display:none">
+        <div role="menuitem">Deep one</div><div role="menuitem">Deep two</div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<!-- 11. HOVER-revealed menu: no click involved at all. This is why capture has to
+     be possible from the keyboard — the menu closes the instant the pointer
+     leaves it, so reaching for a button destroys the thing being captured. -->
+<h2>11 · menu revealed on hover only</h2>
+<style>
+  .hover-host .menu{display:none}
+  .hover-host:hover .menu{display:flex}
+</style>
+<div class="bar">
+  <div class="hover-host" data-test="dd-hover" style="position:relative">
+    <div class="trigger" data-test="dd-hover-trigger">Hover me</div>
+    <div class="menu" data-test="dd-hover-menu" role="menu">
+      <div role="menuitem">Hover one</div>
+      <div role="menuitem" aria-selected="true">Hover two</div>
+    </div>
+  </div>
+</div>
+
+<!-- 12. A button that only does something on a real click, used to prove interact
+     mode actually hands clicks back to the page. -->
+<h2>12 · a button that needs a real click</h2>
+<div class="bar">
+  <button class="trigger" data-test="real-btn"
+          onclick="this.dataset.clicked = (Number(this.dataset.clicked || 0) + 1)">Click me</button>
+  <span data-test="real-btn-readout">clicks land here</span>
+</div>
+
+</body>
+</html>

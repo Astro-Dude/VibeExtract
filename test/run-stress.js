@@ -17,7 +17,7 @@ async (page) => {
   await page.addInitScript(() => {
     window.chrome = {
       runtime: { onMessage: { addListener() {} }, sendMessage(_m, cb) { cb && cb({ ok: true }); },
-                 getManifest: () => ({ version: '1.0.0' }), lastError: null },
+                 getManifest: () => ({ version: '3.1.0' }), lastError: null },
       storage: { sync: { get(d, cb) { cb(d || {}); }, set(_v, cb) { cb && cb(); } },
                  session: { get(_k, cb) { cb({}); }, set(_v, cb) { cb && cb(); }, remove(_k, cb) { cb && cb(); } } }
     };

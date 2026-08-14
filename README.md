@@ -46,7 +46,7 @@ straight into Claude Code.
 
 ### Shortcuts
 
-All four main shortcuts are customizable in the popup and persist via `chrome.storage.sync`.
+All six main shortcuts are customizable in the popup and persist via `chrome.storage.sync`.
 
 | Action | macOS | Windows / Linux |
 |---|---|---|
@@ -55,6 +55,8 @@ All four main shortcuts are customizable in the popup and persist via `chrome.st
 | Export selection | `Cmd+Shift+E` | `Ctrl+Shift+E` |
 | Extract full page | `Cmd+Shift+X` | `Ctrl+Shift+X` |
 | Recent captures | `Cmd+Shift+H` | `Ctrl+Shift+H` |
+| Select ⇄ Interact mode | `Cmd+Shift+P` | `Ctrl+Shift+P` |
+| **Grab what you hover** | `Cmd+Shift+G` | `Ctrl+Shift+G` |
 | Exact target (no expansion) | `Opt+Click` | `Alt+Click` |
 | Multi-select | `Shift+Click` | `Shift+Click` |
 | Parent / child of the selection | `Opt+↑` / `Opt+↓` | `Alt+↑` / `Alt+↓` |
@@ -64,6 +66,180 @@ All four main shortcuts are customizable in the popup and persist via `chrome.st
 Escape handling is never disturbed.
 
 ---
+
+### Interact mode — driving the page while Cheater is on
+
+Selection mode swallows clicks, which is what stops a click from navigating instead of
+selecting. The side effect is that you cannot *operate* the page while it is on: clicking a
+dropdown selects the trigger, tabs will not switch, and nothing that has to be **opened** can
+be reached.
+
+The toolbar in the bottom corner has two modes, and `Cmd/Ctrl+Shift+P` toggles them:
+
+- **Select** — clicks select elements. The default.
+- **Interact** — clicks belong to the page. Menus open, links follow, inputs type, `Escape`
+  reaches the page's own handlers. Nothing is intercepted.
+
+Two things stay live in interact mode, and they are what make it a mode rather than an off
+switch:
+
+**The outline keeps following your cursor**, restyled amber and dashed so the mode is obvious
+at a glance. It is the only thing telling you what would be captured.
+
+**`Cmd/Ctrl+Shift+G` grabs whatever you are pointing at**, with no click at all. That is not a
+convenience — it is the only gesture that can capture a **hover-revealed** menu. Such a menu
+closes the instant the pointer leaves it, so clicking it, or reaching for a button, destroys
+the thing being captured. A key does not move the pointer.
+
+So the flow for anything that has to be opened is:
+
+1. `Cmd/Ctrl+Shift+P` — switch to Interact
+2. Open the menu, or just hover it
+3. `Cmd/Ctrl+Shift+G` — grab it. The cursor never moves, so the menu stays open
+4. Export
+
+Grab uses the same smart expansion a click does, so pointing at a menu row still gives you
+the menu; hold `Alt` for the exact node. The toolbar keeps out of the cursor's way — it is the
+one layer that accepts pointer events, so it hops to the other side rather than making
+whatever sits beneath it unhoverable. The badge turns blue in interact mode, because there a
+click is a real click.
+
+### iframes
+
+An iframe used to become a flat screenshot crop — **including same-origin ones**. It looked
+right in the preview and carried no DOM at all, so the TOON handed an LLM a placeholder and
+"rebuild this in React" had nothing to work from.
+
+A same-origin frame is readable, so it is now walked like any other subtree. The one thing that
+makes it work is treating the frame's **document** as its own scope, exactly the way a shadow
+root already is: `querySelectorAll` does not cross a frame boundary any more than it crosses a
+shadow boundary, and the frame's rules live in its own `document.styleSheets`. Register the
+frame document as both a style source and a query scope and the existing machinery — computed
+styles, the hover index, `@font-face` discovery — just works, because all of it is
+element-driven.
+
+The **whole** frame document is captured, not the part that happened to be visible — so the
+exported box has to stay scrollable, or everything past the first screenful is present in the
+markup and unreachable in the render. An iframe scrolls; a `<div>` with `overflow:hidden` does
+not. A frame that genuinely cannot scroll (`scrolling="no"`, or an `overflow:hidden` document)
+keeps `hidden`, so a deliberately clipped banner or ad slot does not sprout a scrollbar it never
+had.
+
+Four details that are easy to get wrong:
+
+- The frame is exported as a `<div>`, not an `<iframe>`. An `<iframe>` in the saved file would
+  reload the live URL rather than show what was captured — and would need the network.
+- The frame's root is a `<body>`, and a **nested `<body>` start tag is discarded by the HTML
+  parser**, with its attributes merged onto the document's real body. Left alone, the frame's
+  background and padding would tint the whole export while the frame box lost them. It is
+  retagged to a `div`.
+- A frame's backdrop is often on its `<html>`, not its `<body>`. CSS propagates that to the
+  canvas, and there is no canvas once the frame is a div — so it is carried onto the box
+  explicitly, or the frame renders transparent and the host page shows through it.
+- Rects inside a frame are relative to the **frame's** viewport, not the page's. Pixel recovery
+  crops from a screenshot of the top document, so the frame's offset is added or every crop
+  inside a frame samples the wrong region.
+
+Nesting is followed three levels deep, which is past anything real and stops a hostile page
+turning one capture into a fork bomb.
+
+### Menus that live outside the component
+
+A modern dropdown does not put its menu inside its trigger. React, Radix, MUI and most
+design systems render it through a **portal** — appended to `<body>` and positioned over
+the trigger — so the menu is not a descendant of anything you would think to select.
+Walking the trigger's subtree therefore finds no menu, which is why real-world dropdowns
+exported empty even when they were open on screen.
+
+So the capture looks *outside* the selection, most reliable signal first:
+
+| How it's found | What it catches |
+|---|---|
+| `aria-controls` / `aria-owns` / `popovertarget` | the component tells us exactly which element it controls |
+| **reverse** `aria-labelledby` / `aria-controls` pointing *into* the selection | libraries that wire it the other way round, with the menu naming its trigger |
+| `aria-describedby` | tooltips and help bubbles |
+| `:popover-open` | native popovers |
+| `dialog:modal` | `showModal()` dialogs, which live in the top layer |
+| geometry — a positioned layer horizontally overlapping and vertically adjacent | everything else, and **only** when the selection actually has something open |
+
+Each candidate must be visible, outside the selection, and smaller than 60% of the
+viewport (90% when the component named it explicitly) — a layer covering the page is a
+backdrop, not this control's menu. Adoption is capped at four per selection, searches
+shadow roots as well as the document, and each adopted menu appears as its own
+diagnostics row with an `adopted · <how>` badge so it is never a silent guess. Their
+absolute offsets are neutralized, so a menu sits under its trigger in the export instead
+of pinned to a corner of `<body>`.
+
+A plain `<dialog open>` is deliberately *not* adopted: it sits in normal flow and would
+otherwise attach itself to every unrelated capture on the page. And the geometry pass —
+the only one that guesses — skips any layer that already declares its own trigger, or that
+some other trigger on the page points at. On a filter bar with several menus side by side,
+proximity alone will happily hand you the neighbour's menu.
+
+### Closed dropdowns
+
+Most of the time you point at a dropdown its menu is **closed**, and a closed menu is
+`display:none`. Hidden subtrees were dropped, so the menu was never in the capture at all —
+which is the real reason an exported dropdown had nothing to open, whatever the export did
+with it afterwards.
+
+A subtree that looks like a menu (a menu/listbox role, or a menu-ish class, id or test id)
+is now **briefly revealed on the live page**, captured, and put back. That matters more than
+it sounds: a `display:none` subtree has no geometry at all, so every rect inside it reads
+0x0 and any icon in a menu row would export as a zero-sized hole. Reading it while it is
+laid out is the only way to capture it faithfully.
+
+Unhiding walks a ladder, stopping at the first rung that works: the `hidden` attribute and
+inline `display`/`visibility`/`opacity`; then removing the one class that hides it, trying
+state-looking names (`is-collapsed`, `js-hidden`, `d-none`) before styling ones — that beats
+forcing a value, because it lets the real cascade produce the menu's true open layout even
+when the page hid it with `!important`; and only failing that, a forced `display:block`.
+Everything is restored in a `finally`, including the exact inline priority. The menu may
+flash visible for a few milliseconds.
+
+This is the one place the extension touches the page's own elements, and it is deliberately
+the narrow version: it changes only the declarations doing the hiding and fires **no
+events**, unlike synthetic clicks, which can submit forms, navigate, or hit destructive
+controls. It is capped at six menus per capture, and hidden subtrees that are *not*
+menu-shaped stay dropped — capturing every hidden thing on a page would bloat exports and
+carry along content nobody selected.
+
+### Dropdowns you can actually open in the export
+
+Both kinds of captured menu — a closed one revealed during the walk, and an open portal one
+adopted from outside — end up expressed the same way: a **host**, a **trigger** and a
+**menu** sharing one id. The export tab's **Static / Interactive** toggle (shown only when
+there is a dropdown to open) hides the menu and reveals it on `:focus-within`.
+
+An in-tree menu needs no wrapper at all: its host is a real captured element, and the
+nesting the page already had is what positions the menu. Only an adopted portal menu gets a
+synthetic host, because the trigger and the menu are separate top-level selections with no
+common ancestor in the export. Rules are scoped per pair, so two dropdowns side by side stay
+independent and a nested one cannot be opened by the outer one's focus.
+
+Clicking the trigger focuses it, the wrapper matches, the menu appears; clicking anywhere
+else moves focus away and it closes. A trigger that is not natively focusable — a styled
+`<div role="button">`, which is the common case — gets a `tabindex`, which also makes the
+dropdown keyboard-reachable.
+
+A closed `<details>` gets the same treatment on engines that hide its content with
+`display:none`, so the export is not an empty disclosure widget — but it is left as a real
+`<details>`, since it is already interactive and needs no help. Current Chrome lays that
+content out anyway, so there the check is a no-op and the page is not touched.
+
+**No JavaScript ships.** That is the constraint that picked the mechanism, not a bonus: the
+preview iframe runs without `allow-scripts` on purpose, and a saved export should stay inert
+rather than carrying executable code lifted off someone's page. The menu's captured `display`
+is carried into the open state too, so a flex or grid menu does not reopen as a `block` and
+collapse its own layout.
+
+Two things it does not do. Clicking the trigger a second time will not close the menu, since
+focus stays where it is. And TOON is never interactive — the wrapper and its rules are
+scaffolding, and scaffolding in an LLM handoff reads as noise.
+
+**Native `<select>` is the one genuine dead end.** Its `<option>` list is real DOM and
+comes along, so the control works in the export — but the open popup is drawn by the
+operating system and exists nowhere in the document. Nothing can capture it.
 
 ### When something goes wrong
 
@@ -91,7 +267,7 @@ Each of these is a separate capture path, and each one is covered by the test su
 | Module | How it's handled |
 |---|---|
 | **Shadow DOM** | Open roots are selected, hovered and exported, including **nested** roots. `<slot>` is expanded to its projected light-DOM content, so the flattened tree matches what the browser draws. Hit testing uses the composed event path, and parent traversal crosses the shadow boundary to the host. |
-| **iframes / frames** | Commands broadcast to every frame; the export comes from whichever frame holds a selection, and multiple frames merge into one document with per-frame class namespacing. Frames without the content script are skipped silently. |
+| **iframes / frames** | A **same-origin** frame is walked like any other subtree: its real markup, its own stylesheets and its own `@font-face` rules all come into the export, nested frames included. A **cross-origin** frame cannot be read from the page at all, so it degrades to cropped pixels. Separately, commands broadcast to every frame, so a selection made *inside* a frame is exported from there and multiple frames merge with per-frame class namespacing. |
 | **`<canvas>`** | The live bitmap is snapshotted into a same-sized image. Cross-origin-tainted canvases and WebGL contexts without `preserveDrawingBuffer` (which read back fully transparent rather than throwing) degrade to a correctly-sized placeholder. |
 | **SVG** | Inline SVG is preserved whole with its rendered size and fill pinned. `<use href="#id">` sprite references are resolved into a local `<defs>`, following nested `<use>` inside a resolved symbol. Gradients, `clipPath` and filters come along. Purely decorative empty SVGs are dropped; stroke-only icons are not. |
 | **CSS mask / background icons** | The full `mask-*`, `-webkit-mask-*` and `background-*` sets are captured, so toolbar and ribbon glyphs survive. |
@@ -153,7 +329,11 @@ still **look** right — as images rather than markup — provided the element w
 
 - **Closed shadow roots** are unreachable from an extension's isolated world. Nothing can be
   captured inside `attachShadow({ mode: 'closed' })`.
-- **Cross-origin iframes** without the content script have no readable DOM.
+- **Cross-origin iframes** cannot be read from the parent page — the browser forbids it, and
+  no extension trick changes that. They become cropped pixels: right-looking, but no markup.
+  Capturing the frame in its own tab gets the DOM. A `sandbox` attribute without
+  `allow-same-origin` has the same effect even on your own URL, since sandboxing forces a
+  unique opaque origin.
 - **Cross-origin-tainted canvases** cannot be read, by browser security design.
 - **External sprite files** (`sprite.svg#icon`) resolve only when the symbol is in the
   document; a separate file is not fetched.
@@ -357,8 +537,13 @@ lib/zip.js               store-only ZIP writer + CRC-32
 lib/highlight.js         escape-first, single-pass syntax highlighter
 scripts/toon-to-html.js  Node CLI
 test/fixtures.html       every module type on one page
-test/run-fixtures.js     112 capture assertions
+test/run-fixtures.js     189 capture assertions
+test/dropdowns.html      twelve shapes of closed dropdown
+test/iframes.html        nine iframe shapes, incl. a real second origin
+test/run-iframes.js      63 iframe assertions
+test/run-dropdowns.js    103 dropdown + interact-mode assertions
 test/run-fonts.js        34 font-fidelity assertions
+test/cdp-runner.js       runs the browser suites against headless Chrome, no deps
 ```
 
 `lib/*.js` are classic scripts with a UMD-ish tail, so the same file runs in the content
@@ -394,14 +579,22 @@ that needs per-element rule data belongs in that index, not in a per-element loo
 ## Tests
 
 ```bash
-python3 -m http.server 8931 --bind 127.0.0.1
+node test/cdp-runner.js                 # every browser suite
+node test/cdp-runner.js run-fixtures    # just one
+node test/run-worker.js                 # the Node-only worker suite
 ```
 
-Then run `test/run-fixtures.js` and `test/run-fonts.js` through a Playwright MCP server
-(`browser_run_code_unsafe` with `filename`). They load the real content script into
-`test/fixtures.html` with a stubbed `chrome` API and assert one capture path at a time.
+`cdp-runner.js` launches headless Chrome itself, serves the repo on port 8931, and shims the
+handful of Playwright `page` methods the harnesses use over the DevTools protocol. Zero
+dependencies, like the rest of the repo. The suites are still plain Playwright
+`async (page) => {…}` functions, so they also run through a Playwright MCP server
+(`browser_run_code_unsafe` with `filename`) against a manually started
+`python3 -m http.server 8931 --bind 127.0.0.1`.
 
-Five suites:
+They load the real content script into `test/fixtures.html` with a stubbed `chrome` API and
+assert one capture path at a time.
+
+Seven suites:
 
 - **`test/run-history.js`** — 13 assertions over the capture-history store, run in a page
   where IndexedDB behaves as it does in the worker. Covers ordering, pruning by count and by
@@ -415,8 +608,31 @@ Five suites:
   simply closes the port with no response at all.
 
 
-- **`test/run-fixtures.js`** — 112 capture assertions over `test/fixtures.html`, one per
-  capture path.
+- **`test/run-dropdowns.js`** — 103 assertions over `test/dropdowns.html`, which holds twelve
+  shapes of **closed** dropdown: hidden by inline `display`, by `visibility`, by the `hidden`
+  attribute, by a stylesheet class with `!important`, a menu of links, a non-focusable div
+  trigger, a menu nested deeper than its trigger, twin dropdowns that must stay independent,
+  native `details`, and a hidden non-menu that must stay dropped. Assertions are behavioural:
+  each export is rendered under export.html's sandbox and focus is moved to check the menu
+  opens, has real height, sits under its trigger and closes again. It also asserts the live
+  page is left exactly as it was — a menu stuck open on someone's site would be the worst
+  possible failure here. The last block covers interact mode with a **real cursor**: the
+  driver moves the actual pointer (synthetic events cannot, so `:hover` never matches), the
+  hover-only menu genuinely appears, and it is captured with the grab key without a single
+  click.
+- **`test/run-iframes.js`** — 63 assertions over `test/iframes.html`: `srcdoc`, a same-origin
+  URL, a **genuinely** cross-origin frame (the runner serves a second origin on port 8932 so it
+  is real rather than simulated), nested frames, `about:blank` written by script, a sandboxed
+  opaque origin, a scrolled frame, a frame as the capture root, and a full document four times
+  taller than its frame — where all 20 rows and the footer past the fold must be captured, and
+  the rendered box must genuinely scroll to reach them. Ends with a fidelity comparison: the
+  same element's computed style read in the original frame and in the rendered export and
+  required to match, including rendered text width.
+- **`test/run-fixtures.js`** — 189 capture assertions over `test/fixtures.html`, one per
+  capture path. The interactive-dropdown assertions at the end are behavioural rather than
+  textual: the generated export is rendered in an iframe carrying **the same sandbox
+  attribute `export.html` uses**, a canary script confirms scripts really are blocked, and
+  then focus is moved to check the menu actually opens and closes.
 - **`test/run-fonts.js`** — 34 font-fidelity assertions. Verifies fonts by measuring
   **rendered text width** in the original and in the export and requiring them to match: a
   different font file means different advance widths, so there is nowhere to hide.
@@ -425,9 +641,12 @@ Five suites:
   `pointer-events:none` icon `<svg>`). Covers capture performance, progress reporting, the
   yield behaviour, overlap rejection, wheel gating and Alt+Arrow anchoring.
 
-Current status: **140/140 + 34/34 + 22/22 + 13/13 + 12/12**, with every sampled component rendering
-pixel-identically to its original and a whole-page capture of the 9,000-rule stress fixture
-completing in ~100ms.
+Current status: **189/189 + 103/103 + 63/63 + 34/34 + 22/22 + 13/13 + 12/12 = 436 passing**, with every sampled
+component rendering pixel-identically to its original and a whole-page capture of the
+9,000-rule stress fixture completing in ~100ms.
+
+Two 404s appear in the page console on every fixture run. They are the point: one is the
+deliberately broken `<img>` that exercises the images-dropped path.
 
 The harnesses append a cache-busting query to every injected script. Without it Chrome
 happily reuses a previously fetched `lib/*.js` between runs, and the suite silently tests

@@ -302,6 +302,11 @@ pre{
       <button data-surface="dark" class="sel">Dark</button>
       <button data-surface="light">Light</button>
     </div>
+    <!-- Only shown when a menu was actually captured alongside its trigger. -->
+    <div class="seg hidden" id="menu-seg" title="Interactive makes captured dropdowns open on click, using CSS only">
+      <button data-menus="static">Static</button>
+      <button data-menus="interactive" class="sel">Interactive</button>
+    </div>
   </div>
   <div class="tools hidden" id="code-tools">
     <span class="meta" id="code-meta"></span>
@@ -312,7 +317,7 @@ pre{
 <main class="panes">
   <div class="pane sel" id="preview-pane">
     <div class="stage" id="stage">
-      <iframe id="frame" sandbox="allow-same-origin" title="Export preview"></iframe>
+      <iframe id="frame" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" title="Export preview"></iframe>
     </div>
   </div>
   <div class="pane" id="html-pane"><pre><code id="html-code"></code></pre></div>

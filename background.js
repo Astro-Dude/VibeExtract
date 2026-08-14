@@ -549,10 +549,12 @@ async function captureTab(tab) {
  * SECTION: badge
  * ========================================================================== */
 
-async function setActiveBadge(tabId, active) {
+async function setActiveBadge(tabId, active, paused) {
   try {
-    await chrome.action.setBadgeText({ tabId, text: active ? '●' : '' });
-    await chrome.action.setBadgeBackgroundColor({ tabId, color: '#FFB224' });
+    // Paused is visually distinct on purpose: the page is live in that state, and
+    // mistaking it for selection mode means clicking things for real.
+    await chrome.action.setBadgeText({ tabId, text: active ? (paused ? '❙❙' : '●') : '' });
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: paused ? '#8AB4F8' : '#FFB224' });
   } catch (_) { /* tab may be gone */ }
 }
 
@@ -622,7 +624,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'CHEATER_ACTIVE':
-      setActiveBadge(sender.tab && sender.tab.id, !!message.active);
+      setActiveBadge(sender.tab && sender.tab.id, !!message.active, !!message.paused);
       sendResponse({ ok: true });
       return true;
 

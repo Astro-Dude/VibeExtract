@@ -77,7 +77,41 @@
     'menuitemradio', 'tab', 'checkbox', 'radio', 'switch', 'searchbox', 'combobox'
   ]);
 
+  /**
+   * A hidden subtree that looks like it is the component the user was after.
+   *
+   * A closed dropdown is display:none, so it is filtered out and the export simply
+   * lacks the menu — with no hint as to why. Recognising these lets the
+   * diagnostics say "open it first, then capture" instead of leaving you to guess.
+   */
+  const MENU_HINT_RE = /(dropdown|menu|listbox|popover|popup|combobox|autocomplete|flyout|submenu|tooltip|overlay-panel)/i;
+  const MENU_ROLES = new Set(['menu', 'listbox', 'dialog', 'tooltip', 'combobox', 'tree', 'grid', 'menubar']);
+
+  function looksLikeHiddenMenu(el) {
+    const role = (el.getAttribute && el.getAttribute('role')) || '';
+    if (MENU_ROLES.has(role)) return true;
+    const hints = classListOf(el).join(' ') + ' ' +
+      ((el.getAttribute && (el.getAttribute('data-testid') || el.getAttribute('id'))) || '');
+    return MENU_HINT_RE.test(hints);
+  }
+
   const CONTAINER_CLASS_RE = /(card|chip|tile|field|item|cell|box|badge|panel|control|input-group|form-group|btn|button|pill|widget|module|row|entry|option|node|block)/i;
+
+  // Class names that read as "this is hidden right now" rather than "this is what
+  // the thing looks like". Tried first when hunting for the class that hides a
+  // closed menu, so we strip the state class and not the styling one.
+  const STATE_CLASS_RE = /(hidden|hide|collapsed|closed|invisible|inactive|dismissed|d-none|sr-only|is-|js-|--closed|--hidden)/i;
+
+  // What counts as the thing you click to open a menu.
+  const TRIGGER_SELECTOR = [
+    'button', 'summary', 'a[href]', '[role="button"]', '[role="combobox"]',
+    '[aria-haspopup]', '[aria-expanded]', 'input', 'select', '[tabindex]'
+  ].join(',');
+
+  // A closed menu is revealed on the live page for the few milliseconds it takes to
+  // capture it. Capped so a pathological page cannot turn one capture into fifty
+  // reveals.
+  const MAX_HIDDEN_MENUS = 6;
 
   const PROPS = [
     // layout
@@ -291,22 +325,59 @@
 
   const state = {
     active: false,
+    /**
+     * Interact mode: the page gets its own clicks back.
+     *
+     * Selection mode swallows every click, which makes any component you have to
+     * OPEN impossible to reach — clicking a dropdown trigger selects the trigger
+     * instead of opening the menu. In interact mode the page behaves completely
+     * normally: menus open, links follow, inputs type.
+     *
+     * Two things stay live throughout, and they are what make the mode useful
+     * rather than just an off switch:
+     *   - hover tracking, so the outline still shows what would be captured;
+     *   - the grab key, so you can capture without touching the mouse. A
+     *     hover-revealed menu closes the moment the pointer leaves it, so any
+     *     mouse-based capture gesture destroys its own target.
+     */
+    paused: false,
     hovered: null,
     selections: [],           // [{ el, raw, rect, diag }]
     nav: { path: [], idx: 0 },
     shortcuts: null,
     capturing: false,
     shadowRoots: new Set(),
-    styleSheetCache: null
+    styleSheetCache: null,
+    // Same-origin iframe documents reached during a capture. Tracked like shadow
+    // roots: each is its own stylesheet source and its own querySelectorAll scope.
+    frameDocs: new Set()
   };
 
   const isMac = /mac/i.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
+
+  const PRIMARY_LABEL = isMac ? '\u2318' : 'Ctrl';
+  const ALT_LABEL = isMac ? 'Opt' : 'Alt';
+
+  function shortcutLabel(config) {
+    if (!config || !config.key) return '—';
+    const parts = [];
+    if (config.primary) parts.push(PRIMARY_LABEL);
+    if (config.shift) parts.push('Shift');
+    if (config.alt) parts.push(ALT_LABEL);
+    parts.push(String(config.key).toUpperCase());
+    return parts.join('+');
+  }
 
   const DEFAULT_SHORTCUTS = {
     start: { primary: true, shift: true, alt: false, key: 'S' },
     export: { primary: true, shift: true, alt: false, key: 'E' },
     fullpage: { primary: true, shift: true, alt: false, key: 'X' },
-    history: { primary: true, shift: true, alt: false, key: 'H' }
+    history: { primary: true, shift: true, alt: false, key: 'H' },
+    pause: { primary: true, shift: true, alt: false, key: 'P' },
+    // Capture whatever the cursor is over, without clicking. The point of a key
+    // rather than a click: a hover-opened menu closes the moment you move the
+    // mouse off it, so the gesture that captures it cannot involve the mouse.
+    grab: { primary: true, shift: true, alt: false, key: 'G' }
   };
 
   /* ======================================================================== *
@@ -371,7 +442,11 @@
    * keeps the extension from ever stealing its own hit tests.
    * ======================================================================== */
 
-  const ui = { host: null, root: null, hover: null, label: null, boxes: [], toast: null, toastTimer: 0, progress: null };
+  const ui = {
+    host: null, root: null, hover: null, label: null, boxes: [], toast: null,
+    toastTimer: 0, progress: null,
+    bar: null, hint: null, selectBtn: null, interactBtn: null
+  };
 
   function buildUI() {
     if (ui.host) return;
@@ -388,6 +463,12 @@
       ':host{all:initial}',
       '*{box-sizing:border-box;margin:0;padding:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}',
       '.layer{position:fixed;pointer-events:none;z-index:1}',
+      // Interact mode keeps the outline, because it is the only thing telling you
+      // what the grab key would capture — but restyles it to amber and dashed, so
+      // "your clicks go to the page" is visible at a glance rather than something
+      // you have to remember.
+      ':host(.cheater-paused) .hover{border:1px dashed #FFB224;background:rgba(255,178,36,.05)}',
+      ':host(.cheater-paused) .label{border-left-color:#FFB224}',
       '.hover{border:1px solid #FF4A3D;background:rgba(255,74,61,.07);transition:none}',
       '.sel{border:1px solid #4A9BFF;background:rgba(74,155,255,.10)}',
       '.selbox{border:1px dashed #4A9BFF;background:rgba(74,155,255,.06)}',
@@ -413,7 +494,27 @@
       '.progress-fill{height:100%;background:#FFB224;width:0%;transition:width .1s linear}',
       '.progress-fill.indeterminate{animation:cheater-sweep 1s linear infinite;',
       'background:linear-gradient(90deg,#2A2D33 0%,#FFB224 50%,#2A2D33 100%);background-size:200% 100%}',
-      '@keyframes cheater-sweep{0%{background-position:100% 0}100%{background-position:-100% 0}}'
+      '@keyframes cheater-sweep{0%{background-position:100% 0}100%{background-position:-100% 0}}',
+      // The one layer that accepts pointer events. Its classes carry the cheater-
+      // prefix so isOurs() recognises them and hit testing skips the toolbar
+      // instead of selecting it.
+      '.cheater-bar{position:fixed;right:12px;bottom:12px;z-index:6;pointer-events:auto;',
+      'display:flex;align-items:stretch;background:#121316;border:1px solid #2A2D33;',
+      'border-left:2px solid #FFB224;font-size:11px;letter-spacing:.02em;',
+      'box-shadow:0 6px 20px rgba(0,0,0,.45)}',
+      // The toolbar is the one layer that accepts pointer events, so whatever sits
+      // under it cannot be hovered. It gets out of the cursor's way rather than
+      // expecting you to work around it.
+      '.cheater-bar.cheater-flip{right:auto;left:12px}',
+      '.cheater-mode{display:flex}',
+      '.cheater-btn{all:unset;display:flex;align-items:center;padding:7px 10px;color:#8A8F98;',
+      'cursor:pointer;font:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;',
+      'border-right:1px solid #2A2D33;white-space:nowrap}',
+      '.cheater-btn:hover{color:#E8E6E1;background:#16181B}',
+      '.cheater-btn.cheater-on{color:#0C0D0F;background:#FFB224}',
+      '.cheater-hint{display:flex;align-items:center;padding:7px 10px;color:#6B7077;',
+      'white-space:nowrap;pointer-events:none}',
+      '.cheater-hint b{color:#8A8F98;font-weight:400}'
     ].join('');
     root.appendChild(style);
 
@@ -428,13 +529,87 @@
     root.appendChild(hover);
     root.appendChild(label);
 
+    // Mode toolbar. Without it, click-through is a shortcut nobody discovers, and
+    // "I can't interact with the page in selection mode" is the whole complaint.
+    const bar = document.createElement('div');
+    bar.className = PREFIX + 'bar';
+    bar.setAttribute('data-cheater', 'bar');
+
+    const modeWrap = document.createElement('div');
+    modeWrap.className = PREFIX + 'mode';
+    const selectBtn = document.createElement('button');
+    selectBtn.className = PREFIX + 'btn ' + PREFIX + 'on';
+    selectBtn.textContent = 'Select';
+    selectBtn.title = 'Clicks select elements';
+    const interactBtn = document.createElement('button');
+    interactBtn.className = PREFIX + 'btn';
+    interactBtn.textContent = 'Interact';
+    interactBtn.title = 'Clicks go to the page — open menus, follow links, type';
+    modeWrap.appendChild(selectBtn);
+    modeWrap.appendChild(interactBtn);
+
+    const hint = document.createElement('div');
+    hint.className = PREFIX + 'hint';
+
+    bar.appendChild(modeWrap);
+    bar.appendChild(hint);
+
+    // pointerdown, not click: our own capture-phase pointerdown handler runs first
+    // and would otherwise have swallowed the gesture before the button saw it.
+    const stop = (event) => { event.preventDefault(); event.stopPropagation(); };
+    selectBtn.addEventListener('pointerdown', (event) => { stop(event); setPaused(false); });
+    interactBtn.addEventListener('pointerdown', (event) => { stop(event); setPaused(true); });
+    for (const button of [selectBtn, interactBtn]) {
+      button.addEventListener('click', stop);
+      button.addEventListener('mousedown', stop);
+    }
+
+    root.appendChild(bar);
+
     (document.body || document.documentElement).appendChild(host);
-    Object.assign(ui, { host, root, hover, label });
+    Object.assign(ui, { host, root, hover, label, bar, hint, selectBtn, interactBtn });
+    renderMode();
+  }
+
+  /**
+   * Reflect the current mode in the toolbar, and say what the grab key does.
+   *
+   * The hint is the discoverable half: in interact mode the mouse belongs to the
+   * page, so the only way to capture is the key, and it has to be on screen.
+   */
+  /**
+   * Keep the toolbar away from the cursor.
+   *
+   * It is the only layer with pointer-events, so anything beneath it is
+   * unhoverable — and "I can't select that" is precisely the complaint this whole
+   * mode exists to answer. Flipping sides is enough: the pointer can only be on
+   * one of them.
+   */
+  function avoidPointer(x, y) {
+    if (!ui.bar) return;
+    const r = rectOf(ui.bar);
+    if (!r.width) return;
+    const near = x >= r.left - 32 && x <= r.right + 32 && y >= r.top - 32 && y <= r.bottom + 32;
+    if (!near) return;
+    // Sit on the side the pointer is not on.
+    ui.bar.classList.toggle(PREFIX + 'flip', x > vw() / 2);
+  }
+
+  function renderMode() {
+    if (!ui.bar) return;
+    const on = PREFIX + 'on';
+    ui.selectBtn.classList.toggle(on, !state.paused);
+    ui.interactBtn.classList.toggle(on, !!state.paused);
+    const grab = shortcutLabel((state.shortcuts || DEFAULT_SHORTCUTS).grab);
+    ui.hint.innerHTML = state.paused
+      ? 'page has your clicks · hover, then <b>' + escapeHtml(grab) + '</b> to capture'
+      : 'click to select · <b>' + escapeHtml(grab) + '</b> captures what you hover';
   }
 
   function teardownUI() {
     if (ui.host && ui.host.parentNode) ui.host.parentNode.removeChild(ui.host);
     ui.host = null; ui.root = null; ui.hover = null; ui.label = null; ui.boxes = []; ui.progress = null;
+    ui.bar = null; ui.hint = null; ui.selectBtn = null; ui.interactBtn = null;
   }
 
   function placeLayer(layer, r) {
@@ -597,6 +772,79 @@
         root.appendChild(style);
       }
     } catch (_) { /* a locked-down root is still usable for selection */ }
+  }
+
+  // Frames nest, and a page can nest them deliberately. Three levels is past
+  // anything real and stops a malicious page turning one capture into a fork bomb.
+  const MAX_FRAME_DEPTH = 3;
+
+  /**
+   * The document inside an iframe, if this frame is actually readable from here.
+   *
+   * Same-origin frames can be walked like any other subtree, which is the whole
+   * point: a cross-origin frame can only ever become a flat screenshot crop, but a
+   * same-origin one has real DOM that belongs in the export.
+   */
+  function readableFrameDoc(el) {
+    try {
+      const doc = el.contentDocument;
+      if (!doc || !doc.body) return null;
+      // Touching a property is the actual permission check — contentDocument is
+      // null cross-origin, but a sandboxed same-origin frame can be stranger.
+      void doc.body.tagName;
+      return doc;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
+   * Can this frame actually scroll?
+   *
+   * `scrolling="no"` and an `overflow:hidden` document are both deliberate — an ad
+   * slot or a fixed banner is meant to be clipped, and giving it a scrollbar in the
+   * export would be inventing a behaviour the original never had.
+   */
+  function frameScrolls(el, doc) {
+    const legacy = (el.getAttribute && el.getAttribute('scrolling') || '').toLowerCase();
+    if (legacy === 'no') return false;
+    try {
+      for (const node of [doc.documentElement, doc.body]) {
+        if (!node) continue;
+        const cs = getComputedStyle(node);
+        if (cs.overflow === 'hidden' || cs.overflowY === 'hidden') return false;
+      }
+      // Nothing to scroll is not the same as being unable to: no scrollbar appears
+      // either way with `auto`, so this only avoids claiming scroll where there is
+      // genuinely none to have.
+      const root = doc.scrollingElement || doc.documentElement;
+      return !!root && root.scrollHeight > root.clientHeight + 1;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * The frame's own page background, when it comes from <html> rather than <body>.
+   * Returns '' when the body already paints one, so nothing is stated twice.
+   */
+  function frameRootBackground(doc, bodyNode) {
+    try {
+      const bodyPaint = bodyNode && bodyNode.style && bodyNode.style['background-color'];
+      if (bodyPaint && !isTransparent(bodyPaint)) return '';
+      const cs = getComputedStyle(doc.documentElement);
+      const value = cleanValue('background-color', cs.backgroundColor);
+      if (!value || isTransparent(value)) return '';
+      return value;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function registerFrameDoc(doc) {
+    if (!doc || state.frameDocs.has(doc)) return;
+    state.frameDocs.add(doc);
+    state.styleSheetCache = null;   // its sheets may define hover and @font-face rules
   }
 
   function registerRootsFromPath(path) {
@@ -1185,6 +1433,11 @@
     push(document.styleSheets);
     for (const root of state.shadowRoots) {
       try { push(root.styleSheets); push(root.adoptedStyleSheets); } catch (_) { /* noop */ }
+    }
+    // A same-origin iframe's rules live in its own document and are invisible from
+    // here otherwise, so its content would be captured with no styling at all.
+    for (const doc of state.frameDocs) {
+      try { push(doc.styleSheets); push(doc.adoptedStyleSheets); } catch (_) { /* noop */ }
     }
     try { push(document.adoptedStyleSheets); } catch (_) { /* noop */ }
     return sheets;
@@ -2309,7 +2562,19 @@
       return;
     }
 
-    const rect = rectOf(el);
+    // Inside a same-origin iframe, rects are relative to the FRAME's viewport. The
+    // screenshot is of the top document, so the frame's offset has to be added or
+    // every crop inside a frame samples the wrong part of the page.
+    const raw = rectOf(el);
+    const offset = ctx.frameOffset || { x: 0, y: 0 };
+    const rect = offset.x || offset.y
+      ? {
+        left: raw.left + offset.x, top: raw.top + offset.y,
+        right: raw.right + offset.x, bottom: raw.bottom + offset.y,
+        width: raw.width, height: raw.height
+      }
+      : raw;
+
     if (rect.width < PIXEL_MIN || rect.height < PIXEL_MIN) return;
     if (rect.width > PIXEL_MAX || rect.height > PIXEL_MAX) return;
 
@@ -2591,7 +2856,8 @@
       dropped: 0, hiddenDropped: 0, machineryDropped: 0, canvasPlaceholders: 0,
       imagesDropped: 0, imagesInlined: 0, imagesTainted: 0, svgDropped: 0,
       iconNodes: 0, iconsRasterized: 0, iconsLost: 0,
-      pixelsRecovered: 0, pixelsFailed: 0, nodes: 0
+      pixelsRecovered: 0, pixelsFailed: 0, hiddenMenus: 0, closedMenusWired: 0,
+      framesInlined: 0, framesPixels: 0, nativeSelects: 0, nodes: 0
     };
   }
 
@@ -2616,6 +2882,17 @@
         registerRoot(el.shadowRoot);
         scopes.push(el.shadowRoot);
         for (const child of el.shadowRoot.children) stack.push(child);
+      }
+      // A same-origin iframe's document is another scope entirely:
+      // querySelectorAll does not cross a frame boundary any more than it crosses
+      // a shadow boundary, so its rules would match nothing without this.
+      if (tagOf(el) === 'iframe') {
+        const doc = readableFrameDoc(el);
+        if (doc) {
+          registerFrameDoc(doc);
+          scopes.push(doc);
+          stack.push(doc.documentElement);
+        }
       }
       for (const child of el.children) stack.push(child);
     }
@@ -2690,7 +2967,14 @@
       lastYield: (typeof performance !== 'undefined' ? performance.now() : Date.now()),
       sinceCheck: 0,
       onProgress: opts.onProgress || null,
-      pixelRequests: []
+      pixelRequests: [],
+      // Closed-dropdown capture: how many were revealed, the pairs still to wire,
+      // and a element -> node map, since a menu's trigger and host are built
+      // before the menu itself is reached.
+      ddRevealed: 0,
+      ddPending: [],
+      ddSeq: 0,
+      nodeByEl: new Map()
     };
 
     // The crosshair is applied with !important, so it would be captured as a
@@ -2701,6 +2985,9 @@
       const rootCs = getComputedStyle(rootEl);
       const parentEl = parentOrHost(rootEl);
       const node = await walkElement(rootEl, rootCs, null, ctx, [], true);
+
+      // Wire closed menus to their triggers while the DOM is still here to consult.
+      if (ctx.ddPending.length) resolveClosedMenus(ctx, rootEl);
 
       // Anything the walk could not reproduce gets its pixels cropped out of a
       // single screenshot. Deliberately after the walk: one screenshot, N crops.
@@ -2721,6 +3008,187 @@
     });
   }
 
+  /**
+   * Capture a closed dropdown menu by revealing it just long enough to read it.
+   *
+   * The node comes back marked as a menu, and the pairing is queued rather than
+   * resolved here: the trigger is usually an earlier sibling whose node already
+   * exists, and the host has to be an ancestor, so both are looked up after the
+   * walk finishes.
+   */
+  async function captureClosedMenu(el, parentCs, ctx, chain) {
+    if (ctx.ddRevealed >= MAX_HIDDEN_MENUS) return null;
+
+    const restore = revealTemporarily(el);
+    if (!restore) return null;
+
+    ctx.ddRevealed += 1;
+    let built = null;
+    try {
+      // Re-read after the reveal: this is the whole point, since the pre-reveal
+      // style says display:none and every rect in the subtree reads zero.
+      const revealedCs = getComputedStyle(el);
+      built = await walkElement(el, revealedCs, parentCs, ctx, chain, false);
+    } catch (_) {
+      built = null;
+    } finally {
+      restore();
+    }
+
+    if (!built) return null;
+    built.ddRole = 'menu';
+    ctx.ddPending.push({ node: built, el });
+    return built;
+  }
+
+  /**
+   * Wire each captured closed menu to the thing that opens it.
+   *
+   * Three nodes matter: the menu, the trigger, and a host that contains both — the
+   * host is what `:focus-within` is tested on. Runs after the walk, while the DOM
+   * is still available, because the trigger and host nodes are built before the
+   * menu is reached.
+   */
+  function resolveClosedMenus(ctx, rootEl) {
+    for (const pending of ctx.ddPending) {
+      const triggerEl = findMenuTrigger(pending.el, rootEl);
+
+      // The host must contain both, and must itself be in the export.
+      let hostEl = triggerEl ? commonAncestorEl(pending.el, triggerEl) : pending.el.parentElement;
+      let hostNode = null;
+      while (hostEl) {
+        hostNode = ctx.nodeByEl.get(hostEl);
+        if (hostNode) break;
+        if (hostEl === rootEl) break;
+        hostEl = hostEl.parentElement;
+      }
+      // No host in the export means the menu is a top-level selection of its own,
+      // which the writer handles by synthesizing a wrapper instead.
+      if (!hostNode || hostNode === pending.node) continue;
+
+      const id = 'dd' + (ctx.ddSeq += 1);
+      hostNode.ddId = id;
+      hostNode.ddRole = 'host';
+      pending.node.ddId = id;
+
+      const triggerNode = triggerEl ? ctx.nodeByEl.get(triggerEl) : null;
+      if (triggerNode && triggerNode !== hostNode && triggerNode !== pending.node) {
+        triggerNode.ddId = id;
+        triggerNode.ddRole = 'trigger';
+      } else {
+        // No distinct trigger node survived the walk, so the host itself takes the
+        // focus. Clicking anywhere in the component opens the menu, which beats a
+        // menu that cannot open at all.
+        hostNode.ddFocusHost = true;
+      }
+      ctx.diag.closedMenusWired += 1;
+    }
+  }
+
+  function detailsHidesContent(el) {
+    for (const child of el.children) {
+      if (tagOf(child) === 'summary') continue;
+      let cs;
+      try { cs = getComputedStyle(child); } catch (_) { continue; }
+      if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+    }
+    return false;
+  }
+
+  function commonAncestorEl(a, b) {
+    if (!a || !b) return null;
+    const seen = new Set();
+    for (let el = a; el; el = el.parentElement) seen.add(el);
+    for (let el = b; el; el = el.parentElement) if (seen.has(el)) return el;
+    return null;
+  }
+
+  /**
+   * Inline a same-origin iframe's real content.
+   *
+   * Previously every iframe — same-origin included — became a flat screenshot crop.
+   * It looked right and was useless: there is no DOM in a picture, so "rebuild this
+   * in React" had nothing to work from and the TOON carried a placeholder.
+   *
+   * The exported element becomes a plain <div> with the iframe's own box, because an
+   * <iframe> cannot host captured children — it loads a URL. Inside it goes the
+   * child's <body>, which carries the frame's background and base typography.
+   *
+   * Returns null when the frame cannot be read, so the caller can fall back.
+   */
+  async function captureFrame(el, cs, node, ctx, chain) {
+    if ((ctx.frameDepth || 0) >= MAX_FRAME_DEPTH) return null;
+
+    const doc = readableFrameDoc(el);
+    if (!doc || !doc.body) return null;
+
+    // Nothing to rebuild here: collectShadowRoots() walks into readable frames
+    // before the capture starts, so the frame's document is already a scope in the
+    // match index and its stylesheets are already in the scan.
+    registerFrameDoc(doc);
+
+    const rect = rectOf(el);
+
+    // Rects inside a frame are relative to the FRAME's viewport, not the top one.
+    // Pixel recovery crops from a screenshot of the top document, so anything
+    // requested while inside here needs the frame's own offset added.
+    const savedOffset = ctx.frameOffset || { x: 0, y: 0 };
+    ctx.frameOffset = {
+      x: savedOffset.x + rect.left + (parseFloat(cs.borderLeftWidth) || 0),
+      y: savedOffset.y + rect.top + (parseFloat(cs.borderTopWidth) || 0)
+    };
+    ctx.frameDepth = (ctx.frameDepth || 0) + 1;
+
+    let bodyNode = null;
+    try {
+      const bodyCs = getComputedStyle(doc.body);
+      bodyNode = await walkElement(doc.body, bodyCs, cs, ctx, chain, false);
+    } catch (_) {
+      bodyNode = null;
+    } finally {
+      ctx.frameDepth -= 1;
+      ctx.frameOffset = savedOffset;
+    }
+
+    if (!bodyNode) return null;
+
+    // The frame's root is a <body>, and a nested <body> start tag is DISCARDED by
+    // the HTML parser — its attributes get merged onto the export's own body, so the
+    // frame's background and padding would silently leak to the whole page while the
+    // frame box lost them. Retag it; the captured styles are what matter, not the
+    // element name.
+    if (bodyNode.tag === 'body' || bodyNode.tag === 'html') bodyNode.tag = 'div';
+
+    ctx.diag.framesInlined += 1;
+
+    // The whole frame document is captured, not just the part that happened to be
+    // visible — so the exported box has to be SCROLLABLE, or everything past the
+    // first screenful is present in the markup and unreachable in the render. An
+    // iframe scrolls; `overflow:hidden` on the stand-in div silently threw that away.
+    //
+    // A frame that genuinely cannot scroll keeps hidden, so a deliberately clipped
+    // banner or ad slot does not sprout a scrollbar it never had.
+    node.tag = 'div';
+    node.attrs = {};
+    if (el.getAttribute('title')) node.attrs['aria-label'] = el.getAttribute('title');
+
+    const box = {
+      width: Math.round(rect.width) + 'px',
+      height: Math.round(rect.height) + 'px',
+      overflow: frameScrolls(el, doc) ? 'auto' : 'hidden'
+    };
+
+    // The frame's backdrop can come from its <html>, not its <body> — a common
+    // pattern, and one that leaves the frame transparent in the export otherwise,
+    // showing the host page through it.
+    const rootBackground = frameRootBackground(doc, bodyNode);
+    if (rootBackground) box['background-color'] = rootBackground;
+
+    node.style = Object.assign({}, node.style || {}, box);
+    node.ch = [bodyNode];
+    return node;
+  }
+
   async function walkElement(el, cs, parentCs, ctx, chain, isRoot) {
     const tag = tagOf(el);
     ctx.diag.nodes += 1;
@@ -2729,10 +3197,17 @@
     const attrs = captureAttributes(el, tag);
     const style = captureStyle(el, cs, parentCs, tag, { isRoot }, ctx.index);
 
+    // A native <select> keeps its <option> children — they are real DOM, so the
+    // control still works in the export. Its OPEN popup, however, is drawn by the
+    // operating system and exists nowhere in the document, so no capture technique
+    // can reach it. Counted so the export can say that plainly.
+    if (tag === 'select') ctx.diag.nativeSelects += 1;
+
     const node = {
       k: 'e', tag, attrs, style,
       hover: null, pseudo: null, ch: [], icon: false
     };
+    ctx.nodeByEl.set(el, node);
 
     // Media paths replace the node's children wholesale.
     if (tag === 'canvas') {
@@ -2778,7 +3253,21 @@
       requestPixels(ctx, placeholder, el, 'image');
       return placeholder;
     }
-    if (tag === 'iframe' || tag === 'video' || tag === 'embed' || tag === 'object') {
+    if (tag === 'iframe') {
+      const inlined = await captureFrame(el, cs, node, ctx, chain.concat([{ el, node }]));
+      if (inlined) return inlined;
+      // Cross-origin, or too deep: nothing here can read it, so the pixels are the
+      // only truthful thing left.
+      const rect = rectOf(el);
+      const placeholder = {
+        k: 'ph', tag: 'div', attrs: {}, style,
+        label: 'cross-origin iframe', w: Math.round(rect.width), h: Math.round(rect.height)
+      };
+      ctx.diag.framesPixels += 1;
+      requestPixels(ctx, placeholder, el, 'iframe');
+      return placeholder;
+    }
+    if (tag === 'video' || tag === 'embed' || tag === 'object') {
       const rect = rectOf(el);
       const placeholder = {
         k: 'ph', tag: 'div', attrs: {}, style,
@@ -2853,6 +3342,22 @@
     if (shadow) registerRoot(shadow);
 
     const nextChain = chain.concat([{ el, node }]);
+
+    // A closed <details> hides its own content, so every child would be filtered as
+    // hidden and the export would render a disclosure widget with nothing inside it
+    // — it opens, and stays empty. Opening it for the duration of the child walk
+    // fixes that; the export keeps `open` absent, so it still renders closed and
+    // works natively with no help from us.
+    // Only when the engine actually hides that content: current Chrome lays a closed
+    // details' children out and hides ::details-content instead, so this costs
+    // nothing and touches nothing there. Older engines used display:none on the
+    // children, and on those it is the difference between a working disclosure and
+    // an empty one.
+    let detailsOpened = false;
+    if (tag === 'details' && !el.hasAttribute('open') && detailsHidesContent(el)) {
+      try { el.setAttribute('open', ''); detailsOpened = true; } catch (_) { detailsOpened = false; }
+    }
+
     const childNodes = collectChildNodes(el, shadow);
     const collapses = !/^(pre|pre-wrap|pre-line|break-spaces)$/.test(cs.whiteSpace);
     const dropsWhitespace = /^(flex|grid|inline-flex|inline-grid|table|table-row|table-row-group|none)$/.test(cs.display);
@@ -2869,6 +3374,7 @@
       }
     }
 
+    try {
     for (const child of expanded) {
       if (child.nodeType === 3) {
         const text = normalizeText(child.nodeValue, collapses, dropsWhitespace, child);
@@ -2886,12 +3392,30 @@
 
       // opacity:0 is usually animation state, so it is deliberately NOT filtered.
       if (childCs.display === 'none' || childCs.visibility === 'hidden') {
-        ctx.diag.hiddenDropped += 1; ctx.diag.dropped += 1; continue;
+        // A closed dropdown is the one hidden subtree worth having. Dropping it is
+        // why an exported dropdown had nothing to open: the menu was never in the
+        // capture at all. Everything else hidden stays dropped — capturing every
+        // hidden subtree on a page would bloat exports and carry along content
+        // nobody selected.
+        if (looksLikeHiddenMenu(child)) {
+          ctx.diag.hiddenMenus += 1;
+          const built = await captureClosedMenu(child, cs, ctx, nextChain);
+          if (built) { node.ch.push(built); continue; }
+        }
+        ctx.diag.hiddenDropped += 1;
+        ctx.diag.dropped += 1;
+        continue;
       }
       if (isEmptyZeroBox(child, childCs)) { ctx.diag.dropped += 1; continue; }
 
       const built = await walkElement(child, childCs, cs, ctx, nextChain, false);
       if (built) node.ch.push(built);
+    }
+
+    } finally {
+      if (detailsOpened) {
+        try { el.removeAttribute('open'); } catch (_) { /* noop */ }
+      }
     }
 
     if (tag === 'textarea' && node.attrs['data-cheater-value']) {
@@ -3316,6 +3840,77 @@
       group.items.push(item);
     }
 
+    /* ----------------------------------------------- dropdown interactivity --
+     * Two kinds of dropdown reach this point, and both end up expressed the same
+     * way — a host, a trigger and a menu sharing one id, which the writer turns
+     * into a :focus-within toggle needing no JavaScript.
+     *
+     *   in-tree  — a closed menu revealed and captured during the walk, already
+     *              carrying host/trigger/menu roles from resolveClosedMenus().
+     *   adopted  — an open portal menu captured as a separate top-level
+     *              selection, paired below. The writer synthesizes a host for it,
+     *              since the export has no ancestor containing both.
+     *
+     * Ids are minted per capture, so two selections can both produce `dd1`.
+     * Renumbering here is what keeps them distinct once merged — otherwise one
+     * trigger would open another component's menu.
+     */
+    let ddSeq = 0;
+    const visitNodes = (node, fn) => {
+      if (!node) return;
+      fn(node);
+      for (const child of node.ch || []) visitNodes(child, fn);
+    };
+    for (const item of work) {
+      const remap = new Map();
+      visitNodes(item.node, (node) => {
+        if (!node.ddId) return;
+        if (!remap.has(node.ddId)) remap.set(node.ddId, 'dd' + (ddSeq += 1));
+        node.ddId = remap.get(node.ddId);
+      });
+    }
+
+    /**
+     * Pair each adopted menu with the selection it was adopted from.
+     *
+     * Assigned before normalizePosition so a dd menu keeps `absolute` and is
+     * anchored under its trigger rather than being pushed into normal flow.
+     */
+    for (let i = 0; i < work.length; i += 1) {
+      const item = work[i];
+      const diag = item.sel && item.sel.diag;
+      if (!diag || !diag.adopted || !item.node) continue;
+
+      // Prefer the recorded trigger; fall back to the nearest earlier non-adopted
+      // selection for payloads captured before adoptedFrom existed.
+      const from = item.sel.adoptedFrom;
+      let trigger = null;
+      for (let j = i - 1; j >= 0; j -= 1) {
+        const candidate = work[j];
+        if (!candidate.node) continue;
+        if (from && candidate.sel && candidate.sel.el === from) { trigger = candidate; break; }
+        if (!from && !(candidate.sel && candidate.sel.diag && candidate.sel.diag.adopted)) {
+          trigger = candidate;
+          break;
+        }
+      }
+      if (!trigger) continue;
+
+      // This selection may already be the host of its own in-tree closed menu. That
+      // wiring is complete and its descendants reference the id, so it wins; the
+      // adopted menu still renders, just without a toggle of its own.
+      if (trigger.node.ddId && trigger.node.ddRole !== 'trigger') continue;
+
+      // One trigger can own more than one overlay (a menu plus its tooltip), so an
+      // existing id is reused rather than overwritten — otherwise the first menu
+      // would be left pointing at an id nothing else shares.
+      const id = trigger.node.ddId || 'dd' + (ddSeq += 1);
+      trigger.node.ddId = id;
+      trigger.node.ddRole = 'trigger';
+      item.node.ddId = id;
+      item.node.ddRole = 'menu';
+    }
+
     const nodes = [];
     let wrapped = 0;
     for (const group of groups) {
@@ -3366,6 +3961,18 @@
     if (!node) return null;
     if (item.position !== 'absolute' && item.position !== 'fixed') return null;
 
+    // A paired dropdown menu is the one case where absolute positioning is what we
+    // want: it hangs off the synthetic wrapper, directly under its trigger.
+    // Neutralizing it here would drop the menu into normal flow, where it stops
+    // reading as a dropdown at all.
+    if (node.ddRole === 'menu') {
+      node.inline = Object.assign({}, node.inline, {
+        position: 'absolute', top: '100%', left: '0', right: 'auto', bottom: 'auto'
+      });
+      item.sel.diag.positionNormalized = true;
+      return null;
+    }
+
     item.sel.diag.positionNormalized = true;
     node.inline = Object.assign({}, node.inline, POSITION_NEUTRAL);
 
@@ -3409,6 +4016,408 @@
    * gestures have to be rejected rather than interleaved — two walks writing to
    * state.selections at once would produce a half-built selection set.
    */
+  /* ======================================================================== *
+   * SECTION: attached overlays (portal-rendered menus)
+   *
+   * A modern dropdown does not put its menu inside the trigger. React, Radix, MUI
+   * and friends render it through a PORTAL — appended to <body> and positioned
+   * over the trigger — so the menu is not a descendant of anything you would think
+   * to select. Capturing the trigger's subtree therefore captures no menu, which
+   * is why open dropdowns still came out empty.
+   *
+   * So the capture has to look outside the selection, and it does that in three
+   * ways, most reliable first: explicit ARIA wiring, the native popover registry,
+   * and finally geometry.
+   * ======================================================================== */
+
+  // Explicit wiring, most precise first. `aria-describedby` catches tooltips and
+  // help bubbles, which are the same problem in a smaller costume.
+  const REFERENCE_ATTRS = ['aria-controls', 'aria-owns', 'popovertarget', 'aria-describedby'];
+
+  const FLOATING_SELECTOR = [
+    '[role="menu"]', '[role="listbox"]', '[role="dialog"]', '[role="tooltip"]',
+    '[role="grid"]', '[role="tree"]', '[data-radix-popper-content-wrapper]',
+    '[class*="dropdown"]', '[class*="menu"]', '[class*="popover"]', '[class*="popper"]',
+    '[class*="autocomplete"]', '[class*="combobox"]', '[class*="tooltip"]', '[class*="flyout"]'
+  ].join(',');
+
+  /** Does the selection contain something that is currently open? */
+  function hasOpenTrigger(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const check = (node) => {
+      if (!node.getAttribute) return false;
+      if (node.getAttribute('aria-expanded') === 'true') return true;
+      if (node.hasAttribute('aria-haspopup') && node.getAttribute('aria-expanded') !== 'false') return true;
+      return tagOf(node) === 'details' && node.hasAttribute('open');
+    };
+    if (check(el)) return true;
+    try {
+      for (const node of el.querySelectorAll('[aria-expanded],[aria-haspopup],details[open]')) {
+        if (check(node)) return true;
+      }
+    } catch (_) { /* noop */ }
+    return false;
+  }
+
+  function overlayIsPlausible(el, candidate, explicit) {
+    if (!candidate || candidate.nodeType !== 1 || isOurs(candidate)) return false;
+    if (candidate === el || el.contains(candidate) || candidate.contains(el)) return false;
+
+    let cs;
+    try { cs = getComputedStyle(candidate); } catch (_) { return false; }
+    if (!isVisible(candidate, cs)) return false;
+
+    const rect = rectOf(candidate);
+    if (rect.width < 8 || rect.height < 8) return false;
+
+    // A layer covering most of the viewport is a modal or a backdrop rather than
+    // this control's menu, and adopting it would drag half the page along. When the
+    // component told us explicitly which element it controls, a dialog-sized layer
+    // is a legitimate answer, so the ceiling is higher.
+    const ceiling = explicit ? 0.9 : 0.6;
+    if (areaOf(rect) > vw() * vh() * ceiling) return false;
+    return true;
+  }
+
+  function isPositionedLayer(candidate) {
+    try {
+      const position = getComputedStyle(candidate).position;
+      return position === 'absolute' || position === 'fixed';
+    } catch (_) { return false; }
+  }
+
+  /** document plus every shadow root we know about — portals hide in both. */
+  function overlayScopes() {
+    const scopes = [document];
+    for (const root of state.shadowRoots) scopes.push(root);
+    return scopes;
+  }
+
+  function queryAllScopes(selector) {
+    const out = [];
+    for (const scope of overlayScopes()) {
+      try {
+        for (const node of scope.querySelectorAll(selector)) out.push(node);
+      } catch (_) { /* a bad selector in one scope must not stop the rest */ }
+    }
+    return out;
+  }
+
+  /** Is this floating layer anchored to the selection, i.e. does it belong to it? */
+  function overlayIsAnchoredTo(el, candidate) {
+    let cs;
+    try { cs = getComputedStyle(candidate); } catch (_) { return false; }
+    if (cs.position !== 'absolute' && cs.position !== 'fixed') return false;
+
+    const a = rectOf(el);
+    const b = rectOf(candidate);
+
+    // Horizontal overlap, and vertically adjacent (menus open just below or above
+    // their trigger) or directly on top of it.
+    const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+    if (overlapX < Math.min(a.width, b.width) * 0.25) return false;
+
+    const gapBelow = b.top - a.bottom;
+    const gapAbove = a.top - b.bottom;
+    const overlaps = b.top < a.bottom && b.bottom > a.top;
+    return overlaps || (gapBelow >= -4 && gapBelow <= 32) || (gapAbove >= -4 && gapAbove <= 32);
+  }
+
+  /**
+   * Everything currently open that belongs to this selection.
+   * Read-only: nothing is clicked, nothing on the page is altered.
+   */
+  const MAX_ADOPTED = 4;
+
+  function isHiddenNow(el) {
+    let cs;
+    try { cs = getComputedStyle(el); } catch (_) { return true; }
+    return cs.display === 'none' || cs.visibility === 'hidden';
+  }
+
+  /**
+   * Briefly reveal a closed menu so it can be captured, and hand back a function
+   * that puts the page back exactly as it was.
+   *
+   * A closed dropdown is `display:none`, and a `display:none` subtree has no
+   * geometry at all — every rect reads 0x0, so icons inside menu rows would export
+   * as zero-sized holes and any rect-derived sizing would be wrong. Reading it
+   * while it is laid out is the only way to capture it faithfully.
+   *
+   * This is the one place the extension touches the page's own elements, so it is
+   * deliberately narrow: it changes only the declarations that do the hiding, fires
+   * no events (unlike synthetic clicks, which can submit forms or navigate), and
+   * restores in a `finally`. The menu may flash visible for a few milliseconds.
+   *
+   * Returns null when the element cannot be revealed, in which case nothing was
+   * changed and the caller should fall back to dropping it.
+   */
+  function revealTemporarily(el) {
+    const style = el.style;
+    const undo = [];
+
+    const saveInline = (prop) => {
+      undo.push({
+        kind: 'inline', prop,
+        value: style.getPropertyValue(prop),
+        priority: style.getPropertyPriority(prop)
+      });
+    };
+    const restore = () => {
+      // Reverse order, so a class re-added after its own removal cannot be undone
+      // by an earlier step.
+      for (let i = undo.length - 1; i >= 0; i -= 1) {
+        const step = undo[i];
+        if (step.kind === 'inline') {
+          style.removeProperty(step.prop);
+          if (step.value) style.setProperty(step.prop, step.value, step.priority);
+        } else if (step.kind === 'attr') {
+          el.setAttribute('hidden', step.value == null ? '' : step.value);
+        } else if (step.kind === 'class') {
+          el.classList.add(step.cls);
+        }
+      }
+    };
+
+    try {
+      // 1. The hidden attribute, and inline hiding declarations. Between them these
+      //    cover how most libraries actually close a menu.
+      if (el.hasAttribute('hidden')) {
+        undo.push({ kind: 'attr', value: el.getAttribute('hidden') });
+        el.removeAttribute('hidden');
+      }
+      for (const prop of ['display', 'visibility', 'opacity']) {
+        if (style.getPropertyValue(prop)) { saveInline(prop); style.removeProperty(prop); }
+      }
+      if (!isHiddenNow(el)) return restore;
+
+      // 2. Hidden by a stylesheet rule instead. Removing the class that does it lets
+      //    the real cascade produce the menu's true open layout — better than forcing
+      //    a value, which would flatten a flex menu to a block. State-looking class
+      //    names are tried first so we strip `is-collapsed` rather than `.menu`.
+      const classes = Array.from(el.classList);
+      const ordered = classes.filter((c) => STATE_CLASS_RE.test(c))
+        .concat(classes.filter((c) => !STATE_CLASS_RE.test(c)));
+      for (const cls of ordered) {
+        el.classList.remove(cls);
+        if (!isHiddenNow(el)) { undo.push({ kind: 'class', cls }); return restore; }
+        el.classList.add(cls);
+      }
+
+      // 3. Last resort: force it open. `block` rather than a guess at the author's
+      //    intent — a vertical menu of rows still stacks correctly, it just loses
+      //    any flex gap.
+      saveInline('display'); saveInline('visibility'); saveInline('opacity');
+      style.setProperty('display', 'block', 'important');
+      style.setProperty('visibility', 'visible', 'important');
+      style.setProperty('opacity', '1', 'important');
+      if (!isHiddenNow(el)) return restore;
+
+      restore();
+      return null;
+    } catch (_) {
+      try { restore(); } catch (_e) { /* noop */ }
+      return null;
+    }
+  }
+
+  /**
+   * The element you would click to open this menu.
+   *
+   * Explicit ARIA wiring first, then the menu naming its own trigger, then document
+   * order — a menu's trigger is almost always a preceding sibling, or inside one.
+   */
+  function findMenuTrigger(menuEl, rootEl) {
+    const root = rootEl && rootEl.nodeType === 1 ? rootEl : document.documentElement;
+    const escape = (value) => (window.CSS && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, ''));
+    const usable = (el) => el && el !== menuEl && !menuEl.contains(el) && root.contains(el);
+
+    // 1. Something points at this menu.
+    if (menuEl.id) {
+      const safe = escape(menuEl.id);
+      const selector = REFERENCE_ATTRS.map((attr) => '[' + attr + '~="' + safe + '"]').join(',');
+      try {
+        for (const candidate of root.querySelectorAll(selector)) {
+          if (usable(candidate)) return candidate;
+        }
+        if (root.matches && root.matches(selector) && usable(root)) return root;
+      } catch (_) { /* malformed id */ }
+    }
+
+    // 2. The menu points at its trigger.
+    for (const attr of ['aria-labelledby', 'aria-owns', 'aria-activedescendant']) {
+      const value = menuEl.getAttribute && menuEl.getAttribute(attr);
+      if (!value) continue;
+      for (const id of value.split(/\s+/)) {
+        if (!id) continue;
+        const target = findById(id, menuEl);
+        if (usable(target)) return target;
+      }
+    }
+
+    // 3. Document order: the nearest preceding sibling that is, or contains, a
+    //    trigger — walking up a level at a time for menus nested deeper than the
+    //    trigger, which is common once a library wraps things in layout divs.
+    const triggerIn = (el) => {
+      if (!el || el.nodeType !== 1 || menuEl.contains(el)) return null;
+      try {
+        if (el.matches(TRIGGER_SELECTOR)) return el;
+        const inner = el.querySelector(TRIGGER_SELECTOR);
+        if (inner && !menuEl.contains(inner)) return inner;
+      } catch (_) { /* noop */ }
+      return null;
+    };
+
+    let current = menuEl;
+    for (let depth = 0; depth < 4 && current && current !== root.parentElement; depth += 1) {
+      for (let sib = current.previousElementSibling; sib; sib = sib.previousElementSibling) {
+        const found = triggerIn(sib);
+        if (usable(found)) return found;
+      }
+      const parent = current.parentElement;
+      if (!parent) break;
+      // The parent itself may be the trigger (a clickable wrapper).
+      if (parent !== root && triggerIn(parent) === parent && usable(parent)) return parent;
+      current = parent;
+      if (current === root) break;
+    }
+
+    return null;
+  }
+
+  /**
+   * True when this floating layer already declares a relationship with some trigger
+   * outside the selection.
+   *
+   * Geometry alone cannot tell two dropdowns apart when they happen to sit near
+   * each other — on a filter bar with several menus, or wherever a second menu
+   * renders close to the first. If the layer names its own trigger (or a trigger
+   * elsewhere names the layer), that beats proximity: it belongs to that one, and
+   * adopting it here would staple a stranger's menu onto this capture.
+   *
+   * Only consulted for the geometry pass. Explicit wiring is handled earlier and
+   * is always trusted.
+   */
+  function ownedByAnotherTrigger(el, candidate) {
+    if (!candidate || !candidate.getAttribute) return false;
+
+    // Forward: the layer points back at its own trigger.
+    for (const attr of ['aria-labelledby', 'aria-owns', 'aria-controls']) {
+      const value = candidate.getAttribute(attr);
+      if (!value) continue;
+      for (const id of value.split(/\s+/)) {
+        if (!id) continue;
+        const target = findById(id, candidate);
+        // A layer pointing into the selection is ours; one pointing anywhere else
+        // is not. A dangling id proves nothing either way.
+        if (target && target !== el && !el.contains(target) && !target.contains(el)) return true;
+      }
+    }
+
+    // Reverse: some other trigger on the page points at this layer.
+    if (candidate.id) {
+      const escape = (value) => (window.CSS && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, ''));
+      const safe = escape(candidate.id);
+      const selector = REFERENCE_ATTRS.map((attr) => '[' + attr + '~="' + safe + '"]').join(',');
+      let owners = [];
+      try { owners = queryAllScopes(selector); } catch (_) { owners = []; }
+      for (const owner of owners) {
+        if (owner !== el && !el.contains(owner) && !owner.contains(el)) return true;
+      }
+    }
+
+    return false;
+  }
+
+  function findAttachedOverlays(el) {
+    const found = [];
+    const seen = new Set();
+    const add = (candidate, why, explicit) => {
+      if (!candidate || seen.has(candidate) || found.length >= MAX_ADOPTED) return;
+      if (!overlayIsPlausible(el, candidate, explicit)) return;
+      seen.add(candidate);
+      found.push({ el: candidate, why });
+    };
+
+    // 1. Explicit wiring. When a component says which element it controls, that is
+    //    an exact answer and no geometry is needed.
+    const triggers = [el];
+    try {
+      for (const node of el.querySelectorAll('[aria-controls],[aria-owns],[popovertarget]')) {
+        triggers.push(node);
+      }
+    } catch (_) { /* noop */ }
+
+    for (const trigger of triggers) {
+      if (!trigger.getAttribute) continue;
+      for (const attr of REFERENCE_ATTRS) {
+        const value = trigger.getAttribute(attr);
+        if (!value) continue;
+        for (const id of value.split(/\s+/)) {
+          if (id) add(findById(id, trigger), attr, true);
+        }
+      }
+    }
+
+    // 2. Reverse wiring. Plenty of libraries do it the other way round — the menu
+    //    carries aria-labelledby pointing back at its trigger, and the trigger says
+    //    nothing. Restricted to positioned layers so this finds popovers rather than
+    //    ordinary page text that happens to reference the selection.
+    const ids = [];
+    if (el.id) ids.push(el.id);
+    try {
+      for (const node of el.querySelectorAll('[id]')) {
+        if (node.id) ids.push(node.id);
+        if (ids.length >= 30) break;
+      }
+    } catch (_) { /* noop */ }
+
+    if (ids.length) {
+      const escape = (value) => (window.CSS && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, ''));
+      const selector = ids.map((id) => {
+        const safe = escape(id);
+        return '[aria-labelledby~="' + safe + '"],[aria-controls~="' + safe + '"],' +
+               '[aria-describedby~="' + safe + '"]';
+      }).join(',');
+      for (const candidate of queryAllScopes(selector)) {
+        if (seen.has(candidate) || !isPositionedLayer(candidate)) continue;
+        add(candidate, 'reverse-aria', true);
+      }
+    }
+
+    // 3. Native popovers that are actually showing.
+    for (const pop of queryAllScopes('[popover]')) {
+      let open = false;
+      try { open = pop.matches(':popover-open'); } catch (_) { open = false; }
+      if (open) add(pop, 'popover', true);
+    }
+
+    // 4. MODAL dialogs only. showModal() promotes a dialog to the top layer, where
+    //    it is genuinely detached from whatever opened it. A plain <dialog open> sits
+    //    in normal flow and is captured the ordinary way if it is inside the
+    //    selection — adopting those would attach a stray dialog to every capture on
+    //    the page.
+    for (const dialog of queryAllScopes('dialog[open]')) {
+      let modal = false;
+      try { modal = dialog.matches(':modal'); } catch (_) { modal = false; }
+      if (modal) add(dialog, 'modal', true);
+    }
+
+    // 5. Geometry, last and least trusted, and only when the selection actually has
+    //    something open — otherwise every floating tooltip on the page qualifies.
+    if (hasOpenTrigger(el)) {
+      for (const candidate of queryAllScopes(FLOATING_SELECTOR)) {
+        if (seen.has(candidate)) continue;
+        if (ownedByAnotherTrigger(el, candidate)) continue;
+        if (overlayIsPlausible(el, candidate, false) && overlayIsAnchoredTo(el, candidate)) {
+          add(candidate, 'anchored', false);
+        }
+      }
+    }
+
+    return found;
+  }
+
   async function addSelection(el, replace) {
     if (!el) return;
     if (state.capturing) return;
@@ -3450,6 +4459,52 @@
 
     const diag = describeSelection(el, raw);
     state.selections.push({ el, raw, diag });
+    renderSelection();
+
+    await adoptAttachedOverlays(el);
+  }
+
+  /**
+   * Pull in any open portal-rendered menu belonging to this selection.
+   *
+   * Added as ordinary extra selections rather than grafted into the trigger's tree:
+   * they get the same capture, the same position normalization (so an absolutely
+   * positioned menu lands in flow under its trigger instead of pinned to a corner
+   * of <body>) and their own diagnostics row, which is what makes it visible that
+   * adoption happened at all.
+   */
+  async function adoptAttachedOverlays(el) {
+    let overlays;
+    try { overlays = findAttachedOverlays(el); } catch (_) { return; }
+    if (!overlays.length) return;
+
+    for (const overlay of overlays) {
+      if (state.selections.some((s) => s.el === overlay.el ||
+          s.el.contains(overlay.el) || overlay.el.contains(s.el))) continue;
+      if (state.capturing) break;
+
+      state.capturing = true;
+      let raw = null;
+      try {
+        raw = await captureRaw(overlay.el, {
+          onProgress: (fraction) => showProgress('Extracting attached menu', Math.min(fraction, 0.99))
+        });
+      } catch (_) {
+        raw = null;
+      } finally {
+        state.capturing = false;
+        hideProgress();
+      }
+
+      if (!raw || !raw.node) continue;
+      const diag = describeSelection(overlay.el, raw);
+      diag.adopted = overlay.why;
+      // Recorded explicitly so the export can pair this menu with its trigger by
+      // identity. Adjacency in the selection list happens to hold today, but that
+      // is an accident of when adoption runs, not something to depend on.
+      state.selections.push({ el: overlay.el, raw, diag, adoptedFrom: el });
+      toast('Also captured the attached menu (' + overlay.why + ')');
+    }
     renderSelection();
   }
 
@@ -3507,11 +4562,17 @@
       iconsLost: 0,
       pixelsRecovered: 0,
       pixelsFailed: 0,
+      hiddenMenus: 0,
+      closedMenusWired: 0,
+      framesInlined: 0,
+      framesPixels: 0,
+      nativeSelects: 0,
       nodes: 0,
       styleCount: Object.keys(finalized.styles).length,
       pseudoCount: Object.keys(finalized.pseudos).length,
       hoverCount: finalized.hovers.length,
       wrapperCount: Object.keys(finalized.wrappers).length,
+      adoptedOverlays: state.selections.filter((s) => s.diag && s.diag.adopted).length,
       selections: state.selections.map((s) => s.diag),
       frames: 1
     };
@@ -3555,6 +4616,7 @@
       try {
         chrome.storage.sync.get({ shortcuts: null }, (result) => {
           state.shortcuts = (result && result.shortcuts) || DEFAULT_SHORTCUTS;
+          renderMode();                       // the hint names the grab key
           resolve(state.shortcuts);
         });
       } catch (_) {
@@ -3609,34 +4671,78 @@
   }
 
   function activate() {
-    if (state.active) return;
+    if (state.active) { setPaused(false); return; }
     state.active = true;
+    state.paused = false;
     state.styleSheetCache = null;
+    state.frameDocs = new Set();
     buildUI();
     applyCursor();
-    try {
-      chrome.runtime.sendMessage({ type: 'CHEATER_ACTIVE', active: true }, () => {
-        void chrome.runtime.lastError;   // badge state only; nothing to recover
-      });
-    } catch (_) { /* noop */ }
+    reportActiveState();
   }
 
   function deactivate() {
     state.active = false;
+    state.paused = false;
     state.hovered = null;
     clearSelection();
     teardownUI();
     destroyProbe();
     removeCursor();
+    reportActiveState();
+  }
+
+  /**
+   * Hand the page back without losing the selection.
+   *
+   * The overlay and the crosshair go away and every interception stops, so the
+   * page behaves exactly as it normally would: menus open, tabs switch, popovers
+   * appear. Selections made so far are kept, so you can pause, open a menu, resume
+   * and add it to what you already had.
+   */
+  function setPaused(paused) {
+    if (!state.active) return false;
+    const next = !!paused;
+    if (next === state.paused) return true;        // no spurious toasts
+    state.paused = next;
+
+    // The outline layers are hidden via a host class rather than by hiding the
+    // host itself: the toast lives in the same shadow root, and hiding the host
+    // would make the "Paused" message — the one thing you need to see — invisible.
+    if (ui.host) ui.host.classList.toggle(PREFIX + 'paused', state.paused);
+
+    if (state.paused) {
+      // The outline stays: hover is how you aim the grab key. Only the crosshair
+      // goes, since the page's own cursors should be visible while you use it.
+      removeCursor();
+      toast('Interact mode — the page has your clicks. Open a menu or hover it, then ' +
+        shortcutLabel((state.shortcuts || DEFAULT_SHORTCUTS).grab) + ' captures what you are pointing at.');
+    } else {
+      applyCursor();
+      renderSelection();
+      toast('Select mode — clicks select again');
+    }
+    renderMode();
+    reportActiveState();
+    return true;
+  }
+
+  function reportActiveState() {
     try {
-      chrome.runtime.sendMessage({ type: 'CHEATER_ACTIVE', active: false }, () => {
-        void chrome.runtime.lastError;
-      });
+      chrome.runtime.sendMessage(
+        { type: 'CHEATER_ACTIVE', active: state.active, paused: state.paused },
+        () => { void chrome.runtime.lastError; }   // badge state only
+      );
     } catch (_) { /* noop */ }
   }
 
   function onPointerMove(event) {
+    // Deliberately still runs while interacting. This listener never intercepts
+    // anything — it only reads — and the outline it draws is the only thing telling
+    // you what the grab key would capture. Killing it in interact mode is what made
+    // hover-revealed menus impossible to capture at all.
     if (!state.active) return;
+    avoidPointer(event.clientX, event.clientY);
     const target = hitTarget(event);
 
     if (!target) {
@@ -3667,7 +4773,7 @@
    * sequence takes the element before the page can react to it.
    */
   function onPointerDown(event) {
-    if (!state.active) return;
+    if (!state.active || state.paused) return;
     if (event.button !== undefined && event.button !== 0) return;   // left button only
 
     const target = hitTarget(event);
@@ -3692,7 +4798,8 @@
    * navigation, no menu opening, no focus change.
    */
   function swallowInteraction(event) {
-    if (!state.active) return;
+    // While paused the page owns its own events — that is the entire point.
+    if (!state.active || state.paused) return;
     const path = (event.composedPath && event.composedPath()) || [];
     for (const node of path) {
       if (node && node.nodeType === 1 && isOurs(node)) return;   // our own chrome
@@ -3722,7 +4829,7 @@
   }
 
   function onWheel(event) {
-    if (!state.active || !state.hovered) return;
+    if (!state.active || state.paused || !state.hovered) return;
     if (!shouldWalkOnWheel(event)) return;              // let the page scroll
     event.preventDefault();
     event.stopPropagation();
@@ -3744,6 +4851,32 @@
       requestExport();
       return;
     }
+    // Checked before the active/paused guards below, since its whole job is to
+    // toggle that state.
+    if (matchesShortcut(event, shortcuts.pause)) {
+      if (state.active) {
+        event.preventDefault();
+        event.stopPropagation();
+        setPaused(!state.paused);
+      }
+      return;
+    }
+    // Grab: capture what the cursor is over, with no click at all.
+    //
+    // This is what makes a hover-revealed menu capturable. Such a menu closes the
+    // instant the pointer leaves it, so any gesture involving the mouse — clicking
+    // it, or reaching for a button — destroys the thing being captured. A key does
+    // not move the pointer. Works in both modes, since it is strictly better than
+    // clicking whenever the page reacts to clicks.
+    if (matchesShortcut(event, shortcuts.grab)) {
+      if (state.active) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+        grabHovered();
+      }
+      return;
+    }
     if (matchesShortcut(event, shortcuts.history)) {
       event.preventDefault();
       sendToWorker({ type: 'CHEATER_OPEN_HISTORY' }).then((result) => {
@@ -3759,6 +4892,10 @@
     }
 
     if (!state.active) return;
+
+    // Paused means hands off entirely: no Escape, no arrows. Pages close menus on
+    // Escape, and stealing it would shut the thing being captured.
+    if (state.paused) return;
 
     // Escape is only swallowed while we are actually active with something to
     // clear — the page's own Escape handling is otherwise untouched.
@@ -3782,6 +4919,26 @@
       ensureNavAnchor(subject);
       navTo(event.key === 'ArrowUp' ? navUp() : navDown());
     }
+  }
+
+  /**
+   * Capture whatever the pointer is over right now.
+   *
+   * Uses smart expansion like a click does, so pointing at a menu row still gives
+   * the menu. Alt held takes the exact node instead, matching Alt+Click.
+   */
+  async function grabHovered(exact) {
+    if (!state.active) return false;
+    const target = state.hovered;
+    if (!target) {
+      toast('Nothing under the cursor — point at something and the outline will show what gets captured.');
+      return false;
+    }
+    const chosen = exact ? target : smartExpand(target);
+    resetNav(chosen);
+    await addSelection(chosen, true);
+    showHover(chosen);
+    return true;
   }
 
   async function selectBody() {
@@ -3924,6 +5081,11 @@
         sendResponse({ ok: true, frame: location.href });
         return true;
 
+      case 'CHEATER_PAUSE':
+        sendResponse({ ok: setPaused(message.paused === undefined ? !state.paused : !!message.paused),
+                       paused: state.paused });
+        return true;
+
       case 'CHEATER_CLEAR':
         deactivate();
         sendResponse({ ok: true });
@@ -3949,6 +5111,7 @@
         sendResponse({
           ok: true,
           active: state.active,
+          paused: state.paused,
           count: state.selections.length,
           isFrame: window.top !== window
         });
@@ -4012,6 +5175,12 @@
   window.__cheater = {
     activate: activate,
     deactivate: deactivate,
+    setPaused: setPaused,
+    grabHovered: grabHovered,
+    revealTemporarily: revealTemporarily,
+    findMenuTrigger: findMenuTrigger,
+    findAttachedOverlays: findAttachedOverlays,
+    hasOpenTrigger: hasOpenTrigger,
     smartExpand: smartExpand,
     isStructural: isStructural,
     isLeafish: isLeafish,

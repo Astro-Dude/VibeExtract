@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cheater — iframe fixture</title>
+<!--
+  Every iframe used to become a flat screenshot crop, same-origin ones included. It
+  looked right and carried no DOM, so "rebuild this in React" had nothing to work
+  from. A same-origin frame is readable and belongs in the export as real markup;
+  a cross-origin one genuinely cannot be read from here and pixels are the only
+  truthful fallback.
+
+  The cross-origin cases point at port 8932, which the test runner serves alongside
+  8931 precisely so "cross-origin" is real rather than simulated.
+-->
+<style>
+  body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:24px;background:#f8fafc;color:#0f172a}
+  h2{font:600 12px ui-monospace,monospace;color:#64748b;margin:26px 0 8px;text-transform:uppercase;letter-spacing:.06em}
+  .card{padding:14px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;display:inline-block}
+  iframe{border:1px solid #cbd5e1;border-radius:6px;background:#fff}
+</style>
+</head>
+<body>
+
+<!-- 1. srcdoc: same-origin, its own stylesheet, nothing to fetch. -->
+<h2>1 · srcdoc frame with its own stylesheet</h2>
+<div class="card" data-test="frame-srcdoc-host">
+  <iframe data-test="frame-srcdoc" width="320" height="130" title="Pricing summary"
+    srcdoc="&lt;style&gt;
+      body{margin:0;font:13px/1.5 system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:12px}
+      .row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #1e293b}
+      .row:last-child{border-bottom:0}
+      .total{color:#fbbf24;font-weight:600}
+    &lt;/style&gt;
+    &lt;div class='row'&gt;&lt;span&gt;Subtotal&lt;/span&gt;&lt;span&gt;$248.00&lt;/span&gt;&lt;/div&gt;
+    &lt;div class='row'&gt;&lt;span&gt;Tax&lt;/span&gt;&lt;span&gt;$19.84&lt;/span&gt;&lt;/div&gt;
+    &lt;div class='row total'&gt;&lt;span&gt;Total&lt;/span&gt;&lt;span&gt;$267.84&lt;/span&gt;&lt;/div&gt;"></iframe>
+</div>
+
+<!-- 2. A same-origin frame loaded over HTTP from the same port. -->
+<h2>2 · same-origin frame loaded by URL</h2>
+<div class="card" data-test="frame-same-host">
+  <iframe data-test="frame-same" src="frame-child.html" width="320" height="130" title="Same origin child"></iframe>
+</div>
+
+<!-- 3. Genuinely cross-origin: different port, so the browser blocks us the same
+     way it would block a third-party widget. Must degrade to pixels, not break. -->
+<h2>3 · cross-origin frame (different port)</h2>
+<div class="card" data-test="frame-cross-host">
+  <iframe data-test="frame-cross" src="http://127.0.0.1:8932/test/frame-child.html"
+          width="320" height="130" title="Cross origin child"></iframe>
+</div>
+
+<!-- 4. Nested: a same-origin frame containing another same-origin frame. -->
+<h2>4 · nested same-origin frames</h2>
+<div class="card" data-test="frame-nested-host">
+  <iframe data-test="frame-nested" src="frame-parent.html" width="360" height="200" title="Nested"></iframe>
+</div>
+
+<!-- 5. about:blank written into by script — same-origin, no src at all. -->
+<h2>5 · about:blank frame written by script</h2>
+<div class="card" data-test="frame-blank-host">
+  <iframe data-test="frame-blank" width="320" height="90" title="Blank"></iframe>
+</div>
+
+<!-- 6. A sandboxed frame WITHOUT allow-same-origin: sandboxing forces a unique
+     opaque origin, so it is unreadable even though the src is ours. -->
+<h2>6 · sandboxed frame (opaque origin, unreadable)</h2>
+<div class="card" data-test="frame-sandbox-host">
+  <iframe data-test="frame-sandbox" src="frame-child.html" sandbox=""
+          width="320" height="130" title="Sandboxed"></iframe>
+</div>
+
+<!-- 7. A frame scrolled down, so content is offset inside its own viewport. -->
+<h2>7 · scrolled frame</h2>
+<div class="card" data-test="frame-scrolled-host">
+  <iframe data-test="frame-scrolled" src="frame-tall.html" width="320" height="120" title="Scrolled"></iframe>
+</div>
+
+<!-- 8. A frame that is the ONLY thing selected, to prove a frame works as the
+     capture root rather than only as a descendant. -->
+<h2>8 · frame as the selection root</h2>
+<iframe data-test="frame-root" src="frame-child.html" width="320" height="130" title="Root frame"></iframe>
+
+<!-- 9. A whole document, far taller than its frame. The export has to carry ALL of
+     it and stay scrollable — a fixed box with overflow:hidden means everything past
+     the first screenful is in the markup but unreachable. -->
+<h2>9 · a whole document, much taller than its frame</h2>
+<div class="card" data-test="frame-doc-host">
+  <iframe data-test="frame-doc" src="frame-doc.html" width="340" height="160" title="Whole document"></iframe>
+</div>
+
+<script>
+  // Write into the blank frame after load, so it exercises the no-src path.
+  (function () {
+    var f = document.querySelector('[data-test="frame-blank"]');
+    var doc = f.contentDocument;
+    doc.open();
+    doc.write('<style>body{margin:0;font:13px system-ui,sans-serif;padding:14px;' +
+      'background:#ecfdf5;color:#065f46}b{color:#047857}</style>' +
+      '<div>Written by <b>document.write</b> into about:blank</div>');
+    doc.close();
+  })();
+
+  // Scroll the tall frame so its content is offset inside its own viewport.
+  window.addEventListener('load', function () {
+    var f = document.querySelector('[data-test="frame-scrolled"]');
+    try { f.contentWindow.scrollTo(0, 90); } catch (_) { /* noop */ }
+  });
+</script>
+</body>
+</html>

@@ -36,6 +36,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .dot{width:7px;height:7px;background:var(--mut2);flex:0 0 auto}
 .dot.on{background:var(--amber);box-shadow:0 0 0 2px rgba(255,178,36,.18)}
 .dot.bad{background:var(--red)}
+.dot.paused{background:#8AB4F8;box-shadow:0 0 0 2px rgba(138,180,248,.2)}
 .status-text{font-family:var(--mono);font-size:11px;color:var(--mut)}
 .status-text b{color:var(--fg);font-weight:400}
 
@@ -199,6 +200,20 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
       </div>
       <div class="edrow" data-action="fullpage">
         <span class="name">Full page</span>
+        <label class="chk"><input type="checkbox" data-mod="primary"><span class="mod-label"></span></label>
+        <label class="chk"><input type="checkbox" data-mod="shift"><span>Shift</span></label>
+        <label class="chk"><input type="checkbox" data-mod="alt"><span class="alt-label"></span></label>
+        <input class="cap" data-key readonly>
+      </div>
+      <div class="edrow" data-action="grab">
+        <span class="name">Grab hovered</span>
+        <label class="chk"><input type="checkbox" data-mod="primary"><span class="mod-label"></span></label>
+        <label class="chk"><input type="checkbox" data-mod="shift"><span>Shift</span></label>
+        <label class="chk"><input type="checkbox" data-mod="alt"><span class="alt-label"></span></label>
+        <input class="cap" data-key readonly>
+      </div>
+      <div class="edrow" data-action="pause">
+        <span class="name">Interact mode</span>
         <label class="chk"><input type="checkbox" data-mod="primary"><span class="mod-label"></span></label>
         <label class="chk"><input type="checkbox" data-mod="shift"><span>Shift</span></label>
         <label class="chk"><input type="checkbox" data-mod="alt"><span class="alt-label"></span></label>

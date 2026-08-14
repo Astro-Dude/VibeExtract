@@ -25,7 +25,7 @@ async (page) => {
       runtime: {
         onMessage: { addListener() {} },
         sendMessage(_msg, cb) { if (typeof cb === 'function') cb({ ok: true }); },
-        getManifest: () => ({ version: '1.0.0' }),
+        getManifest: () => ({ version: '3.1.0' }),
         lastError: null
       },
       storage: {
@@ -50,6 +50,8 @@ async (page) => {
     const tag = (el) => (el && el.tagName ? el.tagName.toLowerCase() : String(el));
     const cap = async (el) => { C.clearSelection(); await C.addSelection(el, true); return C.buildPayload(); };
     const html = (payload) => window.CheaterHtmlWriter.build(payload, { fontMode: 'relative' });
+    const live = (payload) => window.CheaterHtmlWriter.build(payload,
+      { fontMode: 'relative', interactive: true });
     // A style set lands either in a shared class rule (`prop: value;`) or inline
     // (`prop:value`), so declaration assertions must be whitespace-agnostic.
     const decl = (source, prop, value) =>
@@ -650,6 +652,250 @@ async (page) => {
       ok('the icon report names the family, glyph kind and decision',
         Object.keys(mi.diagnostics.iconFamilies || {}).some((k) => /^Material Icons \| ligature \| linked$/.test(k)),
         JSON.stringify(mi.diagnostics.iconFamilies));
+    }
+
+
+
+    /* ---------------- portal-rendered menus (adopted from outside) ---------- */
+    {
+      // The menu is a child of <body>, not of the trigger, so no amount of subtree
+      // walking finds it. This is the actual reason real-world dropdowns exported
+      // empty.
+      const trigger = q('portal-trigger');
+      const menu = q('portal-menu');
+      ok('portal: the fixture really is portal-rendered',
+        menu.parentElement === document.body && !trigger.contains(menu),
+        'menu parent = ' + (menu.parentElement && menu.parentElement.tagName));
+
+      ok('portal: the open trigger is recognised', C.hasOpenTrigger(trigger) === true);
+
+      const found = C.findAttachedOverlays(trigger);
+      ok('portal: the menu is found from outside the selection',
+        found.length === 1 && found[0].el === menu,
+        'found ' + found.length + ': ' + found.map((f) => f.why).join(','));
+      ok('portal: found via explicit aria-controls, not guesswork',
+        found[0] && found[0].why === 'aria-controls', found[0] && found[0].why);
+
+      // The decoy floating tooltip elsewhere on the page must be left alone.
+      ok('portal: an unrelated floating layer is NOT adopted',
+        !found.some((f) => f.el === q('decoy-tip')), 'adopted the decoy tooltip');
+
+      const payload = await cap(trigger);
+      const source = html(payload);
+      ok('portal: the menu ends up in the export',
+        source.includes('Healthcare') && source.includes('Financial Services'),
+        'menu options missing from the export');
+      ok('portal: adoption is reported', payload.diagnostics.adoptedOverlays === 1,
+        'adopted=' + payload.diagnostics.adoptedOverlays);
+      ok('portal: the adopted row is labelled in diagnostics',
+        (payload.diagnostics.selections || []).some((sel) => sel.adopted === 'aria-controls'),
+        JSON.stringify((payload.diagnostics.selections || []).map((s2) => s2.adopted)));
+      ok('portal: the menu keeps its own styling',
+        source.includes('box-shadow') && source.includes('#eef2ff'));
+      ok('portal: absolute offsets neutralized so it is not pinned to a corner',
+        !/(^|[;"])(top|left):\s*\d{3,}px/.test(source),
+        (source.match(/(top|left):\s*\d+px/g) || []).slice(0, 4).join(' | '));
+
+      /* -- interactive mode: the exported dropdown must actually open ---------- */
+      const nodes = payload.nodes || [];
+      const ids = nodes.map((n) => n.ddId).filter(Boolean);
+      ok('interactive: trigger and menu are paired',
+        ids.length === 2 && ids[0] === ids[1], JSON.stringify(ids));
+      ok('interactive: roles assigned',
+        nodes.map((n) => n.ddRole).join(',') === 'trigger,menu',
+        nodes.map((n) => n.ddRole).join(','));
+
+      const openable = live(payload);
+      ok('interactive: pair wrapped in one positioned container',
+        /<div class="cheater-dd cheater-dd-wrap cheater-dd\d+">/.test(openable),
+        (openable.match(/<div class="cheater-dd[^"]*"/) || ['none'])[0]);
+      ok('interactive: menu hidden until focus', openable.includes(
+        '.cheater-dd .cheater-dd-menu{display:none}'));
+      // Scoped to this pair's own menu class, so nested dropdowns stay independent.
+      ok('interactive: menu revealed on :focus-within',
+        /\.cheater-dd(\d+):focus-within \.cheater-dd\1-menu\{display:[a-z-]+\}/.test(openable),
+        (openable.match(/\.cheater-dd\d+:focus-within[^}]*\}/) || ['no rule'])[0]);
+      ok('interactive: ships no JavaScript', !/<script/i.test(openable),
+        'a script tag leaked into the export');
+      // The <button> trigger is focusable already; a synthetic tabindex would be
+      // redundant and would change its tab order.
+      ok('interactive: native button trigger gets no tabindex',
+        !/<button[^>]*tabindex/.test(openable));
+      ok('interactive: static mode is unchanged', !source.includes('cheater-dd'));
+
+      // Behaviour, not just markup. Rendered under the SAME sandbox export.html
+      // uses — allow-scripts deliberately absent — because a CSS-only mechanism
+      // that quietly needed script would be useless exactly where it is shown.
+      const probe = document.createElement('iframe');
+      probe.setAttribute('sandbox', 'allow-same-origin allow-popups allow-popups-to-escape-sandbox');
+      probe.style.cssText = 'position:fixed;left:-9999px;width:600px;height:400px';
+      probe.srcdoc = openable;
+      document.body.appendChild(probe);
+      await new Promise((resolve) => { probe.onload = resolve; });
+      const pdoc = probe.contentDocument;
+      const pwin = pdoc.defaultView;
+      const pmenu = pdoc.querySelector('.cheater-dd-menu');
+      const ptrigger = pdoc.querySelector('.cheater-dd-trigger');
+      const shown = () => pwin.getComputedStyle(pmenu).display;
+
+      // Guard against a false pass: confirm the sandbox really does block script.
+      const canary = pdoc.createElement('script');
+      canary.textContent = 'window.__cheaterCanary = 1';
+      pdoc.body.appendChild(canary);
+      ok('interactive: the preview sandbox really blocks scripts',
+        pwin.__cheaterCanary !== 1, 'a script executed inside the sandbox');
+
+      ok('interactive: menu is closed on load', shown() === 'none', 'display=' + shown());
+      ptrigger.focus();
+      ok('interactive: focusing the trigger OPENS the menu', shown() !== 'none',
+        'display stayed ' + shown());
+      ok('interactive: the open menu has real height',
+        pmenu.getBoundingClientRect().height > 0);
+      ok('interactive: the menu sits under its trigger, not in a page corner',
+        pmenu.getBoundingClientRect().top >= ptrigger.getBoundingClientRect().bottom - 2,
+        'menu top ' + Math.round(pmenu.getBoundingClientRect().top) +
+        ' vs trigger bottom ' + Math.round(ptrigger.getBoundingClientRect().bottom));
+      ptrigger.blur();
+      ok('interactive: blurring closes it again', shown() === 'none', 'display=' + shown());
+      probe.remove();
+    }
+    {
+      // Without an open trigger, geometry must not start hoovering up page furniture.
+      const trigger = q('portal-trigger');
+      trigger.setAttribute('aria-expanded', 'false');
+      const closedFound = C.findAttachedOverlays(q('chip'));
+      ok('portal: nothing is adopted for a selection with no open trigger',
+        closedFound.length === 0, 'found ' + closedFound.length);
+      trigger.setAttribute('aria-expanded', 'true');
+    }
+
+
+    /* ---------------- the rest of the "rendered elsewhere" family ----------- */
+    {
+      // Reverse wiring: the trigger says nothing, the menu points back at it.
+      const found = C.findAttachedOverlays(q('rev-trigger'));
+      ok('reverse-aria: a menu that points back at its trigger is found',
+        found.some((f) => f.el === q('rev-menu') && f.why === 'reverse-aria'),
+        JSON.stringify(found.map((f) => f.why)));
+
+      const source = html(await cap(q('rev-trigger')));
+      ok('reverse-aria: its options reach the export',
+        source.includes('Semiconductors') && source.includes('Software'));
+    }
+    {
+      // aria-describedby tooltips are the same problem in a smaller costume.
+      const found = C.findAttachedOverlays(q('tip-trigger'));
+      ok('describedby: a tooltip is adopted',
+        found.some((f) => f.el === q('rev-tip') && f.why === 'aria-describedby'),
+        JSON.stringify(found.map((f) => f.why)));
+    }
+    {
+      // A NON-modal <dialog open> sits in normal flow, so it must never be attached
+      // to unrelated captures. Only showModal() dialogs are top-layer.
+      const found = C.findAttachedOverlays(q('chip'));
+      ok('modal: a plain <dialog open> is not adopted by an unrelated selection',
+        !found.some((f) => f.el === q('dialog')),
+        JSON.stringify(found.map((f) => f.why)));
+    }
+    {
+      // Native <select>: options are real DOM and survive; the popup never can.
+      const payload = await cap(q('f-select'));
+      const source = html(payload);
+      ok('native select: options are captured',
+        source.includes('Second is selected') && /<option/.test(source));
+      ok('native select: selected option preserved', /<option[^>]*\sselected/.test(source));
+      ok('native select: reported so the OS-popup limit is stated',
+        payload.diagnostics.nativeSelects >= 1,
+        'nativeSelects=' + payload.diagnostics.nativeSelects);
+    }
+    {
+      // Adoption is capped so a pathological page cannot balloon a capture.
+      ok('adoption is capped', C.findAttachedOverlays(document.body).length <= 4,
+        'found ' + C.findAttachedOverlays(document.body).length);
+    }
+
+    /* ---------------- closed dropdowns + pause mode ------------------------ */
+    {
+      // A closed menu is display:none, and a display:none subtree has no geometry,
+      // so it used to be dropped — which is exactly why an exported dropdown had
+      // nothing to open. It is now revealed for the length of the capture and put
+      // back. run-dropdowns.js covers the mechanism across every way of hiding a
+      // menu; this checks the fixture case still behaves.
+      const payload = await cap(q('closed-dd'));
+      const source = html(payload);
+
+      ok('closed dropdown: the trigger is captured', source.includes('Actions'));
+      ok('closed dropdown: the hidden menu is captured too',
+        source.includes('Duplicate'), 'a closed menu should now come along');
+      ok('closed dropdown: it is reported', payload.diagnostics.hiddenMenus >= 1,
+        'hiddenMenus=' + payload.diagnostics.hiddenMenus);
+      ok('closed dropdown: wired to its trigger',
+        payload.diagnostics.closedMenusWired >= 1,
+        'closedMenusWired=' + payload.diagnostics.closedMenusWired);
+      ok('closed dropdown: the page is left closed again',
+        getComputedStyle(q('closed-dd-menu') || document.body).display === 'none' ||
+        !q('closed-dd-menu'),
+        'the menu was left visible on the page');
+    }
+    {
+      // Opened, the very same dropdown captures completely — which is what pause
+      // mode exists to make reachable.
+      const host = q('closed-dd');
+      host.setAttribute('data-open', 'true');
+      q('closed-dd-btn').setAttribute('aria-expanded', 'true');
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+      const payload = await cap(host);
+      const source = html(payload);
+      ok('opened dropdown: the whole menu is captured',
+        source.includes('Duplicate') && source.includes('Archive') && source.includes('Delete'),
+        'menu items missing');
+      ok('opened dropdown: menu keeps its elevation and position',
+        source.includes('box-shadow') && /position:\s*absolute/.test(source));
+      ok('opened dropdown: nothing is reported as a skipped menu',
+        !payload.diagnostics.hiddenMenus, 'hiddenMenus=' + payload.diagnostics.hiddenMenus);
+
+      host.setAttribute('data-open', 'false');
+      q('closed-dd-btn').setAttribute('aria-expanded', 'false');
+    }
+    {
+      // Pause hands the page back: no interception, no outlines, selection kept.
+      C.clearSelection();
+      await C.addSelection(q('chip'), true);
+      const heldBefore = C.state.selections.length;
+
+      ok('pause: engages only while active', C.setPaused(true) === true);
+      ok('pause: state flag set', C.state.paused === true);
+      ok('pause: selections are kept across a pause',
+        C.state.selections.length === heldBefore, 'held=' + C.state.selections.length);
+
+      // A click while paused must reach the page, not be swallowed into a selection.
+      let pageSawClick = false;
+      const probe = q('closed-dd-btn');
+      const listener = () => { pageSawClick = true; };
+      probe.addEventListener('click', listener);
+      probe.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      probe.removeEventListener('click', listener);
+      ok('pause: the page receives its own clicks again', pageSawClick,
+        'the click was still being swallowed');
+
+      // A host class, never `display:none` on the host itself: the toast and the
+      // mode toolbar live in the same shadow root, and hiding the host would hide
+      // the one thing telling you which mode you are in.
+      ok('interact: signalled by a host class, not by hiding the host',
+        !!document.querySelector('.cheater-root.cheater-paused'),
+        'expected .cheater-root.cheater-paused so the toolbar and toasts stay visible');
+
+      // The outline stays alive in interact mode — it is what the grab key aims at.
+      // run-dropdowns.js covers the hover-and-grab flow end to end.
+      ok('interact: hover tracking keeps running',
+        typeof C.grabHovered === 'function' && C.state.active === true);
+
+      C.setPaused(false);
+      ok('resume: state flag cleared', C.state.paused === false);
+      ok('resume: still active with the selection intact',
+        C.state.active === true && C.state.selections.length === heldBefore,
+        'active=' + C.state.active + ' held=' + C.state.selections.length);
     }
 
     /* ------------------- pixel recovery (the universal fidelity fallback) --- */

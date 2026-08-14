@@ -25,6 +25,7 @@
     toon: '',
     width: 'fit',
     surface: 'dark',
+    interactive: true,
     tab: 'preview'
   };
 
@@ -100,6 +101,13 @@
     if (diag.iconNodes) pills.push(pill('icons', diag.iconNodes));
     if (diag.iconsRasterized) pills.push(pill('icons rasterized', diag.iconsRasterized));
     if (diag.iconsLost) pills.push(pill('icons lost', diag.iconsLost, 'bad'));
+    if (diag.adoptedOverlays) pills.push(pill('menus adopted', diag.adoptedOverlays));
+    if (diag.framesInlined) pills.push(pill('iframes inlined', diag.framesInlined));
+    if (diag.framesPixels) pills.push(pill('iframes as pixels', diag.framesPixels, 'warn'));
+    if (diag.closedMenusWired) pills.push(pill('closed menus captured', diag.closedMenusWired));
+    if (diag.hiddenMenus > (diag.closedMenusWired || 0)) {
+      pills.push(pill('closed menus skipped', diag.hiddenMenus - diag.closedMenusWired, 'warn'));
+    }
     if (diag.pixelsRecovered) pills.push(pill('pixels recovered', diag.pixelsRecovered));
     if (diag.pixelsFailed) pills.push(pill('pixels failed', diag.pixelsFailed, 'warn'));
     pills.push(pill('fonts', diag.fontsBundled || 0));
@@ -114,6 +122,7 @@
     var rows = (diag.selections || []).map(function (sel) {
       var badges = '';
       if (sel.wrapped) badges += '<span class="badge w">wrapped</span>';
+      if (sel.adopted) badges += '<span class="badge w">adopted · ' + escapeHtml(sel.adopted) + '</span>';
       if (sel.dropped) badges += '<span class="badge d">' + sel.dropped + ' dropped</span>';
       return '<div class="row">' +
         '<span class="tag">' + escapeHtml(sel.tag || '?') + '</span>' +
@@ -181,6 +190,49 @@
         'CDN font (' + linkedPua.map(function (k) { return k.split(' | ')[0]; }).join(', ') + '). ' +
         'Codepoints are font-specific, so this may render the wrong glyph or none at all.' });
     }
+    if (diag.adoptedOverlays) {
+      notes.push({ text: diag.adoptedOverlays + ' open menu/popover(s) were rendered outside the ' +
+        'selected element (a portal at <body> level, as React/Radix/MUI do) and were pulled in ' +
+        'automatically. Their absolute offsets were neutralized so they sit under their trigger ' +
+        'in the export rather than pinned to a page corner.' });
+    }
+    if (!el('menu-seg').classList.contains('hidden')) {
+      notes.push({ text: state.interactive
+        ? 'Menus are Interactive: click a captured trigger and its menu opens, click away and it ' +
+          'closes. This is pure CSS (:focus-within) — no JavaScript ships in the export, so it also ' +
+          'works in the sandboxed preview. Clicking the trigger a second time will not close the ' +
+          'menu, since focus stays on it. Switch to Static for markup with no added wrapper.'
+        : 'Menus are Static: the captured menu renders in its open state as a plain sibling. ' +
+          'Switch to Interactive to make it open on click instead.' });
+    }
+    if (diag.nativeSelects) {
+      notes.push({ text: diag.nativeSelects + ' native <select> element(s): the <option> list is real ' +
+        'DOM and came along, so the control works in the export. The OPEN popup cannot be captured by ' +
+        'anything — the browser draws it as operating-system chrome that exists nowhere in the page.' });
+    }
+    if (diag.framesInlined) {
+      notes.push({ text: diag.framesInlined + ' same-origin iframe(s) had their real content pulled ' +
+        'into the export, stylesheets included — not a screenshot. The frame is emitted as a clipped ' +
+        '<div> rather than an <iframe>, since an <iframe> would reload the live URL instead of ' +
+        'showing what was captured.' });
+    }
+    if (diag.framesPixels) {
+      notes.push({ warn: true, text: diag.framesPixels + ' iframe(s) are cross-origin (or sandboxed ' +
+        'into an opaque origin) and cannot be read from the page at all — the browser forbids it. ' +
+        'Those became cropped pixels, so they look right but carry no markup. To get their DOM, ' +
+        'open the frame in its own tab and capture it there.' });
+    }
+    if (diag.closedMenusWired) {
+      notes.push({ text: diag.closedMenusWired + ' closed dropdown(s) were captured by briefly ' +
+        'revealing the menu on the page and putting it back. A closed menu is display:none, and a ' +
+        'display:none subtree has no geometry at all, so reading it while it is laid out is the only ' +
+        'way to get it right. Switch Menus to Interactive to make them open on click in the export.' });
+    }
+    if (diag.hiddenMenus > (diag.closedMenusWired || 0)) {
+      notes.push({ warn: true, text: (diag.hiddenMenus - diag.closedMenusWired) +
+        ' hidden menu subtree(s) could not be revealed and were skipped. Open the menu on the page ' +
+        'first, then select the trigger — an already-open menu is captured directly.' });
+    }
     if (diag.pixelsRecovered) {
       notes.push({ text: diag.pixelsRecovered + ' element(s) could not be reproduced from source ' +
         '(unreadable canvas, cross-origin frame, an icon whose font cannot travel, or a box that ' +
@@ -230,7 +282,9 @@
     var frame = el('frame');
     var html = HtmlWriter.build(state.payload, {
       fontMode: 'inline',            // accurate preview needs the real binaries
-      surface: state.surface
+      surface: state.surface,
+      interactive: state.interactive,
+      linkTarget: '_blank'           // so links are clickable inside the sandbox
     });
     state.previewHtml = html;
     frame.srcdoc = html;
@@ -455,9 +509,13 @@
     var nodeCount = (state.payload.diagnostics || {}).nodes || 0;
     var scale = nodeCount ? nodeCount.toLocaleString() + ' nodes' : '';
 
+    syncMenuToggle();
+
     setStage('Building HTML', 25, scale);
     await paint();
-    state.savedHtml = HtmlWriter.build(state.payload, { fontMode: 'relative', surface: 'auto' });
+    state.savedHtml = HtmlWriter.build(state.payload, {
+      fontMode: 'relative', surface: 'auto', interactive: state.interactive
+    });
 
     setStage('Building TOON', 45, formatBytes(byteLength(state.savedHtml)) + ' of HTML');
     await paint();
@@ -676,6 +734,41 @@
       b.classList.toggle('sel', b === button);
     });
     fitFrame();
+  });
+
+  /**
+   * The Static/Interactive control only appears when there is something for it to
+   * do — a trigger paired with its captured menu. Interactive is the default,
+   * since a dropdown you can open is the point of having captured it.
+   *
+   * TOON is deliberately never interactive: the wrapper and its rules are
+   * scaffolding, and scaffolding in the LLM handoff just reads as noise.
+   */
+  function syncMenuToggle() {
+    // Asking the writer keeps this honest: a closed in-tree dropdown is nested
+    // inside its host, so scanning only top-level nodes here would hide the control
+    // on exactly the captures that need it most.
+    var paired = HtmlWriter.hasDropdowns(state.payload);
+    el('menu-seg').classList.toggle('hidden', !paired);
+    if (!paired) state.interactive = false;
+  }
+
+  el('menu-seg').addEventListener('click', function (event) {
+    var button = event.target.closest('button');
+    if (!button) return;
+    state.interactive = button.dataset.menus === 'interactive';
+    el('menu-seg').querySelectorAll('button').forEach(function (b) {
+      b.classList.toggle('sel', b === button);
+    });
+    // savedHtml feeds the HTML tab and the downloads too, so it is rebuilt
+    // rather than invalidated.
+    state.savedHtml = HtmlWriter.build(state.payload, {
+      fontMode: 'relative', surface: 'auto', interactive: state.interactive
+    });
+    renderCode();
+    updateCodeMeta();
+    renderDiagnostics();             // the note describes the current mode
+    renderPreview();
   });
 
   el('surface-seg').addEventListener('click', function (event) {

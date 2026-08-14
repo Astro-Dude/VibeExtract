@@ -338,6 +338,40 @@ th{background:#f4f4f5;font-weight:600}
    different glyph — or nothing — at this codepoint. */
 .alias-icon{font-family:"Google Material Icons";font-size:20px;color:#e8eaed;
   display:inline-block;width:20px;height:20px}
+
+/* --- 40. CLOSED dropdown (the "dropdowns are not coming" case) ------------- */
+/* A closed menu is display:none, so it is filtered out of the capture and the
+   export simply lacks it. The diagnostics must recognise this and say so. */
+.cdd{position:relative;display:inline-block}
+.cdd-menu{
+  display:none;position:absolute;top:calc(100% + 5px);left:0;min-width:170px;
+  background:#fff;border:1px solid #e4e4e7;border-radius:8px;padding:5px;
+  box-shadow:0 10px 24px -6px rgba(0,0,0,.22);
+}
+.cdd[data-open="true"] .cdd-menu{display:block}
+
+/* --- 41. PORTAL-rendered menu (the Morningstar / React-Radix pattern) ------- */
+/* The menu is appended to <body>, not to the trigger, and positioned over it.
+   Selecting the trigger's subtree can never contain it — the capture has to look
+   outside the selection to find it. */
+.pdd-trigger{
+  display:inline-flex;align-items:center;gap:8px;padding:9px 13px;font:inherit;font-size:14px;
+  border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;cursor:pointer;
+}
+.pdd-trigger::after{content:"";width:0;height:0;border-left:4px solid transparent;
+  border-right:4px solid transparent;border-top:5px solid #64748b}
+.portal-menu{
+  position:absolute;z-index:9000;min-width:210px;background:#fff;
+  border:1px solid #e2e8f0;border-radius:8px;padding:6px;
+  box-shadow:0 12px 28px -8px rgba(15,23,42,.28);font:13px system-ui;
+}
+.portal-menu div[role="option"]{padding:7px 10px;border-radius:5px;color:#0f172a}
+.portal-menu div[role="option"][aria-selected="true"]{background:#eef2ff;color:#1d4ed8;font-weight:500}
+/* A decoy floating tooltip elsewhere on the page: must NOT be adopted. */
+.decoy-tip{
+  position:absolute;z-index:9000;left:8px;bottom:8px;background:#111827;color:#fff;
+  padding:5px 9px;border-radius:5px;font:12px system-ui;
+}
 </style>
 </head>
 <body>
@@ -539,6 +573,39 @@ th{background:#f4f4f5;font-weight:600}
   </div>
 </section>
 
+<section id="s-reverse">
+  <h2>42 · reverse-wired menu (menu points at trigger) + modal + tooltip</h2>
+  <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;min-height:52px">
+    <!-- The trigger says nothing; the portal menu carries aria-labelledby back to
+         it. Radix and friends wire it this way round. -->
+    <button class="pdd-trigger" id="rev-trigger" data-test="rev-trigger"
+            aria-haspopup="listbox" aria-expanded="true">Choose an industry gr…</button>
+    <!-- Tooltip found via aria-describedby on the trigger. -->
+    <button class="pdd-trigger" data-test="tip-trigger" aria-describedby="rev-tip">Help</button>
+  </div>
+</section>
+
+<section id="s-portal">
+  <h2>41 · portal-rendered dropdown — menu lives at &lt;body&gt; level</h2>
+  <div data-test="portal-host" style="min-height:56px">
+    <button class="pdd-trigger" data-test="portal-trigger"
+            aria-haspopup="listbox" aria-expanded="true" aria-controls="portal-menu-1">Technology</button>
+  </div>
+  <div class="decoy-tip" data-test="decoy-tip">unrelated floating tooltip</div>
+</section>
+
+<section id="s-closed-dd">
+  <h2>40 · closed dropdown — menu is display:none until opened</h2>
+  <div class="cdd" data-test="closed-dd" data-open="false">
+    <button class="dd-btn" data-test="closed-dd-btn" aria-expanded="false" aria-haspopup="menu">Actions</button>
+    <div class="cdd-menu" role="menu" data-test="closed-dd-menu">
+      <div class="dd-item" role="menuitem">Duplicate</div>
+      <div class="dd-item" role="menuitem">Archive</div>
+      <div class="dd-item" role="menuitem">Delete</div>
+    </div>
+  </div>
+</section>
+
 <section id="s-holes">
   <h2>38 · unrepresentable visuals — recovered as pixels</h2>
   <div class="hole-row" data-test="hole-row">
@@ -709,6 +776,66 @@ th{background:#f4f4f5;font-weight:600}
 </section>
 
 <script>
+/* ---- reverse-wired portal menu + a describedby tooltip ------------------- */
+(function () {
+  var trigger = document.getElementById('rev-trigger');
+  if (!trigger) return;
+  var menu = document.createElement('div');
+  menu.className = 'portal-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.setAttribute('aria-labelledby', 'rev-trigger');   // reverse wiring
+  menu.setAttribute('data-test', 'rev-menu');
+  menu.innerHTML =
+    '<div role="option" aria-selected="false">Semiconductors</div>' +
+    '<div role="option" aria-selected="false">Software — Infrastructure</div>';
+  document.body.appendChild(menu);
+
+  var tip = document.createElement('div');
+  tip.id = 'rev-tip';
+  tip.className = 'decoy-tip';
+  tip.setAttribute('data-test', 'rev-tip');
+  tip.textContent = 'Filters the index list';
+  document.body.appendChild(tip);
+
+  var place = function () {
+    var r = trigger.getBoundingClientRect();
+    menu.style.top = (r.bottom + window.scrollY + 4) + 'px';
+    menu.style.left = (r.left + window.scrollX) + 'px';
+    var t = document.querySelector('[data-test="tip-trigger"]').getBoundingClientRect();
+    tip.style.position = 'absolute';
+    tip.style.left = (t.left + window.scrollX) + 'px';
+    tip.style.top = (t.bottom + window.scrollY + 4) + 'px';
+    tip.style.bottom = 'auto';
+  };
+  place();
+  addEventListener('scroll', place, true);
+  addEventListener('resize', place);
+})();
+
+/* ---- portal menu: appended to <body>, positioned under its trigger ------- */
+(function () {
+  var trigger = document.querySelector('[data-test="portal-trigger"]');
+  if (!trigger) return;
+  var menu = document.createElement('div');
+  menu.className = 'portal-menu';
+  menu.id = 'portal-menu-1';
+  menu.setAttribute('role', 'listbox');
+  menu.setAttribute('data-test', 'portal-menu');
+  menu.innerHTML =
+    '<div role="option" aria-selected="true">Technology</div>' +
+    '<div role="option" aria-selected="false">Healthcare</div>' +
+    '<div role="option" aria-selected="false">Financial Services</div>';
+  document.body.appendChild(menu);
+  var place = function () {
+    var r = trigger.getBoundingClientRect();
+    menu.style.top = (r.bottom + window.scrollY + 4) + 'px';
+    menu.style.left = (r.left + window.scrollX) + 'px';
+  };
+  place();
+  addEventListener('scroll', place, true);
+  addEventListener('resize', place);
+})();
+
 /* ---- private icon font, registered from JS so no CSS rule exists --------- */
 (function () {
   if (typeof FontFace !== 'function') return;
