@@ -25,7 +25,7 @@ async (page) => {
       runtime: {
         onMessage: { addListener() {} },
         sendMessage(_msg, cb) { if (typeof cb === 'function') cb({ ok: true }); },
-        getManifest: () => ({ version: '3.1.0' }),
+        getManifest: () => ({ version: '3.2.0' }),
         lastError: null
       },
       storage: {

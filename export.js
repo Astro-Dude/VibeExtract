@@ -103,6 +103,7 @@
     if (diag.iconsLost) pills.push(pill('icons lost', diag.iconsLost, 'bad'));
     if (diag.adoptedOverlays) pills.push(pill('menus adopted', diag.adoptedOverlays));
     if (diag.framesInlined) pills.push(pill('iframes inlined', diag.framesInlined));
+    if (diag.framesRemote) pills.push(pill('cross-origin frames', diag.framesRemote));
     if (diag.framesPixels) pills.push(pill('iframes as pixels', diag.framesPixels, 'warn'));
     if (diag.closedMenusWired) pills.push(pill('closed menus captured', diag.closedMenusWired));
     if (diag.hiddenMenus > (diag.closedMenusWired || 0)) {
@@ -163,6 +164,12 @@
           '<script>/<noscript>). Use Alt+Click for exact targeting if you want the filtered nodes included.'
       });
     }
+    if (state.payload.keyframes && Object.keys(state.payload.keyframes).length) {
+      notes.push({ text: Object.keys(state.payload.keyframes).length + ' CSS animation(s) came ' +
+        'along with their @keyframes, so spinners, shimmers and pulses still move in the export. ' +
+        'Only the keyframes actually referenced are included. An animation captured mid-cycle ' +
+        'restarts from its first frame.' });
+    }
     if (diag.fontsBundled) {
       notes.push({ text: diag.fontsBundled + ' self-hosted font file(s) bundled — unzip the fonts next to the saved HTML so it renders offline with matching text widths.' });
     }
@@ -218,11 +225,18 @@
         '<div> rather than an <iframe>, since an <iframe> would reload the live URL instead of ' +
         'showing what was captured.' });
     }
+    if (diag.framesRemote) {
+      notes.push({ text: diag.framesRemote + ' cross-origin iframe(s) were captured by asking the ' +
+        'frame to capture ITSELF. The page cannot read a cross-origin frame — the browser forbids ' +
+        'it — but Cheater runs inside every frame, so the instance in there reads its own document ' +
+        'and hands back real markup, its own stylesheets and fonts included. Its style classes are ' +
+        'renamed so they cannot collide with this page\'s.' });
+    }
     if (diag.framesPixels) {
-      notes.push({ warn: true, text: diag.framesPixels + ' iframe(s) are cross-origin (or sandboxed ' +
-        'into an opaque origin) and cannot be read from the page at all — the browser forbids it. ' +
-        'Those became cropped pixels, so they look right but carry no markup. To get their DOM, ' +
-        'open the frame in its own tab and capture it there.' });
+      notes.push({ warn: true, text: diag.framesPixels + ' iframe(s) could not be read OR reached: ' +
+        'nothing answered from inside them. That means no content script is running there — a PDF ' +
+        'viewer, a frame sandboxed without allow-scripts, or one that never loaded. Those became ' +
+        'cropped pixels, so they look right but carry no markup.' });
     }
     if (diag.closedMenusWired) {
       notes.push({ text: diag.closedMenusWired + ' closed dropdown(s) were captured by briefly ' +

@@ -105,6 +105,66 @@ one layer that accepts pointer events, so it hops to the other side rather than 
 whatever sits beneath it unhoverable. The badge turns blue in interact mode, because there a
 click is a real click.
 
+### Cross-origin iframes
+
+A cross-origin frame cannot be read by the page it sits in. The browser forbids it and no
+extension trick changes that — `contentDocument` is simply `null`.
+
+But the content script runs in **every** frame, so there is already an instance of Cheater
+inside that frame, and it reads its own document perfectly well. The parent's problem was never
+access; it was **addressing**. It holds an `<iframe>` element and needs the frameId behind it,
+and no DOM API will tell it which is which.
+
+A token handshake supplies exactly that:
+
+1. the parent posts a one-time token into the frame's window;
+2. the instance inside the frame echoes that token to the service worker, which reads the
+   **frameId off the message sender** — the browser's word, not the page's;
+3. the parent asks the worker for "whichever frame answered token X", and the worker relays a
+   capture request there.
+
+The frame captures itself and hands back a complete payload: real markup, its own stylesheets,
+its own `@font-face` binaries and Google links, its own `@keyframes`, and its own scroll height
+and backdrop — facts only that frame can observe.
+
+Two details that matter:
+
+- **Its style classes are renamed on merge.** The frame named its first shared style `.s1`
+  exactly as the parent did, so dropping its nodes in as-is would silently cross-wire the two
+  and the frame's rows would take the parent's styling. Every class it minted gets a per-frame
+  prefix (`cf1s1`), and hover selectors — which are text, not lookups — are rewritten
+  longest-name-first so renaming `.s1` cannot corrupt `.s12`.
+- **A frame answering for its parent does not start handshakes of its own**, or a page that
+  frames itself would recurse forever. Remote frames are capped at four per capture, and pixel
+  recovery is disabled inside one: the screenshot covers the whole tab while the frame's
+  coordinates are its own, so every crop would sample the wrong part of someone else's page.
+
+The page in that frame can see the postMessage, but it has no route to our worker, so it cannot
+answer on the frame's behalf. The token carries nothing.
+
+### Chrome has two kinds of "cross-origin frame"
+
+Worth knowing when reasoning about this, and the reason the test suite covers both: a different
+**port** is cross-origin but *same-site*, so it stays in the page's process; a different **host**
+is a different site and gets its own process. `contentDocument` is `null` either way, and the
+handshake works for both, because it never depends on reaching into the frame directly.
+
+### Animations
+
+`animation` used to be dropped outright, on the reasoning that replaying it would produce
+artifacts. The cost was that an animated component exported as a dead one: a spinner that does
+not spin, a skeleton that does not shimmer, a badge that should pulse sitting still.
+
+The animation longhands are now captured — and so are the `@keyframes` they reference, because
+an `animation-name` pointing at rules that did not travel animates nothing. **Only the
+referenced ones**, or a framework's entire animation library would ride along in every capture.
+Keyframes bodies are taken as authored text rather than re-serialised, since a keyframes body is
+arbitrary declarations under percentage selectors and rebuilding it only creates ways to get it
+wrong. `animation-play-state: paused` is preserved as paused — that is a deliberate state.
+
+The one honest caveat: a capture is a frozen snapshot, so an animation caught mid-cycle restarts
+from its first frame in the export.
+
 ### iframes
 
 An iframe used to become a flat screenshot crop — **including same-origin ones**. It looked
@@ -412,11 +472,9 @@ still **look** right — as images rather than markup — provided the element w
 
 - **Closed shadow roots** are unreachable from an extension's isolated world. Nothing can be
   captured inside `attachShadow({ mode: 'closed' })`.
-- **Cross-origin iframes** cannot be read from the parent page — the browser forbids it, and
-  no extension trick changes that. They become cropped pixels: right-looking, but no markup.
-  Capturing the frame in its own tab gets the DOM. A `sandbox` attribute without
-  `allow-same-origin` has the same effect even on your own URL, since sandboxing forces a
-  unique opaque origin.
+- **Frames with no content script inside them** — a PDF viewer, a frame sandboxed without
+  `allow-scripts`, one that never loaded — cannot be reached at all, so they become cropped
+  pixels: right-looking, but no markup. Ordinary cross-origin frames *are* captured; see below.
 - **Cross-origin-tainted canvases** cannot be read, by browser security design.
 - **External sprite files** (`sprite.svg#icon`) resolve only when the symbol is in the
   document; a separate file is not fetched.
@@ -622,8 +680,11 @@ scripts/toon-to-html.js  Node CLI
 test/fixtures.html       every module type on one page
 test/run-fixtures.js     189 capture assertions
 test/dropdowns.html      twelve shapes of closed dropdown
-test/iframes.html        nine iframe shapes, incl. a real second origin
+test/iframes.html        eleven iframe shapes, incl. two real cross-origin kinds
 test/run-iframes.js      71 iframe assertions
+test/run-remote.js       19 cross-origin capture assertions
+test/animations.html     seven animated components
+test/run-animations.js   29 animation assertions
 test/run-dropdowns.js    131 dropdown, interact-mode, hover-card + flyout assertions
 test/frame-tooltip.html  a chart with a hover card, inside a frame
 test/run-fonts.js        34 font-fidelity assertions
@@ -678,7 +739,7 @@ dependencies, like the rest of the repo. The suites are still plain Playwright
 They load the real content script into `test/fixtures.html` with a stubbed `chrome` API and
 assert one capture path at a time.
 
-Seven suites:
+Nine suites:
 
 - **`test/run-history.js`** — 13 assertions over the capture-history store, run in a page
   where IndexedDB behaves as it does in the worker. Covers ordering, pruning by count and by
@@ -707,6 +768,17 @@ Seven suites:
   adoption signal genuinely fails on that fixture — no ARIA wiring, no open trigger — so the
   test cannot pass for the wrong reason, then checks the card is adopted, and that an unrelated
   toast and a landmark-bearing layer are both rejected.
+- **`test/run-remote.js`** — 19 assertions over the cross-origin path. The suite itself plays
+  the service worker, because only the worker (or the CDP driver standing in for it) can address
+  a frame the parent cannot touch. It covers both kinds Chrome has — a different port, which
+  stays in-process, and a different host, which gets its own process — and asserts up front that
+  the parent genuinely cannot read either, so nothing can pass for the wrong reason. It also
+  checks a frame with no content script still degrades to pixels rather than hanging.
+- **`test/run-animations.js`** — 29 assertions over `test/animations.html`: a spinner, a pulsing
+  badge, a shimmering skeleton, delay/direction/fill-mode, an explicitly paused animation, two
+  animations on one element, and an element with only a transition that must emit no keyframes
+  at all. Behavioural where it can be: the export is rendered and the spinner's transform is
+  sampled twice to confirm it is genuinely moving.
 - **`test/run-iframes.js`** — 71 assertions over `test/iframes.html`: `srcdoc`, a same-origin
   URL, a **genuinely** cross-origin frame (the runner serves a second origin on port 8932 so it
   is real rather than simulated), nested frames, `about:blank` written by script, a sandboxed
@@ -730,7 +802,7 @@ Seven suites:
   `pointer-events:none` icon `<svg>`). Covers capture performance, progress reporting, the
   yield behaviour, overlap rejection, wheel gating and Alt+Arrow anchoring.
 
-Current status: **189/189 + 131/131 + 71/71 + 34/34 + 22/22 + 13/13 + 16/16 = 476 passing**, with every sampled
+Current status: **189/189 + 133/133 + 71/71 + 19/19 + 29/29 + 34/34 + 22/22 + 13/13 + 16/16 = 526 passing**, with every sampled
 component rendering pixel-identically to its original and a whole-page capture of the
 9,000-rule stress fixture completing in ~100ms.
 

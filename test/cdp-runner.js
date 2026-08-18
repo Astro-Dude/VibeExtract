@@ -34,7 +34,7 @@ const PORT = 8931;
 // apply the origin boundary.
 const PORT2 = 8932;
 const CDP_PORT = 9333;
-const SUITES = ['run-fixtures', 'run-dropdowns', 'run-iframes', 'run-fonts', 'run-stress', 'run-history'];
+const SUITES = ['run-fixtures', 'run-dropdowns', 'run-iframes', 'run-remote', 'run-animations', 'run-fonts', 'run-stress', 'run-history'];
 
 const CHROME_PATHS = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -74,7 +74,10 @@ function serve(port) {
       res.end(body);
     });
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
+  // No host: binds every interface, so the fixtures can reach this origin as both
+  // 127.0.0.1 (cross-origin, same process — ports do not trigger site isolation)
+  // and localhost (a different host, so a genuine out-of-process frame).
+  return new Promise((resolve) => server.listen(port, () => resolve(server)));
 }
 
 /* --------------------------------------------------------------- websocket */
@@ -135,9 +138,15 @@ function ws(url) {
     }
   });
 
-  function send(method, params) {
+  function send(method, params, sessionId) {
     const id = ++nextId;
-    const body = Buffer.from(JSON.stringify({ id, method, params: params || {} }), 'utf8');
+    const frame = { id, method, params: params || {} };
+    // Flat auto-attach multiplexes every target down one socket, addressed by
+    // sessionId. A cross-origin iframe is its own process and its own target, so
+    // this is the only way to reach inside one — which is exactly the position the
+    // extension's service worker is in.
+    if (sessionId) frame.sessionId = sessionId;
+    const body = Buffer.from(JSON.stringify(frame), 'utf8');
     const mask = crypto.randomBytes(4);
     const masked = Buffer.alloc(body.length);
     for (let i = 0; i < body.length; i += 1) masked[i] = body[i] ^ mask[i % 4];
@@ -193,10 +202,52 @@ async function newPage() {
   await conn.send('Log.enable');
 
   const pageErrors = [];
+  // Every out-of-process frame that attaches, and the init scripts to replay into
+  // each one — a script added to the page target does not reach a separate process.
+  const subtargets = [];
+  const initScripts = [];
+  // Same-process frames share the page target, so they are addressed by execution
+  // context rather than by session. Cross-origin-but-same-site frames land here.
+  const contexts = [];
+
   conn.on((msg) => {
     if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
       pageErrors.push(msg.params.entry.text);
     }
+    if (msg.method === 'Target.attachedToTarget') {
+      const { sessionId, targetInfo } = msg.params;
+      if (targetInfo.type !== 'iframe' && targetInfo.type !== 'page') return;
+      const entry = { sessionId, url: targetInfo.url, type: targetInfo.type };
+      subtargets.push(entry);
+      // Bring the new session up to the same state, then replay the init scripts so
+      // the content script exists there too — which is what all_frames does.
+      conn.send('Runtime.enable', {}, sessionId).catch(() => {});
+      conn.send('Page.enable', {}, sessionId).catch(() => {});
+      for (const source of initScripts) {
+        conn.send('Page.addScriptToEvaluateOnNewDocument', { source }, sessionId).catch(() => {});
+      }
+      conn.send('Runtime.runIfWaitingForDebugger', {}, sessionId).catch(() => {});
+    }
+    if (msg.method === 'Runtime.executionContextCreated') {
+      const ctx = msg.params.context;
+      const origin = ctx.origin || '';
+      // Only real document contexts; skip our own isolated worlds and about:blank.
+      if (ctx.auxData && ctx.auxData.frameId) {
+        contexts.push({ id: ctx.id, frameId: ctx.auxData.frameId, origin, isDefault: !!ctx.auxData.isDefault });
+      }
+    }
+    if (msg.method === 'Runtime.executionContextDestroyed') {
+      const at = contexts.findIndex((c) => c.id === msg.params.executionContextId);
+      if (at !== -1) contexts.splice(at, 1);
+    }
+    if (msg.method === 'Target.detachedFromTarget') {
+      const at = subtargets.findIndex((t) => t.sessionId === msg.params.sessionId);
+      if (at !== -1) subtargets.splice(at, 1);
+    }
+  });
+
+  await conn.send('Target.setAutoAttach', {
+    autoAttach: true, waitForDebuggerOnStart: true, flatten: true
   });
 
   async function evaluate(fn, arg) {
@@ -218,9 +269,78 @@ async function newPage() {
     _errors: pageErrors,
 
     async addInitScript(fn) {
-      await conn.send('Page.addScriptToEvaluateOnNewDocument', {
-        source: '(' + String(fn) + ')();'
+      const source = '(' + String(fn) + ')();';
+      initScripts.push(source);
+      await conn.send('Page.addScriptToEvaluateOnNewDocument', { source });
+    },
+
+    /**
+     * Load a repo file into EVERY frame, including out-of-process ones.
+     *
+     * This is what `all_frames: true` does for the real extension, and without it a
+     * cross-origin frame has no content script — so no test could ever show the
+     * cross-origin path working.
+     */
+    async addAllFramesScript(relPath) {
+      const source = fs.readFileSync(path.join(ROOT, relPath), 'utf8');
+      initScripts.push(source);
+      await conn.send('Page.addScriptToEvaluateOnNewDocument', { source });
+      for (const target of subtargets) {
+        await conn.send('Page.addScriptToEvaluateOnNewDocument', { source }, target.sessionId).catch(() => {});
+      }
+    },
+
+    /**
+     * The out-of-process frames, each with its own evaluate(). Standing in for the
+     * service worker, which is the only thing that can address them for real.
+     */
+    /**
+     * Every frame in the tab that is not the top document, each with its own
+     * evaluate() — standing in for the service worker, the only thing that can
+     * address a frame the parent page cannot touch.
+     *
+     * Two kinds, because Chrome has two: an out-of-process frame is a separate
+     * target reached by sessionId, while a cross-origin-but-same-site frame shares
+     * the page target and is reached by execution context id. Ports do not trigger
+     * site isolation, so a different port gives you the second kind.
+     */
+    async subframes() {
+      const run = async (expression, addressing) => {
+        const res = await conn.send('Runtime.evaluate', Object.assign({
+          expression, returnByValue: true, awaitPromise: true, userGesture: true
+        }, addressing.contextId ? { contextId: addressing.contextId } : {}), addressing.sessionId);
+        const details = res.result && res.result.exceptionDetails;
+        if (details) {
+          const ex = details.exception || {};
+          throw new Error(ex.description || ex.value || details.text || 'evaluate threw');
+        }
+        return res.result.result.value;
+      };
+      const wrap = (addressing) => ({
+        kind: addressing.sessionId ? 'out-of-process' : 'same-process',
+        addressing,
+        evaluate: (fn, arg) =>
+          run('(' + String(fn) + ')(' + JSON.stringify(arg === undefined ? null : arg) + ')', addressing)
       });
+
+      const out = [];
+      for (const target of subtargets) {
+        if (target.type !== 'iframe') continue;
+        const frame = wrap({ sessionId: target.sessionId });
+        try { frame.url = await frame.evaluate(() => location.href); } catch (_) { frame.url = target.url || ''; }
+        out.push(frame);
+      }
+      for (const ctx of contexts) {
+        if (!ctx.isDefault) continue;
+        const frame = wrap({ contextId: ctx.id });
+        try {
+          const info = await frame.evaluate(() => ({ href: location.href, top: window.top === window }));
+          if (info.top) continue;                    // the top document is not a subframe
+          frame.url = info.href;
+        } catch (_) { continue; }                    // a context that has already gone
+        out.push(frame);
+      }
+      return out;
     },
 
     async goto(url) {

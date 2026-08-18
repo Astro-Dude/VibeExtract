@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cheater — animation fixture</title>
+<!--
+  `animation` used to be dropped outright, on the reasoning that replaying it would
+  produce artifacts. The cost was that an animated component exported as a dead one:
+  a spinner that does not spin, a skeleton that does not shimmer, a pulsing badge
+  sitting still. Now the animation longhands are captured AND the @keyframes they
+  reference travel with them — an animation-name pointing at nothing animates nothing.
+-->
+<style>
+  body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:24px;background:#f8fafc;color:#0f172a}
+  h2{font:600 12px ui-monospace,monospace;color:#64748b;margin:24px 0 8px;text-transform:uppercase}
+  .card{display:inline-block;padding:16px;background:#fff;border:1px solid #e2e8f0;border-radius:8px}
+
+  @keyframes cheater-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes cheater-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  @keyframes cheater-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  @keyframes cheater-unused { from { color: red; } to { color: blue; } }
+
+  .spinner{
+    width:34px;height:34px;border-radius:50%;
+    border:3px solid #dbeafe;border-top-color:#1d4ed8;
+    animation: cheater-spin 900ms linear infinite;
+  }
+  .badge{
+    display:inline-block;padding:4px 10px;border-radius:999px;background:#dc2626;color:#fff;font-size:11px;
+    animation: cheater-pulse 1.6s ease-in-out infinite;
+  }
+  .skeleton{
+    width:220px;height:14px;border-radius:7px;
+    background:linear-gradient(90deg,#e2e8f0 25%,#f1f5f9 50%,#e2e8f0 75%);
+    background-size:200% 100%;
+    animation: cheater-shimmer 1.4s linear infinite;
+  }
+  .delayed{
+    width:60px;height:8px;background:#059669;border-radius:4px;
+    animation: cheater-pulse 2s ease 400ms infinite alternate both;
+  }
+  .paused-anim{
+    width:60px;height:8px;background:#7c3aed;border-radius:4px;
+    animation: cheater-pulse 2s linear infinite;
+    animation-play-state: paused;
+  }
+  .two-anims{
+    width:40px;height:40px;background:#f59e0b;border-radius:8px;
+    animation: cheater-spin 2s linear infinite, cheater-pulse 1s ease infinite;
+  }
+  .transition-only{
+    padding:8px 12px;background:#e0e7ff;border-radius:6px;transition:background-color .3s ease;
+  }
+  .transition-only:hover{background:#c7d2fe}
+</style>
+</head>
+<body>
+
+<h2>1 · spinner (infinite rotate)</h2>
+<div class="card" data-test="anim-spinner-host"><div class="spinner" data-test="anim-spinner"></div></div>
+
+<h2>2 · pulsing badge</h2>
+<div class="card" data-test="anim-badge-host"><span class="badge" data-test="anim-badge">LIVE</span></div>
+
+<h2>3 · shimmering skeleton (animated background-position)</h2>
+<div class="card" data-test="anim-skeleton-host"><div class="skeleton" data-test="anim-skeleton"></div></div>
+
+<h2>4 · delay, alternate, fill-mode</h2>
+<div class="card" data-test="anim-delayed-host"><div class="delayed" data-test="anim-delayed"></div></div>
+
+<h2>5 · explicitly paused animation</h2>
+<div class="card" data-test="anim-paused-host"><div class="paused-anim" data-test="anim-paused"></div></div>
+
+<h2>6 · two animations on one element</h2>
+<div class="card" data-test="anim-two-host"><div class="two-anims" data-test="anim-two"></div></div>
+
+<h2>7 · transition only, no animation</h2>
+<div class="card" data-test="anim-none-host"><div class="transition-only" data-test="anim-none">hover me</div></div>
+
+</body>
+</html>

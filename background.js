@@ -562,6 +562,57 @@ async function setActiveBadge(tabId, active, paused) {
  * SECTION: message router
  * ========================================================================== */
 
+/* ========================================================================== *
+ * SECTION: cross-origin frames
+ *
+ * A parent cannot read a cross-origin frame, but the content script runs in every
+ * frame, so an instance inside that frame can read it. What the parent lacks is the
+ * ADDRESS: it holds an <iframe> element and needs the frameId behind it, which no
+ * DOM API exposes.
+ *
+ * The parent posts a token into the frame; the instance there echoes the token to
+ * us, and we learn the frameId from the message sender — the browser's word, not the
+ * page's. A page inside that frame can see the token but has no route here, so it
+ * cannot answer on the frame's behalf.
+ * ========================================================================== */
+
+const REMOTE_TOKEN_TTL_MS = 30000;
+const remoteFrames = new Map();          // token -> { tabId, frameId, stamp }
+
+function rememberRemoteFrame(token, tabId, frameId) {
+  const now = Date.now();
+  for (const [key, entry] of remoteFrames) {
+    if (now - entry.stamp > REMOTE_TOKEN_TTL_MS) remoteFrames.delete(key);
+  }
+  remoteFrames.set(token, { tabId, frameId, stamp: now });
+}
+
+/**
+ * Wait briefly for a token to be claimed, then relay the capture request there.
+ *
+ * The wait exists because the parent posts the token and asks us in the same breath;
+ * the frame's echo is a separate hop and can land after the request. Polling here
+ * keeps that race out of the content script.
+ */
+async function captureRemoteFrame(token, tabId, timeoutMs) {
+  const deadline = Date.now() + Math.min(Math.max(timeoutMs || 4000, 500), 10000);
+  let entry = remoteFrames.get(token);
+  while (!entry && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    entry = remoteFrames.get(token);
+  }
+  if (!entry) return { ok: false, reason: 'no frame claimed the token' };
+  // A token is only ever valid for the tab that minted it.
+  if (tabId && entry.tabId && entry.tabId !== tabId) {
+    return { ok: false, reason: 'token belongs to another tab' };
+  }
+
+  remoteFrames.delete(token);              // single use
+  const reply = await sendToFrame(entry.tabId, entry.frameId, { type: 'CHEATER_CAPTURE_FRAME' });
+  if (!reply || !reply.payload) return { ok: false, reason: 'the frame could not capture itself' };
+  return { ok: true, payload: reply.payload, url: reply.url || null };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
 
@@ -640,6 +691,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       guard(
         fetchFontBinary({ url: message.url, path: message.path, mime: message.mime }),
         'font fetch'
+      ).then(sendResponse);
+      return true;
+
+    case 'CHEATER_FRAME_HELLO': {
+      // The frameId comes from the sender, so a page cannot claim to be a frame it
+      // is not. Anonymous senders (no tab) are ignored.
+      const tabId = sender.tab && sender.tab.id;
+      if (tabId != null && typeof message.token === 'string' && message.token) {
+        rememberRemoteFrame(message.token, tabId, sender.frameId || 0);
+      }
+      sendResponse({ ok: true });
+      return true;
+    }
+
+    case 'CHEATER_CAPTURE_REMOTE':
+      guard(
+        captureRemoteFrame(message.token, sender.tab && sender.tab.id, message.timeout),
+        'remote frame capture'
       ).then(sendResponse);
       return true;
 

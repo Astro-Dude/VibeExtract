@@ -24,7 +24,7 @@ async (page) => {
   await page.addInitScript(() => {
     window.chrome = {
       runtime: { onMessage: { addListener() {} }, sendMessage(_m, cb) { cb && cb({ ok: true }); },
-                 getManifest: () => ({ version: '3.1.0' }), lastError: null },
+                 getManifest: () => ({ version: '3.2.0' }), lastError: null },
       storage: { sync: { get(d, cb) { cb(d || {}); }, set(_v, cb) { cb && cb(); } },
                  session: { get(_k, cb) { cb({}); }, set(_v, cb) { cb && cb(); }, remove(_k, cb) { cb && cb(); } } }
     };
@@ -318,6 +318,29 @@ async (page) => {
       C.state.hovered = null;
       const empty = await C.grabHovered();
       ok('grab: refuses politely when nothing is hovered', empty === false);
+
+      /* -- the worker's reply is unwrapped correctly ------------------------- */
+      {
+        // sendToWorker resolves { value } (or { error }), so reading .grabbed off the
+        // wrapper silently yields undefined and every cross-frame grab reports
+        // failure. That shipped once; this is the guard.
+        C.clearSelection();
+        C.state.hovered = null;
+        const realSend = window.chrome.runtime.sendMessage;
+        let asked = null;
+        window.chrome.runtime.sendMessage = (msg, cb) => {
+          asked = msg;
+          if (cb) cb({ grabbed: true, frameId: 7, frame: 'https://example.com/inner' });
+        };
+        const answered = await C.requestGrab(false);
+        window.chrome.runtime.sendMessage = realSend;
+
+        ok('cross-frame: grab is asked of the worker when this frame has no hover',
+          asked && asked.type === 'CHEATER_CMD' && asked.cmd === 'grab', JSON.stringify(asked));
+        ok('cross-frame: a successful reply is READ correctly, not through the wrapper',
+          answered === true,
+          'requestGrab reported ' + answered + ' for a reply of { grabbed: true }');
+      }
 
       /* -- interact mode leaves the keyboard alone --------------------------- */
       C.setPaused(true);

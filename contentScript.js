@@ -114,6 +114,12 @@
   const MAX_HIDDEN_MENUS = 6;
 
   const PROPS = [
+    // animation. Kept as longhands so the defaults prune cleanly: animation-name
+    // computes to `none` on the overwhelming majority of elements, so nothing is
+    // emitted unless the element genuinely animates.
+    'animation-name', 'animation-duration', 'animation-timing-function',
+    'animation-delay', 'animation-iteration-count', 'animation-direction',
+    'animation-fill-mode', 'animation-play-state',
     // layout
     'display', 'position', 'top', 'right', 'bottom', 'left', 'float', 'clear',
     'z-index', 'visibility', 'isolation', 'box-sizing',
@@ -793,6 +799,10 @@
   // anything real and stops a malicious page turning one capture into a fork bomb.
   const MAX_FRAME_DEPTH = 3;
 
+  // Each remote frame is a full capture in another process, so the count is capped
+  // harder than same-origin nesting.
+  const MAX_REMOTE_FRAMES = 4;
+
   /**
    * The document inside an iframe, if this frame is actually readable from here.
    *
@@ -854,6 +864,125 @@
     } catch (_) {
       return '';
     }
+  }
+
+  /* ---------------------------------------------- cross-origin frame capture --
+   * A cross-origin frame cannot be read by the parent — the browser forbids it and
+   * no extension trick changes that. But the content script runs in EVERY frame, so
+   * the extension already has an instance inside that frame, and it can read its own
+   * document perfectly well. The parent's problem is not access, it is addressing:
+   * it holds an <iframe> element and needs the frameId that element corresponds to,
+   * which no DOM API will tell it.
+   *
+   * The handshake solves exactly that:
+   *   1. the parent posts a one-time token into the frame's window;
+   *   2. the instance inside the frame reports that token to the worker, which reads
+   *      the authoritative frameId off the message sender;
+   *   3. the parent asks the worker for "the frame that answered token X", and the
+   *      worker relays the capture request there.
+   *
+   * The token is deliberately opaque and carries nothing: the page in that frame can
+   * see the postMessage, but it has no route to our worker, so it cannot answer for
+   * the frame. The frameId comes from the browser, not from the message.
+   */
+  const REMOTE_HELLO = 'cheater-frame-hello';
+  const REMOTE_TIMEOUT_MS = 4000;
+  let remoteSeq = 0;
+
+  function mintToken() {
+    remoteSeq += 1;
+    const rand = Math.random().toString(36).slice(2, 10);
+    return 'cf' + remoteSeq + '-' + rand;
+  }
+
+  /**
+   * Ask the frame behind this element to capture itself.
+   * Returns a payload, or null when the frame has no content script to answer with
+   * (a PDF viewer, a sandboxed opaque origin, a frame that failed to load).
+   */
+  async function requestRemoteFrame(el) {
+    let target;
+    try { target = el.contentWindow; } catch (_) { target = null; }
+    if (!target) return null;
+
+    const token = mintToken();
+    try {
+      // '*' is required: the whole point is that we do not know the frame's origin.
+      // Nothing sensitive travels — just a token the frame echoes to the worker.
+      target.postMessage({ __cheater: REMOTE_HELLO, token }, '*');
+    } catch (_) {
+      return null;
+    }
+
+    // sendToWorker wraps the worker's reply as { value } (or { error }); reading the
+    // reply's own fields off the wrapper silently yields undefined every time.
+    const result = await sendToWorker({
+      type: 'CHEATER_CAPTURE_REMOTE', token, timeout: REMOTE_TIMEOUT_MS
+    });
+    const reply = result && result.value;
+    if (!reply || !reply.payload) return null;
+    return reply.payload;
+  }
+
+  /**
+   * The frame side of the handshake: echo the token to the worker, which learns our
+   * frameId from the message itself. Installed unconditionally, because a frame has
+   * to be able to answer even when selection was started in the parent.
+   */
+  function installRemoteHelloListener() {
+    window.addEventListener('message', (event) => {
+      const data = event && event.data;
+      if (!data || typeof data !== 'object' || data.__cheater !== REMOTE_HELLO) return;
+      if (typeof data.token !== 'string' || !data.token) return;
+      sendToWorker({ type: 'CHEATER_FRAME_HELLO', token: data.token });
+    }, false);
+  }
+
+  /**
+   * Capture this whole document as a standalone payload, for a parent that cannot
+   * read us. Runs through the ordinary selection machinery so fonts, faces and
+   * diagnostics are built the same way, then puts the real selection list back.
+   */
+  async function captureOwnDocumentPayload() {
+    if (!document.body) return null;
+    if (state.capturing) return null;
+
+    const saved = state.selections;
+    state.capturing = true;
+    try {
+      // noRemote: a frame answering for its parent must not start its own outward
+      // handshakes, or a page framing itself would recurse forever.
+      const raw = await captureRaw(document.body, { noPixels: true, noRemote: true });
+      if (!raw || !raw.node) return null;
+      state.selections = [{ el: document.body, raw, diag: describeSelection(document.body, raw) }];
+      const payload = buildPayload();
+      if (!payload) return null;
+
+      // Facts only this frame can observe, and that the parent needs to size and
+      // paint the box correctly.
+      const root = document.scrollingElement || document.documentElement;
+      payload.frameScrolls = !!root && root.scrollHeight > root.clientHeight + 1;
+      payload.frameBackground = ownFrameBackground();
+      payload.frameUrl = location.href;
+      return payload;
+    } catch (_) {
+      return null;
+    } finally {
+      state.selections = saved;
+      state.capturing = false;
+    }
+  }
+
+  /** This document's page background, whichever of <html>/<body> paints it. */
+  function ownFrameBackground() {
+    for (const el of [document.documentElement, document.body]) {
+      if (!el) continue;
+      try {
+        const value = cleanValue('background-color', getComputedStyle(el).backgroundColor);
+        if (value && !isTransparent(value)) return value;
+      } catch (_) { /* noop */ }
+    }
+    return '';
   }
 
   function registerFrameDoc(doc) {
@@ -1521,6 +1650,7 @@
     const hoverRules = [];
     const authoredRules = [];
     const fontFaces = [];
+    const keyframes = new Map();
     let order = 0;
 
     const walk = (rules) => {
@@ -1557,6 +1687,12 @@
           } else if (rule.type === 5 /* FONT_FACE_RULE */) {
             const parsed = parseFontFace(rule);
             if (parsed) fontFaces.push(parsed);
+          } else if (rule.type === 7 /* KEYFRAMES_RULE */) {
+            // Stored by name and emitted only if something captured uses it, so a
+            // framework's whole animation library does not ride along.
+            if (rule.name && !keyframes.has(rule.name)) {
+              try { keyframes.set(rule.name, rule.cssText); } catch (_) { /* noop */ }
+            }
           } else if (rule.cssRules) {
             // @media only counts when it currently matches; @supports/@layer
             // are transparent for our purposes.
@@ -1579,7 +1715,7 @@
     }
 
     hoverRules.sort((a, b) => (a.spec - b.spec) || (a.order - b.order));
-    state.styleSheetCache = { hoverRules, authoredRules, fontFaces };
+    state.styleSheetCache = { hoverRules, authoredRules, fontFaces, keyframes };
     return state.styleSheetCache;
   }
 
@@ -2572,6 +2708,10 @@
   const EMPTY_BOX_MAX = 64;   // "an icon is missing", not "this is a layout gap"
 
   function requestPixels(ctx, node, el, why) {
+    // A frame capturing itself for a parent cannot use pixels: the screenshot covers
+    // the whole tab while these coordinates are frame-local, so every crop would
+    // sample the wrong region of someone else's page.
+    if (ctx.noPixels) return;
     if (ctx.pixelRequests.length >= PIXEL_LIMIT) {
       ctx.diag.pixelsSkipped = (ctx.diag.pixelsSkipped || 0) + 1;
       return;
@@ -2872,7 +3012,7 @@
       imagesDropped: 0, imagesInlined: 0, imagesTainted: 0, svgDropped: 0,
       iconNodes: 0, iconsRasterized: 0, iconsLost: 0,
       pixelsRecovered: 0, pixelsFailed: 0, hiddenMenus: 0, closedMenusWired: 0,
-      framesInlined: 0, framesPixels: 0, nativeSelects: 0, nodes: 0
+      framesInlined: 0, framesRemote: 0, framesPixels: 0, nativeSelects: 0, nodes: 0
     };
   }
 
@@ -2986,6 +3126,9 @@
       // Closed-dropdown capture: how many were revealed, the pairs still to wire,
       // and a element -> node map, since a menu's trigger and host are built
       // before the menu itself is reached.
+      remoteFrames: 0,
+      noRemote: !!opts.noRemote,
+      noPixels: !!opts.noPixels,
       ddRevealed: 0,
       ddPending: [],
       ddSeq: 0,
@@ -3204,6 +3347,47 @@
     return node;
   }
 
+  /**
+   * Capture a frame we cannot read by asking the frame to capture itself.
+   *
+   * The result arrives as a complete payload with its own style table, so it cannot
+   * simply be dropped into this tree — the class names would collide with ours.
+   * It rides on the node and is merged in finalize(), where the tables live.
+   */
+  async function captureRemoteFrame(el, cs, node, ctx) {
+    if ((ctx.frameDepth || 0) >= MAX_FRAME_DEPTH) return null;
+    if (ctx.remoteFrames >= MAX_REMOTE_FRAMES) return null;
+    if (ctx.noRemote) return null;             // a remote capture must not recurse outward
+
+    let payload = null;
+    try {
+      if (ctx.onProgress) showProgress('Asking a cross-origin frame for its content', 0.5);
+      payload = await requestRemoteFrame(el);
+    } catch (_) {
+      payload = null;
+    }
+    if (!payload || !payload.nodes || !payload.nodes.length) return null;
+
+    ctx.remoteFrames = (ctx.remoteFrames || 0) + 1;
+    ctx.diag.framesRemote += 1;
+
+    const rect = rectOf(el);
+    node.tag = 'div';
+    node.attrs = {};
+    if (el.getAttribute('title')) node.attrs['aria-label'] = el.getAttribute('title');
+    node.style = Object.assign({}, node.style || {}, {
+      width: Math.round(rect.width) + 'px',
+      height: Math.round(rect.height) + 'px',
+      // A remote frame reports its own scroll height, so honour it the same way a
+      // readable one does rather than clipping its content away.
+      overflow: payload.frameScrolls === false ? 'hidden' : 'auto'
+    });
+    if (payload.frameBackground) node.style['background-color'] = payload.frameBackground;
+    node.ch = [];
+    node.remote = payload;
+    return node;
+  }
+
   async function walkElement(el, cs, parentCs, ctx, chain, isRoot) {
     const tag = tagOf(el);
     ctx.diag.nodes += 1;
@@ -3271,8 +3455,13 @@
     if (tag === 'iframe') {
       const inlined = await captureFrame(el, cs, node, ctx, chain.concat([{ el, node }]));
       if (inlined) return inlined;
-      // Cross-origin, or too deep: nothing here can read it, so the pixels are the
-      // only truthful thing left.
+
+      // Unreadable from here, but our own instance inside that frame can read it.
+      const remote = await captureRemoteFrame(el, cs, node, ctx);
+      if (remote) return remote;
+
+      // No content script in there either — a PDF viewer, an opaque sandbox, a frame
+      // that never loaded. Pixels are the only truthful thing left.
       const rect = rectOf(el);
       const placeholder = {
         k: 'ph', tag: 'div', attrs: {}, style,
@@ -3948,7 +4137,103 @@
       }
     }
 
-    return { styles, pseudos, wrappers, hovers, nodes, wrapped };
+    // Cross-origin frames arrive as complete payloads with their own style tables.
+    // Merge them last, once ours are final, so the renaming cannot collide.
+    const remote = spliceRemoteFrames(nodes, { styles, pseudos, wrappers, hovers });
+
+    return { styles, pseudos, wrappers, hovers, nodes, wrapped, remote };
+  }
+
+  /**
+   * Merge every remote frame payload into this document's tables.
+   *
+   * A frame captured itself independently, so it named its first shared style `.s1`
+   * exactly as we did. Dropping its nodes in as-is would silently cross-wire the two
+   * — the frame's rows would take our styling. Every class it minted is therefore
+   * renamed with a per-frame prefix before its tables are merged, the same problem
+   * and the same answer as merging two frames' selections in the worker.
+   *
+   * Hover selectors are strings, so they are rewritten by name rather than by lookup.
+   */
+  function spliceRemoteFrames(nodes, tables) {
+    let count = 0;
+    const fonts = [];
+    const fontFaces = [];
+    const icons = [];
+    const keyframes = {};
+
+    const walk = (node, visit) => {
+      if (!node || typeof node !== 'object') return;
+      visit(node);
+      for (const child of node.ch || []) walk(child, visit);
+    };
+
+    const hosts = [];
+    for (const root of nodes) walk(root, (node) => { if (node.remote) hosts.push(node); });
+
+    for (const host of hosts) {
+      const payload = host.remote;
+      delete host.remote;
+      if (!payload || !payload.nodes || !payload.nodes.length) continue;
+
+      count += 1;
+      const prefix = 'cf' + count;
+      const renamed = new Map();
+      const rename = (name) => {
+        if (!renamed.has(name)) renamed.set(name, prefix + name);
+        return renamed.get(name);
+      };
+
+      // 1. Style and pseudo tables, under prefixed names.
+      for (const name of Object.keys(payload.styles || {})) {
+        tables.styles[rename(name)] = payload.styles[name];
+      }
+      for (const name of Object.keys(payload.pseudos || {})) {
+        tables.pseudos[rename(name)] = payload.pseudos[name];
+      }
+      for (const name of Object.keys(payload.wrappers || {})) {
+        tables.wrappers[rename(name)] = payload.wrappers[name];
+      }
+
+      // 2. Rewrite every class reference on the frame's nodes.
+      for (const root of payload.nodes) {
+        walk(root, (node) => {
+          if (Array.isArray(node.cls)) node.cls = node.cls.map(rename);
+        });
+      }
+
+      // 3. Hover selectors are text, so patch the class names inside them. Longest
+      //    first, or renaming `.s1` would also corrupt `.s12`.
+      const names = Array.from(renamed.keys()).sort((a, b) => b.length - a.length);
+      for (const rule of payload.hovers || []) {
+        let selector = rule.sel;
+        for (const name of names) {
+          selector = selector.split('.' + name).join('.' + renamed.get(name));
+        }
+        tables.hovers.push({ sel: selector, props: rule.props });
+      }
+
+      // 4. The frame's fonts are its own: it linked or bundled them from its own
+      //    origin, and without them its text renders in a fallback and every width
+      //    shifts. Collected here and merged by the caller.
+      const remoteFonts = payload.fonts || {};
+      for (const entry of remoteFonts.google || []) fonts.push(entry);
+      for (const key of remoteFonts.icons || []) icons.push(key);
+      for (const face of payload.fontFaces || []) fontFaces.push(face);
+      // Its animations are defined in ITS document, so they have to travel with it.
+      for (const name of Object.keys(payload.keyframes || {})) {
+        if (!keyframes[name]) keyframes[name] = payload.keyframes[name];
+      }
+
+      // 5. The frame's root is its <body>; a nested <body> tag is discarded by the
+      //    parser and its attributes merged onto the real one.
+      for (const root of payload.nodes) {
+        if (root.tag === 'body' || root.tag === 'html') root.tag = 'div';
+        host.ch.push(root);
+      }
+    }
+
+    return { count, fonts, fontFaces, icons, keyframes };
   }
 
   /**
@@ -4711,6 +4996,46 @@
    * SECTION: payload assembly
    * ======================================================================== */
 
+  /**
+   * The @keyframes rules the export actually needs.
+   *
+   * An `animation-name` pointing at rules that did not travel animates nothing, so
+   * the referenced definitions have to come too — but only the referenced ones, or a
+   * framework's entire animation library rides along in every capture.
+   */
+  function collectKeyframes(finalized, remoteKeyframes) {
+    const defined = (scanStyleSheets().keyframes) || new Map();
+    const used = new Set();
+
+    const noteNames = (value) => {
+      if (!value || value === 'none') return;
+      for (const part of String(value).split(',')) {
+        const name = part.trim();
+        if (name && name !== 'none') used.add(name);
+      }
+    };
+
+    for (const bag of Object.values(finalized.styles || {})) noteNames(bag['animation-name']);
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (node.inline) noteNames(node.inline['animation-name']);
+      for (const child of node.ch || []) walk(child);
+    };
+    for (const root of finalized.nodes || []) walk(root);
+
+    const out = {};
+    for (const name of used) {
+      if (defined.has(name)) out[name] = defined.get(name);
+      else if (remoteKeyframes && remoteKeyframes[name]) out[name] = remoteKeyframes[name];
+    }
+    // A frame's own animations are defined in its document, so keep whatever it sent
+    // even when this document never names them.
+    for (const name of Object.keys(remoteKeyframes || {})) {
+      if (!out[name]) out[name] = remoteKeyframes[name];
+    }
+    return out;
+  }
+
   function buildPayload() {
     if (!state.selections.length) return null;
 
@@ -4738,6 +5063,35 @@
     const bundled = new Set(fontFaces.map((f) => f.family.toLowerCase()));
     const fonts = buildFontPlan(registry, bundled, picked.googleHosted);
 
+    // A cross-origin frame captured itself, fonts included. Its families never pass
+    // through our registry, so without merging them its text falls back to a system
+    // face and every width in that frame shifts.
+    const spliced = finalized.remote || { count: 0, fonts: [], fontFaces: [], icons: [], keyframes: {} };
+    if (spliced.count) {
+      const seenFamily = new Set(fonts.google.map((entry) => entry.family.toLowerCase()));
+      for (const entry of spliced.fonts) {
+        const key = String(entry.family || '').toLowerCase();
+        if (!key || seenFamily.has(key)) continue;
+        seenFamily.add(key);
+        fonts.google.push(entry);
+      }
+      const seenIcon = new Set(fonts.icons || []);
+      for (const key of spliced.icons) {
+        if (seenIcon.has(key)) continue;
+        seenIcon.add(key);
+        fonts.icons.push(key);
+      }
+      const seenFace = new Set(fontFaces.map((f) => f.family + '|' + f.weight + '|' + f.style));
+      for (const face of spliced.fontFaces) {
+        const key = face.family + '|' + face.weight + '|' + face.style;
+        if (seenFace.has(key)) continue;
+        seenFace.add(key);
+        fontFaces.push(face);
+      }
+    }
+
+    const keyframes = collectKeyframes(finalized, spliced.keyframes || {});
+
     const diag = {
       topLevel: state.selections.length,
       wraps: finalized.wrapped,
@@ -4757,6 +5111,7 @@
       hiddenMenus: 0,
       closedMenusWired: 0,
       framesInlined: 0,
+      framesRemote: 0,
       framesPixels: 0,
       nativeSelects: 0,
       nodes: 0,
@@ -4795,6 +5150,7 @@
       nodes: finalized.nodes,
       fonts,
       fontFaces,
+      keyframes,
       diagnostics: diag
     };
   }
@@ -5144,12 +5500,17 @@
   function requestGrab(exact) {
     // If this frame is itself hovering something, it is the right answer and there
     // is no reason to involve the worker.
-    if (state.hovered) { grabHovered(exact); return; }
+    if (state.hovered) return grabHovered(exact);
 
-    sendToWorker({ type: 'CHEATER_CMD', cmd: 'grab', exact: !!exact }).then((result) => {
-      if (result && result.grabbed) return;
+    return sendToWorker({ type: 'CHEATER_CMD', cmd: 'grab', exact: !!exact }).then((result) => {
+      // The worker's reply lives under .value — see sendToWorker. Reading .grabbed
+      // straight off the wrapper yields undefined every time, which is exactly the
+      // bug that made cross-frame grab appear to do nothing.
+      const reply = result && result.value;
+      if (reply && reply.grabbed) return true;
       toast('Nothing under the cursor. Point at the thing you want — in Interact mode the ' +
         'outline shows what will be captured.');
+      return false;
     });
   }
 
@@ -5463,6 +5824,17 @@
         );
         return true;   // async response
 
+      /**
+       * A parent that cannot read us has asked us to capture ourselves. Answer with a
+       * complete payload; the parent merges it into its own tables.
+       */
+      case 'CHEATER_CAPTURE_FRAME':
+        captureOwnDocumentPayload().then(
+          (payload) => sendResponse({ ok: !!payload, payload: payload || null, url: location.href }),
+          () => sendResponse({ ok: false, payload: null })
+        );
+        return true;   // async response
+
       case 'CHEATER_SELECT_BODY':
         selectBody().then((ok) => sendResponse({ ok }), () => sendResponse({ ok: false }));
         return true;   // async response
@@ -5508,6 +5880,10 @@
    * SECTION: wiring
    * ======================================================================== */
 
+  // Installed unconditionally: a frame must be able to answer its parent's handshake
+  // whether or not selection mode was ever started in this frame.
+  installRemoteHelloListener();
+
   document.addEventListener('pointermove', onPointerMove, true);
   document.addEventListener('pointerdown', onPointerDown, { capture: true, passive: false });
   document.addEventListener('wheel', onWheel, { capture: true, passive: false });
@@ -5549,6 +5925,7 @@
     deactivate: deactivate,
     setPaused: setPaused,
     grabHovered: grabHovered,
+    requestGrab: requestGrab,
     diagnose: diagnose,
     noteAppeared: noteAppeared,
     layerBelongsToHover: layerBelongsToHover,

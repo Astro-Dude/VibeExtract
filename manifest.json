@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Cheater",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "Point at any element on any page and extract it as a standalone, pixel-faithful HTML component or a compact TOON spec for an LLM.",
   "minimum_chrome_version": "109",
   "permissions": [

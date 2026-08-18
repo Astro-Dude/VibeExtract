@@ -43,12 +43,24 @@
   <iframe data-test="frame-same" src="frame-child.html" width="320" height="130" title="Same origin child"></iframe>
 </div>
 
-<!-- 3. Genuinely cross-origin: different port, so the browser blocks us the same
-     way it would block a third-party widget. Must degrade to pixels, not break. -->
-<h2>3 · cross-origin frame (different port)</h2>
+<!-- 3. Genuinely cross-origin: a different PORT, so contentDocument is null and the
+     parent is locked out exactly as it would be for a third-party widget. Note that
+     ports do not trigger site isolation, so this one still shares the page's
+     process. -->
+<h2>3 · cross-origin frame (different port, same process)</h2>
 <div class="card" data-test="frame-cross-host">
   <iframe data-test="frame-cross" src="http://127.0.0.1:8932/test/frame-child.html"
           width="320" height="130" title="Cross origin child"></iframe>
+</div>
+
+<!-- 3b. A different HOST, which IS a different site — so Chrome puts this frame in
+     its own process. The parent cannot reach it by any means, and neither can any
+     script in the parent's process. Only the extension's own instance inside that
+     frame can read it. -->
+<h2>3b · out-of-process cross-origin frame (different host)</h2>
+<div class="card" data-test="frame-oop-host">
+  <iframe data-test="frame-oop" src="http://localhost:8932/test/frame-remote.html"
+          width="340" height="150" title="Remote widget"></iframe>
 </div>
 
 <!-- 4. Nested: a same-origin frame containing another same-origin frame. -->
