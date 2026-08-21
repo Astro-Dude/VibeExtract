@@ -1,4 +1,4 @@
-# Cheater
+# DOM Heist
 
 Point at any element on any website, click it, and get back a **standalone HTML file that
 renders identically offline** plus a **compact TOON spec** to paste into an LLM with
@@ -63,12 +63,12 @@ All seven main shortcuts are customizable in the popup and persist via `chrome.s
 | Parent / child of the selection | `Opt+↑` / `Opt+↓` | `Alt+↑` / `Alt+↓` |
 | Walk the tree | `Opt+Scroll` | `Alt+Scroll` |
 
-`Escape` is only intercepted while Cheater is active with something to clear — the page's own
+`Escape` is only intercepted while DOM Heist is active with something to clear — the page's own
 Escape handling is never disturbed.
 
 ---
 
-### Interact mode — driving the page while Cheater is on
+### Interact mode — driving the page while DOM Heist is on
 
 Selection mode swallows clicks, which is what stops a click from navigating instead of
 selecting. The side effect is that you cannot *operate* the page while it is on: clicking a
@@ -110,7 +110,7 @@ click is a real click.
 A cross-origin frame cannot be read by the page it sits in. The browser forbids it and no
 extension trick changes that — `contentDocument` is simply `null`.
 
-But the content script runs in **every** frame, so there is already an instance of Cheater
+But the content script runs in **every** frame, so there is already an instance of DOM Heist
 inside that frame, and it reads its own document perfectly well. The parent's problem was never
 access; it was **addressing**. It holds an `<iframe>` element and needs the frameId behind it,
 and no DOM API will tell it which is which.
@@ -327,7 +327,7 @@ whether the pointer is being tracked at all, every floating layer it can see, an
 one was or was not adopted**:
 
 ```
-cheater: 3.1.0 · interact mode
+domheist: 3.1.0 · interact mode
 frame: TOP https://example.com/chart
 pointer: 170,255
 hovered: div.tile.big [292x150 @ 24,180]
@@ -434,7 +434,7 @@ extension cannot see the source.
 
 So when a node cannot be represented, its region is cropped out of a single screenshot of
 the tab (`chrome.tabs.captureVisibleTab`) and becomes a plain `<img>` at device resolution.
-One screenshot per export, cropped N times, with Cheater's own overlay hidden first so the
+One screenshot per export, cropped N times, with DOM Heist's own overlay hidden first so the
 hover outline is not photographed into the export.
 
 It also fires speculatively, which is the point: a box that occupies icon-sized space and

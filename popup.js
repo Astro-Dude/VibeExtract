@@ -1,5 +1,5 @@
 /**
- * Cheater — toolbar popup.
+ * DOM Heist — toolbar popup.
  *
  * Opening the popup is itself the "start selecting" gesture: selection mode
  * auto-activates on load, so the common case needs no click at all.
@@ -156,7 +156,7 @@
   function renderNote() {
     el('note').innerHTML = state.blocked
       ? ''
-      : 'Click a small element and Cheater expands to the surrounding component. ' +
+      : 'Click a small element and DOM Heist expands to the surrounding component. ' +
         '<b>' + ALT_LABEL + '+Click</b> takes the exact element. ' +
         '<b>' + ALT_LABEL + '+↑/↓</b> moves the selection to its parent or child.';
   }
@@ -181,7 +181,7 @@
    * the same worker store the export tab uses; clicking one opens it there.
    */
   async function renderHistory() {
-    var response = await sendToWorker({ type: 'CHEATER_HISTORY_LIST' });
+    var response = await sendToWorker({ type: 'DOMHEIST_HISTORY_LIST' });
     var list = el('hist-list');
 
     if (!response || !response.ok) {
@@ -235,7 +235,7 @@
       var scheme = '';
       try { scheme = new URL(state.tab.url).protocol; } catch (_) { scheme = 'this'; }
       el('blocked').textContent =
-        'Cheater can\'t run on this page type (' + scheme + '). Chrome blocks extension ' +
+        'DOM Heist can\'t run on this page type (' + scheme + '). Chrome blocks extension ' +
         'content scripts on browser-internal pages, the Web Store, and view-source. ' +
         'Open a normal http(s) page and try again.';
       el('blocked').classList.remove('hidden');
@@ -248,8 +248,8 @@
     renderNote();
 
     // Opening the popup IS the start gesture.
-    await sendToWorker({ type: 'CHEATER_CMD', cmd: 'start', tabId: state.tab.id });
-    var status = await sendToTab({ type: 'CHEATER_STATUS' });
+    await sendToWorker({ type: 'DOMHEIST_CMD', cmd: 'start', tabId: state.tab.id });
+    var status = await sendToTab({ type: 'DOMHEIST_STATUS' });
     renderStatus(status);
 
     // The count is worth knowing without expanding the section.
@@ -259,7 +259,7 @@
     // keep the count live rather than stale.
     setInterval(async function () {
       if (state.blocked) return;
-      renderStatus(await sendToTab({ type: 'CHEATER_STATUS' }));
+      renderStatus(await sendToTab({ type: 'DOMHEIST_STATUS' }));
     }, 700);
   }
 
@@ -271,22 +271,22 @@
       // Toggling pause from here is convenient, but note the caveat in the hint:
       // closing the popup is a mouse action and can dismiss the very menu you are
       // trying to capture, so the keyboard shortcut is the reliable route.
-      await sendToTab({ type: 'CHEATER_PAUSE', paused: !status.paused });
+      await sendToTab({ type: 'DOMHEIST_PAUSE', paused: !status.paused });
     } else {
-      await sendToWorker({ type: 'CHEATER_CMD', cmd: 'start', tabId: state.tab.id });
+      await sendToWorker({ type: 'DOMHEIST_CMD', cmd: 'start', tabId: state.tab.id });
     }
-    renderStatus(await sendToTab({ type: 'CHEATER_STATUS' }));
+    renderStatus(await sendToTab({ type: 'DOMHEIST_STATUS' }));
   });
 
   el('clear').addEventListener('click', async function () {
-    await sendToWorker({ type: 'CHEATER_CMD', cmd: 'clear', tabId: state.tab.id });
-    renderStatus(await sendToTab({ type: 'CHEATER_STATUS' }));
+    await sendToWorker({ type: 'DOMHEIST_CMD', cmd: 'clear', tabId: state.tab.id });
+    renderStatus(await sendToTab({ type: 'DOMHEIST_STATUS' }));
   });
 
   el('export').addEventListener('click', async function () {
-    var result = await sendToWorker({ type: 'CHEATER_CMD', cmd: 'export', tabId: state.tab.id });
+    var result = await sendToWorker({ type: 'DOMHEIST_CMD', cmd: 'export', tabId: state.tab.id });
     if (result && result.ok) window.close();
-    else renderStatus(await sendToTab({ type: 'CHEATER_STATUS' }));
+    else renderStatus(await sendToTab({ type: 'DOMHEIST_STATUS' }));
   });
 
   el('hist-toggle').addEventListener('click', async function () {
@@ -299,13 +299,13 @@
   el('hist-list').addEventListener('click', async function (event) {
     var row = event.target.closest('.hitem');
     if (!row) return;
-    var result = await sendToWorker({ type: 'CHEATER_OPEN_HISTORY', id: row.dataset.id });
+    var result = await sendToWorker({ type: 'DOMHEIST_OPEN_HISTORY', id: row.dataset.id });
     if (result && result.ok) window.close();
     else el('status').innerHTML = 'could not open that capture';
   });
 
   el('hist-clear').addEventListener('click', async function () {
-    await sendToWorker({ type: 'CHEATER_HISTORY_DELETE' });
+    await sendToWorker({ type: 'DOMHEIST_HISTORY_DELETE' });
     await renderHistory();
   });
 
@@ -367,7 +367,7 @@
     state.shortcuts = next;
     renderShortcuts();
     // Push to every frame so the change takes effect without a page reload.
-    chrome.tabs.sendMessage(state.tab.id, { type: 'CHEATER_SHORTCUTS', shortcuts: next }, function () {
+    chrome.tabs.sendMessage(state.tab.id, { type: 'DOMHEIST_SHORTCUTS', shortcuts: next }, function () {
       void chrome.runtime.lastError;
     });
     el('status').innerHTML = 'shortcuts <b>saved</b>';
@@ -378,7 +378,7 @@
     await new Promise(function (resolve) { chrome.storage.sync.set({ shortcuts: state.shortcuts }, resolve); });
     renderShortcuts();
     renderEditor();
-    chrome.tabs.sendMessage(state.tab.id, { type: 'CHEATER_SHORTCUTS', shortcuts: state.shortcuts }, function () {
+    chrome.tabs.sendMessage(state.tab.id, { type: 'DOMHEIST_SHORTCUTS', shortcuts: state.shortcuts }, function () {
       void chrome.runtime.lastError;
     });
     el('status').innerHTML = 'shortcuts <b>reset</b>';

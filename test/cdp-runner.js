@@ -1,5 +1,5 @@
 /**
- * Cheater — CDP test runner.
+ * DOM Heist — CDP test runner.
  *
  * The four browser harnesses (run-fixtures, run-fonts, run-stress, run-history)
  * are written as Playwright `async (page) => {}` functions. This runs them
@@ -467,7 +467,7 @@ async function waitForChrome() {
     }
   }
 
-  const profileDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'cheater-cdp-'));
+  const profileDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'domheist-cdp-'));
   const server = await serve(PORT);
   const server2 = await serve(PORT2);
   const chrome = launchChrome(profileDir);

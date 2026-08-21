@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Cheater",
+  "name": "DOM Heist",
   "version": "3.2.0",
   "description": "Point at any element on any page and extract it as a standalone, pixel-faithful HTML component or a compact TOON spec for an LLM.",
   "minimum_chrome_version": "109",
@@ -17,7 +17,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Cheater — extract a component",
+    "default_title": "DOM Heist — extract a component",
     "default_popup": "popup.html"
   },
   "content_scripts": [

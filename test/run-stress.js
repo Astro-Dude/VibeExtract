@@ -1,5 +1,5 @@
 /**
- * Cheater — performance + progress harness.
+ * DOM Heist — performance + progress harness.
  *
  * Reproduces the failure reported against YouTube Music: on a page with a very
  * large stylesheet, capture appeared to never finish. The cause was matching
@@ -31,11 +31,11 @@ async (page) => {
   }
 
   const results = await page.evaluate(async () => {
-    const C = window.__cheater;
+    const C = window.__domheist;
     const out = [];
     const ok = (name, pass, detail) => out.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
     const q = (sel) => document.querySelector(`[data-test="${sel}"]`);
-    const html = (p) => window.CheaterHtmlWriter.build(p, { fontMode: 'relative' });
+    const html = (p) => window.DomHeistHtmlWriter.build(p, { fontMode: 'relative' });
 
     C.activate();
 

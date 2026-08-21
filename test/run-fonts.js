@@ -1,5 +1,5 @@
 /**
- * Cheater — font fidelity harness.
+ * DOM Heist — font fidelity harness.
  *
  * Answers one question per font family: does the EXPORT render text with the
  * same font the original used?
@@ -76,7 +76,7 @@ async (page) => {
   // Capture the whole font section once, with the service worker's font fetch
   // emulated so the inline (preview) path has real binaries.
   const bundle = await page.evaluate(async () => {
-    const C = window.__cheater;
+    const C = window.__domheist;
     C.activate();
     C.clearSelection();
     await C.addSelection(document.querySelector('[data-test="font-row"]'), true);
@@ -100,8 +100,8 @@ async (page) => {
       }
     }
     return {
-      previewHtml: window.CheaterHtmlWriter.build(payload, { fontMode: 'inline' }),
-      savedHtml: window.CheaterHtmlWriter.build(payload, { fontMode: 'relative' }),
+      previewHtml: window.DomHeistHtmlWriter.build(payload, { fontMode: 'inline' }),
+      savedHtml: window.DomHeistHtmlWriter.build(payload, { fontMode: 'relative' }),
       googleLinked: (payload.fonts.google || []).map((g) => ({
         family: g.family, weights: g.weights, italics: g.italics, confirmed: !!g.confirmed
       })),

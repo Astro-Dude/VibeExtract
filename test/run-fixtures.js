@@ -1,8 +1,8 @@
 /**
- * Cheater — fixture harness.
+ * DOM Heist — fixture harness.
  *
  * Drives the real capture logic against test/fixtures.html in a real browser,
- * via the content script's isolated-world debug surface (window.__cheater).
+ * via the content script's isolated-world debug surface (window.__domheist).
  *
  * Run through the Playwright MCP server:
  *   browser_run_code_unsafe { filename: "test/run-fixtures.mjs" }
@@ -43,14 +43,14 @@ async (page) => {
   }
 
   const results = await page.evaluate(async () => {
-    const C = window.__cheater;
+    const C = window.__domheist;
     const out = [];
     const ok = (name, pass, detail) => out.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
     const q = (sel) => document.querySelector(`[data-test="${sel}"]`);
     const tag = (el) => (el && el.tagName ? el.tagName.toLowerCase() : String(el));
     const cap = async (el) => { C.clearSelection(); await C.addSelection(el, true); return C.buildPayload(); };
-    const html = (payload) => window.CheaterHtmlWriter.build(payload, { fontMode: 'relative' });
-    const live = (payload) => window.CheaterHtmlWriter.build(payload,
+    const html = (payload) => window.DomHeistHtmlWriter.build(payload, { fontMode: 'relative' });
+    const live = (payload) => window.DomHeistHtmlWriter.build(payload,
       { fontMode: 'relative', interactive: true });
     // A style set lands either in a shared class rule (`prop: value;`) or inline
     // (`prop:value`), so declaration assertions must be whitespace-agnostic.
@@ -347,7 +347,7 @@ async (page) => {
         source.includes('backdrop-filter:blur') || /backdrop-filter: blur/.test(source));
       ok('misc: -webkit-backdrop-filter alias present', source.includes('-webkit-backdrop-filter'));
       ok('misc: backdrop surface added so the blur is visible',
-        source.includes('cheater-has-backdrop'));
+        source.includes('domheist-has-backdrop'));
     }
     {
       // Regression: `backdrop-filter: none` must not be emitted at all, and must
@@ -355,7 +355,7 @@ async (page) => {
       const payload = await cap(q('field-card'));
       const source = html(payload);
       ok('misc: no-blur component does NOT get the backdrop surface',
-        !source.includes('cheater-has-backdrop'), 'backdrop applied without any blur');
+        !source.includes('domheist-has-backdrop'), 'backdrop applied without any blur');
       ok('misc: default-valued properties are pruned, not emitted',
         !source.includes('backdrop-filter') && !/mask-image:\s*none/.test(source) &&
         !/grid-template-areas:\s*none/.test(source),
@@ -378,7 +378,7 @@ async (page) => {
       const payload = await cap(q('frame-srcdoc').parentElement);
       const source = html(payload);
       ok('frame: iframes become sized placeholders, never break the export',
-        source.includes('cheater-ph') && !source.includes('<iframe'));
+        source.includes('domheist-ph') && !source.includes('<iframe'));
     }
 
     /* ---------------------------------------------- fonts */
@@ -707,21 +707,21 @@ async (page) => {
 
       const openable = live(payload);
       ok('interactive: pair wrapped in one positioned container',
-        /<div class="cheater-dd cheater-dd-wrap cheater-dd\d+">/.test(openable),
-        (openable.match(/<div class="cheater-dd[^"]*"/) || ['none'])[0]);
+        /<div class="domheist-dd domheist-dd-wrap domheist-dd\d+">/.test(openable),
+        (openable.match(/<div class="domheist-dd[^"]*"/) || ['none'])[0]);
       ok('interactive: menu hidden until focus', openable.includes(
-        '.cheater-dd .cheater-dd-menu{display:none}'));
+        '.domheist-dd .domheist-dd-menu{display:none}'));
       // Scoped to this pair's own menu class, so nested dropdowns stay independent.
       ok('interactive: menu revealed on :focus-within',
-        /\.cheater-dd(\d+):focus-within \.cheater-dd\1-menu\{display:[a-z-]+\}/.test(openable),
-        (openable.match(/\.cheater-dd\d+:focus-within[^}]*\}/) || ['no rule'])[0]);
+        /\.domheist-dd(\d+):focus-within \.domheist-dd\1-menu\{display:[a-z-]+\}/.test(openable),
+        (openable.match(/\.domheist-dd\d+:focus-within[^}]*\}/) || ['no rule'])[0]);
       ok('interactive: ships no JavaScript', !/<script/i.test(openable),
         'a script tag leaked into the export');
       // The <button> trigger is focusable already; a synthetic tabindex would be
       // redundant and would change its tab order.
       ok('interactive: native button trigger gets no tabindex',
         !/<button[^>]*tabindex/.test(openable));
-      ok('interactive: static mode is unchanged', !source.includes('cheater-dd'));
+      ok('interactive: static mode is unchanged', !source.includes('domheist-dd'));
 
       // Behaviour, not just markup. Rendered under the SAME sandbox export.html
       // uses — allow-scripts deliberately absent — because a CSS-only mechanism
@@ -734,16 +734,16 @@ async (page) => {
       await new Promise((resolve) => { probe.onload = resolve; });
       const pdoc = probe.contentDocument;
       const pwin = pdoc.defaultView;
-      const pmenu = pdoc.querySelector('.cheater-dd-menu');
-      const ptrigger = pdoc.querySelector('.cheater-dd-trigger');
+      const pmenu = pdoc.querySelector('.domheist-dd-menu');
+      const ptrigger = pdoc.querySelector('.domheist-dd-trigger');
       const shown = () => pwin.getComputedStyle(pmenu).display;
 
       // Guard against a false pass: confirm the sandbox really does block script.
       const canary = pdoc.createElement('script');
-      canary.textContent = 'window.__cheaterCanary = 1';
+      canary.textContent = 'window.__domheistCanary = 1';
       pdoc.body.appendChild(canary);
       ok('interactive: the preview sandbox really blocks scripts',
-        pwin.__cheaterCanary !== 1, 'a script executed inside the sandbox');
+        pwin.__domheistCanary !== 1, 'a script executed inside the sandbox');
 
       ok('interactive: menu is closed on load', shown() === 'none', 'display=' + shown());
       ptrigger.focus();
@@ -883,8 +883,8 @@ async (page) => {
       // mode toolbar live in the same shadow root, and hiding the host would hide
       // the one thing telling you which mode you are in.
       ok('interact: signalled by a host class, not by hiding the host',
-        !!document.querySelector('.cheater-root.cheater-paused'),
-        'expected .cheater-root.cheater-paused so the toolbar and toasts stay visible');
+        !!document.querySelector('.domheist-root.domheist-paused'),
+        'expected .domheist-root.domheist-paused so the toolbar and toasts stay visible');
 
       // The outline stays alive in interact mode — it is what the grab key aims at.
       // run-dropdowns.js covers the hover-and-grab flow end to end.
@@ -930,9 +930,9 @@ async (page) => {
       let captureRequests = 0;
       let uiHidden = null;
       chrome.runtime.sendMessage = (msg, cb) => {
-        if (msg && msg.type === 'CHEATER_CAPTURE_TAB') {
+        if (msg && msg.type === 'DOMHEIST_CAPTURE_TAB') {
           captureRequests += 1;
-          const host = document.querySelector('.cheater-root');
+          const host = document.querySelector('.domheist-root');
           uiHidden = !host || host.style.display === 'none';
           cb({ ok: true, dataUrl: fakeShot });
           return;
@@ -1044,12 +1044,12 @@ async (page) => {
       await C.selectBody();
       const payload = C.buildPayload();
       const source = html(payload);
-      const leaked = (source.match(/cheater-(?!ph|has-backdrop)/g) || []);
+      const leaked = (source.match(/domheist-(?!ph|has-backdrop)/g) || []);
       ok('fullpage: no extension UI leaks into the export',
         leaked.length === 0, 'leaked=' + JSON.stringify(leaked.slice(0, 5)));
       ok('fullpage: crosshair cursor never captured',
         !source.includes('crosshair'), 'found crosshair');
-      ok('fullpage: probe iframe never captured', !source.includes('cheater-probe'));
+      ok('fullpage: probe iframe never captured', !source.includes('domheist-probe'));
       ok('fullpage: shared styles actually dedupe',
         payload.diagnostics.styleCount < payload.diagnostics.nodes,
         `styles=${payload.diagnostics.styleCount} nodes=${payload.diagnostics.nodes}`);
@@ -1057,8 +1057,8 @@ async (page) => {
         (source.match(/box-sizing:border-box\}/g) || []).length >= 1);
 
       // TOON round-trip on a real capture.
-      const toon = window.CheaterToonWriter.toToon(payload);
-      const reparsed = window.CheaterToonWriter.parseToon(toon);
+      const toon = window.DomHeistToonWriter.toToon(payload);
+      const reparsed = window.DomHeistToonWriter.parseToon(toon);
       ok('toon: real capture round-trips through the parser',
         reparsed.nodes.length === payload.nodes.length &&
         Object.keys(reparsed.styles).length === Object.keys(payload.styles).length,

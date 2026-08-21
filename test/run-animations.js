@@ -1,5 +1,5 @@
 /**
- * Cheater — animation harness.
+ * DOM Heist — animation harness.
  *
  * `animation` was dropped outright, so an animated component exported as a dead one.
  * Capturing the longhands is only half of it: an `animation-name` referring to
@@ -34,8 +34,8 @@ async (page) => {
   }
 
   const results = await page.evaluate(async () => {
-    const C = window.__cheater;
-    const W = window.CheaterHtmlWriter;
+    const C = window.__domheist;
+    const W = window.DomHeistHtmlWriter;
     const out = [];
     const ok = (name, pass, detail) => out.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
     const q = (sel) => document.querySelector(`[data-test="${sel}"]`);
@@ -60,19 +60,19 @@ async (page) => {
       const source = html(payload);
 
       ok('spinner: the animation properties are captured',
-        /animation-name:\s*cheater-spin/.test(source), 'animation-name is missing entirely');
+        /animation-name:\s*domheist-spin/.test(source), 'animation-name is missing entirely');
       ok('spinner: duration captured', /animation-duration:\s*0?\.9s|900ms/.test(source),
         (source.match(/animation-duration:[^;"]*/) || ['none'])[0]);
       ok('spinner: iteration count captured', /animation-iteration-count:\s*infinite/.test(source));
       ok('spinner: the @keyframes definition travelled',
-        /@keyframes\s+cheater-spin/.test(source),
+        /@keyframes\s+domheist-spin/.test(source),
         'animation-name points at nothing, so it animates nothing');
       ok('spinner: the keyframe body came with it',
         /rotate\(360deg\)/.test(source), 'the keyframes body is empty');
 
       // Only what is referenced: an unused animation must not ride along.
       ok('spinner: unreferenced @keyframes are NOT emitted',
-        !/cheater-unused/.test(source),
+        !/domheist-unused/.test(source),
         'a framework animation library would bloat every capture');
       ok('spinner: only the one animation is emitted',
         (source.match(/@keyframes/g) || []).length === 1,
@@ -83,10 +83,10 @@ async (page) => {
       const el = view.doc.querySelector('div[style*="border-top-color"], div');
       const spinner = Array.from(view.doc.querySelectorAll('*')).find((n) => {
         const cs = view.win.getComputedStyle(n);
-        return cs.animationName === 'cheater-spin';
+        return cs.animationName === 'domheist-spin';
       });
       ok('spinner: the rendered export has a live animation', !!spinner,
-        'nothing in the export computes to animation-name: cheater-spin');
+        'nothing in the export computes to animation-name: domheist-spin');
       if (spinner) {
         const cs = view.win.getComputedStyle(spinner);
         ok('spinner: computed duration matches the original', cs.animationDuration === '0.9s',
@@ -108,8 +108,8 @@ async (page) => {
     {
       const payload = await cap(q('anim-badge-host'));
       const source = html(payload);
-      ok('badge: pulse animation captured', /animation-name:\s*cheater-pulse/.test(source));
-      ok('badge: its keyframes travelled', /@keyframes\s+cheater-pulse/.test(source));
+      ok('badge: pulse animation captured', /animation-name:\s*domheist-pulse/.test(source));
+      ok('badge: its keyframes travelled', /@keyframes\s+domheist-pulse/.test(source));
       ok('badge: percentage keyframe stops preserved',
         /opacity:\s*0?\.35/.test(source), 'the 50% stop is missing');
       ok('badge: timing function captured',
@@ -122,8 +122,8 @@ async (page) => {
       // this is a flat grey bar.
       const payload = await cap(q('anim-skeleton-host'));
       const source = html(payload);
-      ok('skeleton: shimmer animation captured', /animation-name:\s*cheater-shimmer/.test(source));
-      ok('skeleton: its keyframes travelled', /@keyframes\s+cheater-shimmer/.test(source));
+      ok('skeleton: shimmer animation captured', /animation-name:\s*domheist-shimmer/.test(source));
+      ok('skeleton: its keyframes travelled', /@keyframes\s+domheist-shimmer/.test(source));
       ok('skeleton: the animated background survived', /linear-gradient/.test(source));
       ok('skeleton: background-size came too, or the shimmer has nothing to move',
         /background-size:\s*200%/.test(source),
@@ -151,7 +151,7 @@ async (page) => {
         (source.match(/animation-play-state:[^;"]*/) || ['none'])[0]);
       const view = await render(source);
       const el = Array.from(view.doc.querySelectorAll('*')).find((n) =>
-        view.win.getComputedStyle(n).animationName === 'cheater-pulse');
+        view.win.getComputedStyle(n).animationName === 'domheist-pulse');
       ok('paused: still paused in the render', !!el &&
         view.win.getComputedStyle(el).animationPlayState === 'paused',
         el ? view.win.getComputedStyle(el).animationPlayState : 'element missing');
@@ -163,10 +163,10 @@ async (page) => {
       const payload = await cap(q('anim-two-host'));
       const source = html(payload);
       ok('two: both names captured',
-        /animation-name:\s*cheater-spin,\s*cheater-pulse/.test(source),
+        /animation-name:\s*domheist-spin,\s*domheist-pulse/.test(source),
         (source.match(/animation-name:[^;"]*/) || ['none'])[0]);
       ok('two: BOTH keyframe sets travelled',
-        /@keyframes\s+cheater-spin/.test(source) && /@keyframes\s+cheater-pulse/.test(source),
+        /@keyframes\s+domheist-spin/.test(source) && /@keyframes\s+domheist-pulse/.test(source),
         (source.match(/@keyframes\s+[\w-]+/g) || []).join(', '));
     }
 

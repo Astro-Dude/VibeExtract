@@ -1,5 +1,5 @@
 /**
- * Cheater — capture history harness.
+ * DOM Heist — capture history harness.
  *
  * Runs the worker's IndexedDB history code in a page context, where IndexedDB
  * behaves identically to the service worker's. background.js declares its

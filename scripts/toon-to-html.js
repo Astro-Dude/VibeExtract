@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Cheater — TOON -> HTML, zero dependencies.
+ * DOM Heist — TOON -> HTML, zero dependencies.
  *
  *   node scripts/toon-to-html.js input.toon [output.html]
  *
@@ -29,7 +29,7 @@ function usage(code) {
   process.stderr.write(
     'Usage: node scripts/toon-to-html.js <input.toon> [output.html]\n' +
     '\n' +
-    '  Converts a Cheater .toon capture back into standalone HTML.\n' +
+    '  Converts a DOM Heist .toon capture back into standalone HTML.\n' +
     '  With no output path, writes <input>.html next to the input.\n' +
     '  Use "-" as the output path to write to stdout.\n'
   );
@@ -51,7 +51,7 @@ function main(argv) {
 
   if (!payload.nodes.length) {
     process.stderr.write(
-      'error: no nodes found. Is this a Cheater .toon file? A "## Structure" section is required.\n'
+      'error: no nodes found. Is this a DOM Heist .toon file? A "## Structure" section is required.\n'
     );
     process.exit(1);
   }

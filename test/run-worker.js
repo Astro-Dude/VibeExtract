@@ -1,5 +1,5 @@
 /**
- * Cheater — service worker harness. Plain Node, no browser.
+ * DOM Heist — service worker harness. Plain Node, no browser.
  *
  *   node test/run-worker.js
  *
@@ -127,7 +127,7 @@ function samplePayload(extra) {
   {
     const stub = makeChrome({});
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_EXPORT', payload: samplePayload() });
+    const res = await send(stub, { type: 'DOMHEIST_EXPORT', payload: samplePayload() });
     ok('export: responds ok and opens the export tab',
       res && res.ok === true && stub.calls.created.length === 1,
       JSON.stringify({ res, created: stub.calls.created.length }));
@@ -146,7 +146,7 @@ function samplePayload(extra) {
         { family: 'B', url: 'https://x.test/fail.woff2', path: 'fonts/b.woff2', mime: 'font/woff2' }
       ]
     });
-    const res = await send(stub, { type: 'CHEATER_EXPORT', payload });
+    const res = await send(stub, { type: 'DOMHEIST_EXPORT', payload });
     ok('fonts: export still succeeds when one binary fails',
       res && res.ok === true, JSON.stringify(res));
   }
@@ -155,7 +155,7 @@ function samplePayload(extra) {
   {
     const stub = makeChrome({ sessionSetThrows: true });
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_EXPORT', payload: samplePayload() });
+    const res = await send(stub, { type: 'DOMHEIST_EXPORT', payload: samplePayload() });
     ok('storage: an over-quota session mirror is survivable',
       res && res.ok === true && stub.calls.created.length === 1, JSON.stringify(res));
   }
@@ -164,7 +164,7 @@ function samplePayload(extra) {
   {
     const stub = makeChrome({ tabsCreateThrows: true });
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_EXPORT', payload: samplePayload() });
+    const res = await send(stub, { type: 'DOMHEIST_EXPORT', payload: samplePayload() });
     ok('error: a throwing handler still answers, with a reason',
       res && res.ok === false && typeof res.reason === 'string' && res.reason.length > 0,
       'got ' + JSON.stringify(res) + ' — the page can only show "Export failed" for this');
@@ -174,7 +174,7 @@ function samplePayload(extra) {
   {
     const stub = makeChrome({});
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_EXPORT', payload: undefined });
+    const res = await send(stub, { type: 'DOMHEIST_EXPORT', payload: undefined });
     ok('error: a missing payload answers with a reason',
       res && res.ok === false && typeof res.reason === 'string',
       'got ' + JSON.stringify(res));
@@ -184,7 +184,7 @@ function samplePayload(extra) {
   {
     const stub = makeChrome({ frames: [{ frameId: 0 }, { frameId: 12 }], frameReplies: {} });
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_CMD', cmd: 'export', tabId: 7 });
+    const res = await send(stub, { type: 'DOMHEIST_CMD', cmd: 'export', tabId: 7 });
     ok('collect: an empty selection reports "empty", not a generic failure',
       res && res.ok === false && res.reason === 'empty', JSON.stringify(res));
   }
@@ -196,7 +196,7 @@ function samplePayload(extra) {
       frameReplies: { 0: 'throw', 12: samplePayload() }
     });
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_CMD', cmd: 'export', tabId: 7 });
+    const res = await send(stub, { type: 'DOMHEIST_CMD', cmd: 'export', tabId: 7 });
     ok('collect: a frame without the content script is skipped, export proceeds',
       res && res.ok === true, JSON.stringify(res));
   }
@@ -205,14 +205,14 @@ function samplePayload(extra) {
   {
     const stub = makeChrome({});
     loadWorker(stub);
-    const created = await send(stub, { type: 'CHEATER_EXPORT', payload: samplePayload() });
+    const created = await send(stub, { type: 'DOMHEIST_EXPORT', payload: samplePayload() });
     const id = created.id;
-    const got = await send(stub, { type: 'CHEATER_GET_PAYLOAD', id });
+    const got = await send(stub, { type: 'DOMHEIST_GET_PAYLOAD', id });
     ok('handoff: the export tab can read its payload',
       got && got.ok === true && got.payload && got.payload.url === 'https://example.com/',
       JSON.stringify(got && got.ok));
-    await send(stub, { type: 'CHEATER_RELEASE_PAYLOAD', id });
-    const after = await send(stub, { type: 'CHEATER_GET_PAYLOAD', id });
+    await send(stub, { type: 'DOMHEIST_RELEASE_PAYLOAD', id });
+    const after = await send(stub, { type: 'DOMHEIST_GET_PAYLOAD', id });
     ok('handoff: payload is released after the tab reads it',
       after && after.ok === false, JSON.stringify(after && after.ok));
   }
@@ -221,7 +221,7 @@ function samplePayload(extra) {
   {
     const stub = makeChrome({});
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_FETCH_FONT', url: 'https://x.test/late.woff2' });
+    const res = await send(stub, { type: 'DOMHEIST_FETCH_FONT', url: 'https://x.test/late.woff2' });
     ok('refetch: a late single font fetch returns base64 bytes',
       res && res.ok === true && typeof res.base64 === 'string' && res.bytes === 2048,
       JSON.stringify(res && { ok: res.ok, bytes: res.bytes }));
@@ -243,7 +243,7 @@ function samplePayload(extra) {
       }
     });
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_CMD', cmd: 'grab', tabId: 7 });
+    const res = await send(stub, { type: 'DOMHEIST_CMD', cmd: 'grab', tabId: 7 });
     ok('grab: fanned out to every frame, and the hovering frame wins',
       res && res.ok === true && res.grabbed === true, JSON.stringify(res));
     ok('grab: names which frame answered',
@@ -257,7 +257,7 @@ function samplePayload(extra) {
       frameReplies: { 0: { ok: false, grabbed: false }, 3: { ok: false, grabbed: false } }
     });
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_CMD', cmd: 'grab', tabId: 7 });
+    const res = await send(stub, { type: 'DOMHEIST_CMD', cmd: 'grab', tabId: 7 });
     ok('grab: reports honestly when no frame is hovering',
       res && res.ok === true && res.grabbed === false, JSON.stringify(res));
   }
@@ -269,7 +269,7 @@ function samplePayload(extra) {
       frameReplies: { 0: 'throw', 5: { ok: true, grabbed: true, frame: 'f5' } }
     });
     loadWorker(stub);
-    const res = await send(stub, { type: 'CHEATER_CMD', cmd: 'grab', tabId: 7 });
+    const res = await send(stub, { type: 'DOMHEIST_CMD', cmd: 'grab', tabId: 7 });
     ok('grab: a dead frame does not sink the request',
       res && res.grabbed === true, JSON.stringify(res));
   }

@@ -1,5 +1,5 @@
 /**
- * Cheater — content script. Runs in every frame of every page.
+ * DOM Heist — content script. Runs in every frame of every page.
  *
  * Responsibilities, in the order the sections appear below:
  *   selection UI (hover highlight, indicator, selection box, toast)
@@ -20,11 +20,11 @@
 (function () {
   'use strict';
 
-  if (window.__cheaterInstalled) return;
-  window.__cheaterInstalled = true;
+  if (window.__domheistInstalled) return;
+  window.__domheistInstalled = true;
 
-  const PREFIX = 'cheater-';
-  const RESET_CSS = (globalThis.CheaterReset && globalThis.CheaterReset.RESET_CSS) || '';
+  const PREFIX = 'domheist-';
+  const RESET_CSS = (globalThis.DomHeistReset && globalThis.DomHeistReset.RESET_CSS) || '';
 
   /* ======================================================================== *
    * SECTION: tag / property tables
@@ -418,7 +418,7 @@
     if (node.id && String(node.id).indexOf(PREFIX) === 0) return true;
     const cls = node.getAttribute && node.getAttribute('class');
     if (cls && String(cls).indexOf(PREFIX) !== -1) return true;
-    return !!(node.hasAttribute && node.hasAttribute('data-cheater'));
+    return !!(node.hasAttribute && node.hasAttribute('data-domheist'));
   }
 
   function classListOf(el) {
@@ -457,7 +457,7 @@
   /* ======================================================================== *
    * SECTION: overlay UI
    *
-   * All chrome lives in a CLOSED shadow root on a single cheater- prefixed host.
+   * All chrome lives in a CLOSED shadow root on a single domheist- prefixed host.
    * Closed so page CSS and page scripts cannot reach in; prefixed so the capture
    * walk can drop it by name. Every layer is pointer-events:none, which is what
    * keeps the extension from ever stealing its own hit tests.
@@ -473,7 +473,7 @@
     if (ui.host) return;
     const host = document.createElement('div');
     host.className = PREFIX + 'root';
-    host.setAttribute('data-cheater', 'ui');
+    host.setAttribute('data-domheist', 'ui');
     host.style.cssText = 'all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483647';
 
     let root;
@@ -488,8 +488,8 @@
       // what the grab key would capture — but restyles it to amber and dashed, so
       // "your clicks go to the page" is visible at a glance rather than something
       // you have to remember.
-      ':host(.cheater-paused) .hover{border:1px dashed #FFB224;background:rgba(255,178,36,.05)}',
-      ':host(.cheater-paused) .label{border-left-color:#FFB224}',
+      ':host(.domheist-paused) .hover{border:1px dashed #FFB224;background:rgba(255,178,36,.05)}',
+      ':host(.domheist-paused) .label{border-left-color:#FFB224}',
       '.hover{border:1px solid #FF4A3D;background:rgba(255,74,61,.07);transition:none}',
       '.sel{border:1px solid #4A9BFF;background:rgba(74,155,255,.10)}',
       '.selbox{border:1px dashed #4A9BFF;background:rgba(74,155,255,.06)}',
@@ -513,29 +513,29 @@
       '.progress-pct{color:#FFB224;font-size:11px;font-variant-numeric:tabular-nums}',
       '.progress-track{margin-top:7px;height:2px;background:#2A2D33;overflow:hidden}',
       '.progress-fill{height:100%;background:#FFB224;width:0%;transition:width .1s linear}',
-      '.progress-fill.indeterminate{animation:cheater-sweep 1s linear infinite;',
+      '.progress-fill.indeterminate{animation:domheist-sweep 1s linear infinite;',
       'background:linear-gradient(90deg,#2A2D33 0%,#FFB224 50%,#2A2D33 100%);background-size:200% 100%}',
-      '@keyframes cheater-sweep{0%{background-position:100% 0}100%{background-position:-100% 0}}',
-      // The one layer that accepts pointer events. Its classes carry the cheater-
+      '@keyframes domheist-sweep{0%{background-position:100% 0}100%{background-position:-100% 0}}',
+      // The one layer that accepts pointer events. Its classes carry the domheist-
       // prefix so isOurs() recognises them and hit testing skips the toolbar
       // instead of selecting it.
-      '.cheater-bar{position:fixed;right:12px;bottom:12px;z-index:6;pointer-events:auto;',
+      '.domheist-bar{position:fixed;right:12px;bottom:12px;z-index:6;pointer-events:auto;',
       'display:flex;align-items:stretch;background:#121316;border:1px solid #2A2D33;',
       'border-left:2px solid #FFB224;font-size:11px;letter-spacing:.02em;',
       'box-shadow:0 6px 20px rgba(0,0,0,.45)}',
       // The toolbar is the one layer that accepts pointer events, so whatever sits
       // under it cannot be hovered. It gets out of the cursor's way rather than
       // expecting you to work around it.
-      '.cheater-bar.cheater-flip{right:auto;left:12px}',
-      '.cheater-mode{display:flex}',
-      '.cheater-btn{all:unset;display:flex;align-items:center;padding:7px 10px;color:#8A8F98;',
+      '.domheist-bar.domheist-flip{right:auto;left:12px}',
+      '.domheist-mode{display:flex}',
+      '.domheist-btn{all:unset;display:flex;align-items:center;padding:7px 10px;color:#8A8F98;',
       'cursor:pointer;font:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;',
       'border-right:1px solid #2A2D33;white-space:nowrap}',
-      '.cheater-btn:hover{color:#E8E6E1;background:#16181B}',
-      '.cheater-btn.cheater-on{color:#0C0D0F;background:#FFB224}',
-      '.cheater-hint{display:flex;align-items:center;padding:7px 10px;color:#6B7077;',
+      '.domheist-btn:hover{color:#E8E6E1;background:#16181B}',
+      '.domheist-btn.domheist-on{color:#0C0D0F;background:#FFB224}',
+      '.domheist-hint{display:flex;align-items:center;padding:7px 10px;color:#6B7077;',
       'white-space:nowrap;pointer-events:none}',
-      '.cheater-hint b{color:#8A8F98;font-weight:400}'
+      '.domheist-hint b{color:#8A8F98;font-weight:400}'
     ].join('');
     root.appendChild(style);
 
@@ -554,7 +554,7 @@
     // "I can't interact with the page in selection mode" is the whole complaint.
     const bar = document.createElement('div');
     bar.className = PREFIX + 'bar';
-    bar.setAttribute('data-cheater', 'bar');
+    bar.setAttribute('data-domheist', 'bar');
 
     const modeWrap = document.createElement('div');
     modeWrap.className = PREFIX + 'mode';
@@ -885,7 +885,7 @@
    * see the postMessage, but it has no route to our worker, so it cannot answer for
    * the frame. The frameId comes from the browser, not from the message.
    */
-  const REMOTE_HELLO = 'cheater-frame-hello';
+  const REMOTE_HELLO = 'domheist-frame-hello';
   const REMOTE_TIMEOUT_MS = 4000;
   let remoteSeq = 0;
 
@@ -909,7 +909,7 @@
     try {
       // '*' is required: the whole point is that we do not know the frame's origin.
       // Nothing sensitive travels — just a token the frame echoes to the worker.
-      target.postMessage({ __cheater: REMOTE_HELLO, token }, '*');
+      target.postMessage({ __domheist: REMOTE_HELLO, token }, '*');
     } catch (_) {
       return null;
     }
@@ -917,7 +917,7 @@
     // sendToWorker wraps the worker's reply as { value } (or { error }); reading the
     // reply's own fields off the wrapper silently yields undefined every time.
     const result = await sendToWorker({
-      type: 'CHEATER_CAPTURE_REMOTE', token, timeout: REMOTE_TIMEOUT_MS
+      type: 'DOMHEIST_CAPTURE_REMOTE', token, timeout: REMOTE_TIMEOUT_MS
     });
     const reply = result && result.value;
     if (!reply || !reply.payload) return null;
@@ -932,9 +932,9 @@
   function installRemoteHelloListener() {
     window.addEventListener('message', (event) => {
       const data = event && event.data;
-      if (!data || typeof data !== 'object' || data.__cheater !== REMOTE_HELLO) return;
+      if (!data || typeof data !== 'object' || data.__domheist !== REMOTE_HELLO) return;
       if (typeof data.token !== 'string' || !data.token) return;
-      sendToWorker({ type: 'CHEATER_FRAME_HELLO', token: data.token });
+      sendToWorker({ type: 'DOMHEIST_FRAME_HELLO', token: data.token });
     }, false);
   }
 
@@ -1371,7 +1371,7 @@
     try {
       const frame = document.createElement('iframe');
       frame.className = PREFIX + 'probe';
-      frame.setAttribute('data-cheater', 'probe');
+      frame.setAttribute('data-domheist', 'probe');
       frame.setAttribute('aria-hidden', 'true');
       frame.style.cssText =
         'position:fixed;left:-99999px;top:0;width:1024px;height:768px;border:0;' +
@@ -2770,7 +2770,7 @@
 
     let shot = null;
     try {
-      shot = await sendToWorker({ type: 'CHEATER_CAPTURE_TAB' });
+      shot = await sendToWorker({ type: 'DOMHEIST_CAPTURE_TAB' });
     } finally {
       if (hostWasVisible && ui.host) ui.host.style.display = '';
     }
@@ -2955,7 +2955,7 @@
         attrs.value = el.value;
       }
     } else if (tag === 'textarea') {
-      attrs['data-cheater-value'] = el.value || '';
+      attrs['data-domheist-value'] = el.value || '';
     } else if (tag === 'option') {
       if (el.selected) attrs.selected = true;
     } else if (tag === 'select') {
@@ -2987,7 +2987,7 @@
     for (const attr of Array.from(el.attributes || [])) {
       const name = attr.name;
       if (name === 'class' || name === 'style' || name === 'id') continue;
-      if (name.indexOf('cheater-') !== -1) continue;
+      if (name.indexOf('domheist-') !== -1) continue;
       if (KEEP_ATTRS.has(name) || name.indexOf('aria-') === 0 || name.indexOf('data-') === 0) {
         if (name.indexOf('data-') === 0 && attr.value.length > 200) continue;
         attrs[name] = attr.value;
@@ -3622,9 +3622,9 @@
       }
     }
 
-    if (tag === 'textarea' && node.attrs['data-cheater-value']) {
-      node.ch = [{ k: 't', v: node.attrs['data-cheater-value'] }];
-      delete node.attrs['data-cheater-value'];
+    if (tag === 'textarea' && node.attrs['data-domheist-value']) {
+      node.ch = [{ k: 't', v: node.attrs['data-domheist-value'] }];
+      delete node.attrs['data-domheist-value'];
     }
 
     // Last check before handing the node back: does it occupy icon-sized space and
@@ -5197,7 +5197,7 @@
     if (cursorStyleEl) return;
     const style = document.createElement('style');
     style.className = PREFIX + 'style';
-    style.setAttribute('data-cheater', 'cursor');
+    style.setAttribute('data-domheist', 'cursor');
     style.textContent = '*{cursor:crosshair !important}';
     (document.head || document.documentElement).appendChild(style);
     cursorStyleEl = style;
@@ -5281,7 +5281,7 @@
   function reportActiveState() {
     try {
       chrome.runtime.sendMessage(
-        { type: 'CHEATER_ACTIVE', active: state.active, paused: state.paused },
+        { type: 'DOMHEIST_ACTIVE', active: state.active, paused: state.paused },
         () => { void chrome.runtime.lastError; }   // badge state only
       );
     } catch (_) { /* noop */ }
@@ -5440,7 +5440,7 @@
     }
     if (matchesShortcut(event, shortcuts.history)) {
       event.preventDefault();
-      sendToWorker({ type: 'CHEATER_OPEN_HISTORY' }).then((result) => {
+      sendToWorker({ type: 'DOMHEIST_OPEN_HISTORY' }).then((result) => {
         if (result.error) toast('Could not open history: ' + result.error, true);
       });
       return;
@@ -5502,7 +5502,7 @@
     // is no reason to involve the worker.
     if (state.hovered) return grabHovered(exact);
 
-    return sendToWorker({ type: 'CHEATER_CMD', cmd: 'grab', exact: !!exact }).then((result) => {
+    return sendToWorker({ type: 'DOMHEIST_CMD', cmd: 'grab', exact: !!exact }).then((result) => {
       // The worker's reply lives under .value — see sendToWorker. Reading .grabbed
       // straight off the wrapper yields undefined every time, which is exactly the
       // bug that made cross-frame grab appear to do nothing.
@@ -5535,7 +5535,7 @@
         Math.round(r.left) + ',' + Math.round(r.top) + ']';
     };
 
-    say('cheater', (chrome.runtime.getManifest ? chrome.runtime.getManifest().version : '?') +
+    say('domheist', (chrome.runtime.getManifest ? chrome.runtime.getManifest().version : '?') +
       (state.paused ? ' · interact mode' : ' · select mode'));
     say('frame', (window.top === window ? 'TOP' : 'SUBFRAME') + ' ' + location.href.slice(0, 120));
     say('pointer', state.pointer.x < 0 ? 'NEVER MOVED IN THIS FRAME' : state.pointer.x + ',' + state.pointer.y);
@@ -5610,7 +5610,7 @@
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(report);
     } catch (_) { /* clipboard needs focus; the console copy below always works */ }
     // eslint-disable-next-line no-console
-    console.log('%c[cheater diagnose]%c\n' + report, 'color:#FFB224;font-weight:700', 'color:inherit');
+    console.log('%c[domheist diagnose]%c\n' + report, 'color:#FFB224;font-weight:700', 'color:inherit');
     toast('Diagnostic copied to the clipboard, and printed to the console (paste it somewhere useful).');
     return report;
   }
@@ -5689,7 +5689,7 @@
       hideProgress();
       // Another frame may hold the selection; let the worker poll them all.
       // This frame has nothing, but another frame might — let the worker poll.
-      sendToWorker({ type: 'CHEATER_CMD', cmd: 'export' }).then((result) => {
+      sendToWorker({ type: 'DOMHEIST_CMD', cmd: 'export' }).then((result) => {
         if (result.error) { reportFailure(result.error); return; }
         const value = result.value;
         if (!value || value.ok) return;
@@ -5702,7 +5702,7 @@
     // no byte count to report from here, so this phase is indeterminate.
     showProgress('Fetching fonts and opening export', null);
 
-    const response = await sendToWorker({ type: 'CHEATER_EXPORT', payload });
+    const response = await sendToWorker({ type: 'DOMHEIST_EXPORT', payload });
     hideProgress();
 
     if (response.error) { reportFailure(response.error, null, payload); return; }
@@ -5780,7 +5780,7 @@
 
     // The console line is what gets copied into a bug report, so it carries the
     // same text as the toast plus the objects for inspection.
-    console.error('[Cheater] export failed: ' + detail, error || '', payload ? { payload } : '');
+    console.error('[DOM Heist] export failed: ' + detail, error || '', payload ? { payload } : '');
     toast('Export failed: ' + detail, true);
   }
 
@@ -5792,17 +5792,17 @@
     if (!message || typeof message.type !== 'string') return false;
 
     switch (message.type) {
-      case 'CHEATER_START':
+      case 'DOMHEIST_START':
         activate();
         sendResponse({ ok: true, frame: location.href });
         return true;
 
-      case 'CHEATER_PAUSE':
+      case 'DOMHEIST_PAUSE':
         sendResponse({ ok: setPaused(message.paused === undefined ? !state.paused : !!message.paused),
                        paused: state.paused });
         return true;
 
-      case 'CHEATER_CLEAR':
+      case 'DOMHEIST_CLEAR':
         deactivate();
         sendResponse({ ok: true });
         return true;
@@ -5816,7 +5816,7 @@
        * to the top document. Every frame is asked; only the one with something under
        * its pointer answers.
        */
-      case 'CHEATER_GRAB':
+      case 'DOMHEIST_GRAB':
         if (!state.active || !state.hovered) { sendResponse({ ok: false, grabbed: false }); return true; }
         grabHovered(!!message.exact).then(
           (grabbed) => sendResponse({ ok: true, grabbed, frame: location.href }),
@@ -5828,20 +5828,20 @@
        * A parent that cannot read us has asked us to capture ourselves. Answer with a
        * complete payload; the parent merges it into its own tables.
        */
-      case 'CHEATER_CAPTURE_FRAME':
+      case 'DOMHEIST_CAPTURE_FRAME':
         captureOwnDocumentPayload().then(
           (payload) => sendResponse({ ok: !!payload, payload: payload || null, url: location.href }),
           () => sendResponse({ ok: false, payload: null })
         );
         return true;   // async response
 
-      case 'CHEATER_SELECT_BODY':
+      case 'DOMHEIST_SELECT_BODY':
         selectBody().then((ok) => sendResponse({ ok }), () => sendResponse({ ok: false }));
         return true;   // async response
 
       // Only frames that actually hold a selection answer with a payload; every
       // other frame returns null and is skipped by the worker.
-      case 'CHEATER_COLLECT': {
+      case 'DOMHEIST_COLLECT': {
         // A capture may still be walking when the worker polls; answering null
         // here would silently drop this frame from the export.
         if (state.capturing) { sendResponse(null); return true; }
@@ -5851,7 +5851,7 @@
         return true;
       }
 
-      case 'CHEATER_STATUS':
+      case 'DOMHEIST_STATUS':
         sendResponse({
           ok: true,
           active: state.active,
@@ -5861,12 +5861,12 @@
         });
         return true;
 
-      case 'CHEATER_TOAST':
+      case 'DOMHEIST_TOAST':
         if (window.top === window) toast(message.text || '');
         sendResponse({ ok: true });
         return true;
 
-      case 'CHEATER_SHORTCUTS':
+      case 'DOMHEIST_SHORTCUTS':
         state.shortcuts = message.shortcuts || DEFAULT_SHORTCUTS;
         sendResponse({ ok: true });
         return true;
@@ -5920,7 +5920,7 @@
    * test/run-fixtures.mjs) and so capture problems can be poked at from the
    * devtools console with the content-script context selected.
    */
-  window.__cheater = {
+  window.__domheist = {
     activate: activate,
     deactivate: deactivate,
     setPaused: setPaused,

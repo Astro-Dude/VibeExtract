@@ -1,5 +1,5 @@
 /**
- * Cheater — iframe harness.
+ * DOM Heist — iframe harness.
  *
  * Every iframe used to become a flat screenshot crop, same-origin ones included. It
  * looked right in the preview and carried no DOM at all, so the TOON handed an LLM a
@@ -35,8 +35,8 @@ async (page) => {
   }
 
   const results = await page.evaluate(async () => {
-    const C = window.__cheater;
-    const W = window.CheaterHtmlWriter;
+    const C = window.__domheist;
+    const W = window.DomHeistHtmlWriter;
     const out = [];
     const ok = (name, pass, detail) => out.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
     const q = (sel) => document.querySelector(`[data-test="${sel}"]`);
@@ -190,16 +190,16 @@ async (page) => {
         'framesPixels=' + payload.diagnostics.framesPixels);
       ok('page: no <iframe> tag survives in the export', !/<iframe/i.test(source),
         'an iframe tag would try to load the live URL from the saved file');
-      ok('page: our own probe iframe never captured', !source.includes('cheater-probe'));
+      ok('page: our own probe iframe never captured', !source.includes('domheist-probe'));
     }
 
     /* ------------------------------------------------------------------- TOON */
     {
       const payload = await cap(q('frame-srcdoc-host'));
-      const toon = window.CheaterToonWriter.toToon(payload);
+      const toon = window.DomHeistToonWriter.toToon(payload);
       ok('toon: frame content reaches the LLM handoff', toon.includes('$267.84'),
         'the frame is still a placeholder in the TOON — which was the whole problem');
-      const reparsed = window.CheaterToonWriter.parseToon(toon);
+      const reparsed = window.DomHeistToonWriter.parseToon(toon);
       ok('toon: frame content round-trips through the parser',
         html(reparsed).includes('$267.84'));
     }
@@ -404,8 +404,8 @@ async (page) => {
         el.src = base + '/' + src + '?v=' + Date.now();
         el.onload = () => {
           if (--left) return;
-          f.contentWindow.__cheater.activate();
-          f.contentWindow.__cheater.setPaused(true);
+          f.contentWindow.__domheist.activate();
+          f.contentWindow.__domheist.setPaused(true);
           const tile = d.querySelector('[data-test="iframe-tile"]');
           const fr = f.getBoundingClientRect();
           const ir = tile.getBoundingClientRect();
@@ -423,15 +423,15 @@ async (page) => {
       const res = [];
       const ok = (name, pass, detail) => res.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
       const f = document.querySelector('[data-test="frame-tip"]');
-      const inner = f.contentWindow.__cheater;
-      const W = window.CheaterHtmlWriter;
+      const inner = f.contentWindow.__domheist;
+      const W = window.DomHeistHtmlWriter;
 
       ok('frame hover: the card really appeared inside the frame',
         !!f.contentDocument.querySelector('[data-test="iframe-card"]'),
         'the fixture card never appeared');
       // The fact that forces the broadcast to exist.
       ok('frame hover: the TOP frame sees no hover at all',
-        window.__cheater.state.hovered === null,
+        window.__domheist.state.hovered === null,
         'the top frame somehow tracked a hover across a frame boundary');
       ok('frame hover: the FRAME does see it',
         !!inner.state.hovered, 'the frame instance is not tracking the hover either');

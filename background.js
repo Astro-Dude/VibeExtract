@@ -1,5 +1,5 @@
 /**
- * Cheater — service worker.
+ * DOM Heist — service worker.
  *
  * Three jobs:
  *   1. Fan commands out to every frame of a tab, and collect capture payloads
@@ -253,7 +253,7 @@ function describeError(error) {
 function guard(promise, label) {
   return promise.catch((error) => {
     const reason = describeError(error);
-    console.error('[Cheater] ' + label + ' failed:', error);
+    console.error('[DOM Heist] ' + label + ' failed:', error);
     return { ok: false, reason };
   });
 }
@@ -268,9 +268,9 @@ async function runExport(tabId, payloadFromSender) {
   }
 
   if (!payload) {
-    const entries = await broadcast(tabId, { type: 'CHEATER_COLLECT' });
+    const entries = await broadcast(tabId, { type: 'DOMHEIST_COLLECT' });
     if (!entries.length) {
-      await broadcast(tabId, { type: 'CHEATER_TOAST', text: 'Nothing selected' });
+      await broadcast(tabId, { type: 'DOMHEIST_TOAST', text: 'Nothing selected' });
       return { ok: false, reason: 'empty' };
     }
     payload = mergePayloads(entries);
@@ -338,7 +338,7 @@ async function readPayload(id) {
  * payloads, read only when an entry is actually opened.
  * ========================================================================== */
 
-const HISTORY_DB = 'cheater-history';
+const HISTORY_DB = 'domheist-history';
 const HISTORY_LIMIT = 10;
 const HISTORY_BYTE_BUDGET = 60 * 1024 * 1024;   // disk is cheap, but not free
 
@@ -423,7 +423,7 @@ async function saveHistory(id, payload) {
 
     await pruneHistory(db);
   } catch (error) {
-    console.warn('[Cheater] could not record history:', error);
+    console.warn('[DOM Heist] could not record history:', error);
   } finally {
     db.close();
   }
@@ -608,7 +608,7 @@ async function captureRemoteFrame(token, tabId, timeoutMs) {
   }
 
   remoteFrames.delete(token);              // single use
-  const reply = await sendToFrame(entry.tabId, entry.frameId, { type: 'CHEATER_CAPTURE_FRAME' });
+  const reply = await sendToFrame(entry.tabId, entry.frameId, { type: 'DOMHEIST_CAPTURE_FRAME' });
   if (!reply || !reply.payload) return { ok: false, reason: 'the frame could not capture itself' };
   return { ok: true, payload: reply.payload, url: reply.url || null };
 }
@@ -618,7 +618,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   switch (message.type) {
     // Popup asks us to drive a tab; content script asks us to drive its own tab.
-    case 'CHEATER_CMD': {
+    case 'DOMHEIST_CMD': {
       const tabId = message.tabId || (sender.tab && sender.tab.id);
       if (!tabId) { sendResponse({ ok: false, reason: 'no-tab' }); return true; }
 
@@ -632,7 +632,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // the hover lives in the frame under the cursor — different frames whenever
         // the target is inside an iframe.
         guard(
-          broadcast(tabId, { type: 'CHEATER_GRAB', exact: !!message.exact }).then((replies) => {
+          broadcast(tabId, { type: 'DOMHEIST_GRAB', exact: !!message.exact }).then((replies) => {
             // broadcast() hands back { frameId, reply } wrappers, not bare replies.
             const hit = (replies || []).find((entry) => entry.reply && entry.reply.grabbed);
             return {
@@ -649,13 +649,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.cmd === 'fullpage') {
         // Select <body> everywhere, then collect. Frames without a body reply null.
         guard(
-          broadcast(tabId, { type: 'CHEATER_SELECT_BODY' }).then(() => runExport(tabId, null)),
+          broadcast(tabId, { type: 'DOMHEIST_SELECT_BODY' }).then(() => runExport(tabId, null)),
           'full-page export'
         ).then(sendResponse);
         return true;
       }
       guard(
-        broadcast(tabId, { type: 'CHEATER_' + String(message.cmd).toUpperCase() })
+        broadcast(tabId, { type: 'DOMHEIST_' + String(message.cmd).toUpperCase() })
           .then((replies) => {
             if (message.cmd === 'start') setActiveBadge(tabId, true);
             if (message.cmd === 'clear') setActiveBadge(tabId, false);
@@ -667,34 +667,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // A frame already has a payload in hand (export triggered locally).
-    case 'CHEATER_EXPORT': {
+    case 'DOMHEIST_EXPORT': {
       const tabId = sender.tab && sender.tab.id;
       guard(runExport(tabId, message.payload), 'export').then(sendResponse);
       return true;
     }
 
-    case 'CHEATER_GET_PAYLOAD':
+    case 'DOMHEIST_GET_PAYLOAD':
       guard(
         readPayload(message.id).then((payload) => ({ ok: !!payload, payload })),
         'payload read'
       ).then(sendResponse);
       return true;
 
-    case 'CHEATER_RELEASE_PAYLOAD':
+    case 'DOMHEIST_RELEASE_PAYLOAD':
       guard(releasePayload(message.id).then(() => ({ ok: true })), 'payload release')
         .then(sendResponse);
       return true;
 
     // Fallback for the export tab: tokenized CDN font URLs can expire between
     // capture and "Download fonts", so allow a late single re-fetch.
-    case 'CHEATER_FETCH_FONT':
+    case 'DOMHEIST_FETCH_FONT':
       guard(
         fetchFontBinary({ url: message.url, path: message.path, mime: message.mime }),
         'font fetch'
       ).then(sendResponse);
       return true;
 
-    case 'CHEATER_FRAME_HELLO': {
+    case 'DOMHEIST_FRAME_HELLO': {
       // The frameId comes from the sender, so a page cannot claim to be a frame it
       // is not. Anonymous senders (no tab) are ignored.
       const tabId = sender.tab && sender.tab.id;
@@ -705,14 +705,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    case 'CHEATER_CAPTURE_REMOTE':
+    case 'DOMHEIST_CAPTURE_REMOTE':
       guard(
         captureRemoteFrame(message.token, sender.tab && sender.tab.id, message.timeout),
         'remote frame capture'
       ).then(sendResponse);
       return true;
 
-    case 'CHEATER_ACTIVE':
+    case 'DOMHEIST_ACTIVE':
       setActiveBadge(sender.tab && sender.tab.id, !!message.active, !!message.paused);
       sendResponse({ ok: true });
       return true;
@@ -720,25 +720,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Open the export tab straight onto history — either a specific capture, or
     // the list itself. Reachable from the popup and from a shortcut, so past
     // captures are not stranded behind "do another export first".
-    case 'CHEATER_OPEN_HISTORY':
+    case 'DOMHEIST_OPEN_HISTORY':
       guard(openHistoryTab(message.id), 'open history').then(sendResponse);
       return true;
 
-    case 'CHEATER_HISTORY_LIST':
+    case 'DOMHEIST_HISTORY_LIST':
       guard(listHistory(), 'history list').then(sendResponse);
       return true;
 
-    case 'CHEATER_HISTORY_GET':
+    case 'DOMHEIST_HISTORY_GET':
       guard(getHistoryPayload(message.id), 'history read').then(sendResponse);
       return true;
 
-    case 'CHEATER_HISTORY_DELETE':
+    case 'DOMHEIST_HISTORY_DELETE':
       guard(deleteHistory(message.id || null), 'history delete').then(sendResponse);
       return true;
 
     // Last-resort fidelity: a screenshot of the visible tab, which the content
     // script crops per element. Only the worker can call this.
-    case 'CHEATER_CAPTURE_TAB':
+    case 'DOMHEIST_CAPTURE_TAB':
       guard(captureTab(sender.tab), 'tab screenshot').then(sendResponse);
       return true;
 

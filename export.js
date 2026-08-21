@@ -1,5 +1,5 @@
 /**
- * Cheater — export tab.
+ * DOM Heist — export tab.
  *
  * Pulls the payload the service worker staged, renders Preview / HTML / TOON,
  * shows diagnostics, and saves files. Everything it needs is already in the
@@ -10,10 +10,10 @@
 'use strict';
 
 (function () {
-  var HtmlWriter = window.CheaterHtmlWriter;
-  var ToonWriter = window.CheaterToonWriter;
-  var Zip = window.CheaterZip;
-  var Highlight = window.CheaterHighlight;
+  var HtmlWriter = window.DomHeistHtmlWriter;
+  var ToonWriter = window.DomHeistToonWriter;
+  var Zip = window.DomHeistZip;
+  var Highlight = window.DomHeistHighlight;
 
   var el = function (id) { return document.getElementById(id); };
 
@@ -228,7 +228,7 @@
     if (diag.framesRemote) {
       notes.push({ text: diag.framesRemote + ' cross-origin iframe(s) were captured by asking the ' +
         'frame to capture ITSELF. The page cannot read a cross-origin frame — the browser forbids ' +
-        'it — but Cheater runs inside every frame, so the instance in there reads its own document ' +
+        'it — but DOM Heist runs inside every frame, so the instance in there reads its own document ' +
         'and hands back real markup, its own stylesheets and fonts included. Its style classes are ' +
         'renamed so they cannot collide with this page\'s.' });
     }
@@ -481,7 +481,7 @@
       var face = faces[i];
       if (byUrl[face.url] || face.inline) continue;
       var fresh = await sendMessage({
-        type: 'CHEATER_FETCH_FONT', url: face.url, path: face.path, mime: face.mime
+        type: 'DOMHEIST_FETCH_FONT', url: face.url, path: face.path, mime: face.mime
       });
       if (fresh && fresh.ok) { byUrl[face.url] = fresh; retried += 1; }
     }
@@ -574,7 +574,7 @@
   }
 
   async function renderHistory() {
-    var response = await sendMessage({ type: 'CHEATER_HISTORY_LIST' });
+    var response = await sendMessage({ type: 'DOMHEIST_HISTORY_LIST' });
     var rows = el('hist-rows');
 
     if (!response || !response.ok) {
@@ -607,7 +607,7 @@
   }
 
   async function openHistoryEntry(id) {
-    var response = await sendMessage({ type: 'CHEATER_HISTORY_GET', id: id });
+    var response = await sendMessage({ type: 'DOMHEIST_HISTORY_GET', id: id });
     if (!response || !response.ok || !response.payload) {
       toast('Could not open that capture' + (response && response.reason ? ': ' + response.reason : ''), true);
       return false;
@@ -668,7 +668,7 @@
 
     setStage('Reading capture', 8);
     await paint();
-    var response = await sendMessage({ type: 'CHEATER_GET_PAYLOAD', id: state.exportId });
+    var response = await sendMessage({ type: 'DOMHEIST_GET_PAYLOAD', id: state.exportId });
     if (!response || !response.ok || !response.payload) {
       showEmpty('The capture payload has expired. Re-run the export from the page.');
       return;
@@ -676,7 +676,7 @@
     state.payload = response.payload;
 
     // The worker's copy is only needed until now.
-    sendMessage({ type: 'CHEATER_RELEASE_PAYLOAD', id: state.exportId });
+    sendMessage({ type: 'DOMHEIST_RELEASE_PAYLOAD', id: state.exportId });
 
     await renderPayload();
 
@@ -718,7 +718,7 @@
   });
 
   el('hist-clear').addEventListener('click', async function () {
-    await sendMessage({ type: 'CHEATER_HISTORY_DELETE' });
+    await sendMessage({ type: 'DOMHEIST_HISTORY_DELETE' });
     await renderHistory();
     toast('History cleared');
   });
@@ -729,7 +729,7 @@
     var row = button.closest('.hrow');
     if (!row) return;
     if (button.dataset.act === 'open') { await openHistoryEntry(row.dataset.id); return; }
-    await sendMessage({ type: 'CHEATER_HISTORY_DELETE', id: row.dataset.id });
+    await sendMessage({ type: 'DOMHEIST_HISTORY_DELETE', id: row.dataset.id });
     await renderHistory();
   });
 

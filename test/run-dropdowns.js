@@ -1,5 +1,5 @@
 /**
- * Cheater — closed-dropdown harness.
+ * DOM Heist — closed-dropdown harness.
  *
  * Covers the case that actually matters and that the portal fixtures in
  * fixtures.html do not: a dropdown whose menu is CLOSED when you select it.
@@ -38,8 +38,8 @@ async (page) => {
   }
 
   const results = await page.evaluate(async () => {
-    const C = window.__cheater;
-    const W = window.CheaterHtmlWriter;
+    const C = window.__domheist;
+    const W = window.DomHeistHtmlWriter;
     const out = [];
     const ok = (name, pass, detail) => out.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
     const q = (sel) => document.querySelector(`[data-test="${sel}"]`);
@@ -89,9 +89,9 @@ async (page) => {
         'wired=' + payload.diagnostics.closedMenusWired);
 
       const view = await render(source);
-      const menu = view.doc.querySelector('.cheater-dd-menu');
-      const trigger = view.doc.querySelector('.cheater-dd-trigger') ||
-        view.doc.querySelector('.cheater-dd[tabindex]');
+      const menu = view.doc.querySelector('.domheist-dd-menu');
+      const trigger = view.doc.querySelector('.domheist-dd-trigger') ||
+        view.doc.querySelector('.domheist-dd[tabindex]');
 
       if (!menu || !trigger) {
         ok(`closed[${label}]: markers present`, false,
@@ -172,11 +172,11 @@ async (page) => {
       })(), 'distinct dd ids != 2');
 
       const view = await render(source);
-      const menus = view.doc.querySelectorAll('.cheater-dd-menu');
+      const menus = view.doc.querySelectorAll('.domheist-dd-menu');
       ok('twins: both menus rendered', menus.length === 2, 'found ' + menus.length);
       if (menus.length === 2) {
         const display = (i) => view.win.getComputedStyle(menus[i]).display;
-        const triggers = view.doc.querySelectorAll('.cheater-dd-trigger');
+        const triggers = view.doc.querySelectorAll('.domheist-dd-trigger');
         ok('twins: both closed initially',
           display(0) === 'none' && display(1) === 'none', display(0) + ' / ' + display(1));
         triggers[0].focus();
@@ -195,7 +195,7 @@ async (page) => {
     {
       const payload = await cap(q('dd-display'));
       const source = flat(payload);
-      ok('static: no wrapper or marker classes', !source.includes('cheater-dd'),
+      ok('static: no wrapper or marker classes', !source.includes('domheist-dd'),
         'interactive scaffolding leaked into static output');
       ok('static: no :focus-within rules', !source.includes(':focus-within'));
       ok('static: the menu is still captured', source.includes('Healthcare'),
@@ -223,7 +223,7 @@ async (page) => {
       // The markup only — the interactive stylesheet always names these classes.
       const markup = source.slice(source.indexOf('<body'));
       ok('details: kept as a real <details>', /<details/.test(markup));
-      ok('details: not wrapped as a dropdown', !markup.includes('cheater-dd'),
+      ok('details: not wrapped as a dropdown', !markup.includes('domheist-dd'),
         'details was treated as a closed menu');
       ok('details: its content came along despite being closed',
         markup.includes('Include closed funds'),
@@ -249,9 +249,9 @@ async (page) => {
     /* ----------------------------------------------------- TOON stays scaffold-free */
     {
       const payload = await cap(q('dd-display'));
-      const toon = window.CheaterToonWriter.toToon(payload);
+      const toon = window.DomHeistToonWriter.toToon(payload);
       ok('toon: the captured menu is present', toon.includes('Healthcare'));
-      ok('toon: no cheater- scaffolding classes', !toon.includes('cheater-dd'),
+      ok('toon: no domheist- scaffolding classes', !toon.includes('domheist-dd'),
         'interactive scaffolding leaked into the LLM handoff');
     }
 
@@ -336,7 +336,7 @@ async (page) => {
         window.chrome.runtime.sendMessage = realSend;
 
         ok('cross-frame: grab is asked of the worker when this frame has no hover',
-          asked && asked.type === 'CHEATER_CMD' && asked.cmd === 'grab', JSON.stringify(asked));
+          asked && asked.type === 'DOMHEIST_CMD' && asked.cmd === 'grab', JSON.stringify(asked));
         ok('cross-frame: a successful reply is READ correctly, not through the wrapper',
           answered === true,
           'requestGrab reported ' + answered + ' for a reply of { grabbed: true }');
@@ -386,8 +386,8 @@ async (page) => {
     await page.waitForTimeout(120);
 
     return page.evaluate(async (probe) => {
-      const C = window.__cheater;
-      const W = window.CheaterHtmlWriter;
+      const C = window.__domheist;
+      const W = window.DomHeistHtmlWriter;
       const res = [];
       const ok = (name, pass, detail) => res.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
 
@@ -430,7 +430,7 @@ async (page) => {
   // so this needs a real cursor and the appearance signal.
   const cardResults = await (async () => {
     await page.evaluate(() => {
-      const C = window.__cheater;
+      const C = window.__domheist;
       C.clearSelection();
       C.activate();
       C.setPaused(true);                          // interact mode: the page owns hover
@@ -450,8 +450,8 @@ async (page) => {
     await page.waitForTimeout(250);
 
     return page.evaluate(async () => {
-      const C = window.__cheater;
-      const W = window.CheaterHtmlWriter;
+      const C = window.__domheist;
+      const W = window.DomHeistHtmlWriter;
       const res = [];
       const ok = (name, pass, detail) => res.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
 
@@ -520,7 +520,7 @@ async (page) => {
 
   /* ---- a layer that appeared but belongs to nothing must NOT be adopted ---- */
   const negativeResults = await page.evaluate(async () => {
-    const C = window.__cheater;
+    const C = window.__domheist;
     const res = [];
     const ok = (name, pass, detail) => res.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
 
@@ -579,7 +579,7 @@ async (page) => {
     // first, park the cursor somewhere neutral, and only then read the rect and
     // hover the link.
     await page.evaluate(() => {
-      const C = window.__cheater;
+      const C = window.__domheist;
       C.clearSelection();
       C.activate();
       C.setPaused(true);
@@ -596,8 +596,8 @@ async (page) => {
     await page.waitForTimeout(250);
 
     return page.evaluate(async () => {
-      const C = window.__cheater;
-      const W = window.CheaterHtmlWriter;
+      const C = window.__domheist;
+      const W = window.DomHeistHtmlWriter;
       const res = [];
       const ok = (name, pass, detail) => res.push({ name, pass: !!pass, detail: pass ? '' : String(detail ?? '') });
 

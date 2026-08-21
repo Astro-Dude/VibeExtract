@@ -1,5 +1,5 @@
 /**
- * Cheater — cross-origin frame harness.
+ * DOM Heist — cross-origin frame harness.
  *
  * A parent cannot read a cross-origin frame; the browser forbids it and no extension
  * trick changes that. But the content script runs in EVERY frame, so an instance
@@ -21,22 +21,22 @@ async (page) => {
   // A chrome stub that parks outgoing messages for the driver to fulfil. Nothing
   // else can route between frames that cannot see each other.
   await page.addInitScript(() => {
-    window.__cheaterOut = [];
-    window.__cheaterIn = {};
+    window.__domheistOut = [];
+    window.__domheistIn = {};
     window.chrome = {
       runtime: {
         onMessage: {
-          addListener(fn) { (window.__cheaterListeners = window.__cheaterListeners || []).push(fn); }
+          addListener(fn) { (window.__domheistListeners = window.__domheistListeners || []).push(fn); }
         },
         sendMessage(msg, cb) {
           const id = 'r' + Math.random().toString(36).slice(2);
-          window.__cheaterOut.push({ id, msg });
+          window.__domheistOut.push({ id, msg });
           if (!cb) return;
           const poll = setInterval(() => {
-            if (Object.prototype.hasOwnProperty.call(window.__cheaterIn, id)) {
+            if (Object.prototype.hasOwnProperty.call(window.__domheistIn, id)) {
               clearInterval(poll);
-              const reply = window.__cheaterIn[id];
-              delete window.__cheaterIn[id];
+              const reply = window.__domheistIn[id];
+              delete window.__domheistIn[id];
               cb(reply);
             }
           }, 20);
@@ -70,14 +70,14 @@ async (page) => {
       let outbox = [];
       try {
         outbox = await party.evaluate(() => {
-          const o = window.__cheaterOut || [];
-          window.__cheaterOut = [];
+          const o = window.__domheistOut || [];
+          window.__domheistOut = [];
           return o;
         });
       } catch (_) { continue; }
       for (const item of outbox) {
         const msg = item.msg || {};
-        if (msg.type === 'CHEATER_FRAME_HELLO') claimed.set(msg.token, party);
+        if (msg.type === 'DOMHEIST_FRAME_HELLO') claimed.set(msg.token, party);
         else leftovers.push({ item, party });
       }
     }
@@ -92,7 +92,7 @@ async (page) => {
       const msg = item.msg || {};
       let reply = { ok: true };
 
-      if (msg.type === 'CHEATER_CAPTURE_REMOTE') {
+      if (msg.type === 'DOMHEIST_CAPTURE_REMOTE') {
         // The real worker polls until a frame claims the token: the parent posts it
         // and asks in the same breath, so the echo can land after the request.
         let owner = claimed.get(msg.token);
@@ -103,8 +103,8 @@ async (page) => {
         }
         const answered = owner
           ? await owner.evaluate(() => new Promise((resolve) => {
-            for (const fn of (window.__cheaterListeners || [])) {
-              const kept = fn({ type: 'CHEATER_CAPTURE_FRAME' }, {}, resolve);
+            for (const fn of (window.__domheistListeners || [])) {
+              const kept = fn({ type: 'DOMHEIST_CAPTURE_FRAME' }, {}, resolve);
               if (kept) return;
             }
             resolve(null);
@@ -113,7 +113,7 @@ async (page) => {
         reply = answered || { ok: false, payload: null };
       }
 
-      try { await party.evaluate((a) => { window.__cheaterIn[a.id] = a.reply; }, { id: item.id, reply }); }
+      try { await party.evaluate((a) => { window.__domheistIn[a.id] = a.reply; }, { id: item.id, reply }); }
       catch (_) { /* the frame went away */ }
     }
   };
@@ -124,15 +124,15 @@ async (page) => {
 
   const capture = async (testName) => {
     const running = page.evaluate(async (name) => {
-      const C = window.__cheater;
+      const C = window.__domheist;
       C.activate();
       C.clearSelection();
       await C.addSelection(document.querySelector('[data-test="' + name + '"]'), true);
       const payload = C.buildPayload();
       return {
         diagnostics: payload ? payload.diagnostics : null,
-        html: payload ? window.CheaterHtmlWriter.build(payload, { fontMode: 'relative' }) : '',
-        toon: payload ? window.CheaterToonWriter.toToon(payload) : '',
+        html: payload ? window.DomHeistHtmlWriter.build(payload, { fontMode: 'relative' }) : '',
+        toon: payload ? window.DomHeistToonWriter.toToon(payload) : '',
         fonts: payload ? payload.fonts : null,
         classCount: payload ? Object.keys(payload.styles).length : 0
       };
