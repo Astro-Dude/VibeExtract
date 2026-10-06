@@ -651,7 +651,6 @@ the `.html` export when you need the pixels.
 | Permission | Why it's needed |
 |---|---|
 | `activeTab` | Act on the tab you have open when you click the toolbar icon. |
-| `scripting` | Injection support for the content script that draws the selection UI and reads computed styles. |
 | `webNavigation` | Enumerate a tab's frames (`getAllFrames`) so commands reach every frame and the export can come from whichever one holds a selection. |
 | `storage` | Persist your custom shortcuts (`storage.sync`) and stage the export payload for the export tab (`storage.session`). |
 | `downloads` | Save `preview.html`, `component.toon` and `preview-fonts.zip`, and read back the absolute path so it can be copied to your clipboard. |
