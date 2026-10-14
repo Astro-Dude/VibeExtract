@@ -938,6 +938,399 @@
     }, false);
   }
 
+  /* ------------------------------------------------------------ agent bridge */
+
+  /**
+   * Lets a coding agent that can run JavaScript in the page (but cannot click
+   * the toolbar or press chrome.commands shortcuts) drive a capture:
+   *
+   *   window.postMessage({ __domheistAgent: 'capture', id, name,
+   *     selector | selectors:[…] | point:{x,y} | hovered:true | fullPage:true,
+   *     exact, combine, preview, expect, formats }, '*')
+   *
+   * - `selectors` takes several elements in one capture, exactly as Shift+Click
+   *   does (each as-is unless exact:false); `combine:'ancestor'` captures their
+   *   nearest common ancestor instead.
+   * - `preview:true` resolves and highlights the target and reports what is
+   *   inside it, without capturing or saving anything — the agent's equivalent
+   *   of seeing the hover box before clicking.
+   * - `expect:{text:[…]}` names text the capture must contain; the result lists
+   *   whatever is missing.
+   * - Every capture reports a fingerprint of its structure and text, and
+   *   `sameAsLast` when it matches the previous capture on this page (a menu
+   *   that had already closed, a page that had not changed yet).
+   *
+   * The result is posted back as { __domheistAgent: 'result', ... } and mirrored
+   * on <html data-domheist-result>, so a caller limited to short eval results
+   * can poll one attribute. Files land in Downloads/domheist/<site>/<name>.*;
+   * the worker refuses origins outside its allowlist (see AGENT_DEFAULTS).
+   */
+  const AGENT_KEY = '__domheistAgent';
+  const AGENT_PREVIEW_MS = 4000;
+  const AGENT_LIST_LIMIT = 30;
+  const AGENT_HOVER_MS = 500;
+  let agentBusy = false;
+  let agentLastFingerprint = null;
+  let agentPreviewTimer = null;
+
+  function installAgentBridge() {
+    if (window.top !== window) return;
+    window.addEventListener('message', (event) => {
+      if (event.source !== window) return;
+      const data = event.data;
+      if (!data || typeof data !== 'object' || data[AGENT_KEY] !== 'capture') return;
+      runAgentCapture(data);
+    }, false);
+  }
+
+  function describeTarget(el) {
+    const rect = el.getBoundingClientRect();
+    const cls = typeof el.className === 'string' ? el.className.trim().split(/\s+/).slice(0, 4).join('.') : '';
+    return {
+      tag: el.tagName.toLowerCase(),
+      id: el.id || null,
+      classes: cls || null,
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      text: (el.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+    };
+  }
+
+  function resolveAgentTarget(req) {
+    if (req.fullPage) return document.body;
+    if (typeof req.selector === 'string' && req.selector) return document.querySelector(req.selector);
+    if (req.point && isFinite(req.point.x) && isFinite(req.point.y)) {
+      return document.elementFromPoint(Number(req.point.x), Number(req.point.y));
+    }
+    if (req.hovered) {
+      // :hover tracks the real pointer even when selection mode never ran.
+      const chain = document.querySelectorAll(':hover');
+      return chain.length ? chain[chain.length - 1] : null;
+    }
+    return null;
+  }
+
+  /**
+   * `hover`: where the real pointer goes before capturing, as a selector (its
+   * centre, scrolled into view first) or viewport {x, y}.
+   */
+  function agentHoverPoint(hover) {
+    if (hover && typeof hover === 'object' && isFinite(hover.x) && isFinite(hover.y)) {
+      return { x: Number(hover.x), y: Number(hover.y) };
+    }
+    if (typeof hover !== 'string' || !hover) return { error: 'hover must be a selector or {x, y}' };
+    const hit = querySafely(hover);
+    if (hit.invalid) return { error: 'invalid selector: ' + hover };
+    if (!hit.el) return { error: 'no element matches: ' + hover, missing: [hover] };
+    let rect = hit.el.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) {
+      hit.el.scrollIntoView({ block: 'center', inline: 'center' });
+      rect = hit.el.getBoundingClientRect();
+    }
+    if (!rect.width && !rect.height) return { error: 'hover target is not shown: ' + hover };
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  }
+
+  function querySafely(selector) {
+    try { return { el: document.querySelector(selector) }; } catch (_) { return { invalid: true }; }
+  }
+
+  /**
+   * The request's elements, before expansion. A selector that matches nothing
+   * fails the request by name rather than quietly capturing less than asked.
+   */
+  function resolveAgentTargets(req) {
+    if (!req.fullPage && Array.isArray(req.selectors)) {
+      const list = req.selectors.filter((s) => typeof s === 'string' && s);
+      if (!list.length) return { error: 'selectors is empty' };
+      const found = [];
+      const missing = [];
+      for (const selector of list) {
+        const hit = querySafely(selector);
+        if (hit.invalid) return { error: 'invalid selector: ' + selector };
+        if (hit.el) found.push(hit.el); else missing.push(selector);
+      }
+      if (missing.length) return { error: 'no element matches: ' + missing.join(', '), missing };
+      if (req.combine === 'ancestor') {
+        let common = found[0];
+        for (const el of found.slice(1)) common = commonAncestorEl(common, el);
+        if (!common || common === document.documentElement) common = document.body;
+        return { elements: [common], exact: true };
+      }
+      // Shift+Click takes each element as-is; exact:false opts into expansion.
+      return { elements: found, exact: req.exact !== false };
+    }
+    if (!req.fullPage && typeof req.selector === 'string' && req.selector && querySafely(req.selector).invalid) {
+      return { error: 'invalid selector: ' + req.selector };
+    }
+    const el = resolveAgentTarget(req);
+    if (!el || el.nodeType !== 1) return { error: 'target not found' };
+    return { elements: [el], exact: !!req.exact || !!req.fullPage };
+  }
+
+  /** Expanded, de-duplicated, and with anything inside another target dropped. */
+  function chooseAgentElements(resolved) {
+    const expanded = resolved.elements.map((el) => (resolved.exact ? el : smartExpand(el)) || el);
+    return expanded.filter((el, i) => expanded.indexOf(el) === i &&
+      !expanded.some((other) => other !== el && other.contains(el)));
+  }
+
+  function agentText(value) {
+    return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  }
+
+  function isShown(el) {
+    if (typeof el.checkVisibility === 'function') {
+      return el.checkVisibility({ checkVisibilityCSS: true, visibilityProperty: true });
+    }
+    return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  }
+
+  const AGENT_HEADINGS = 'h1,h2,h3,h4,h5,h6,[role="heading"],legend,caption';
+  const AGENT_CONTROLS = 'button,a[href],input:not([type="hidden"]),select,textarea,' +
+    '[role="button"],[role="link"],[role="combobox"],[role="checkbox"],[role="radio"],' +
+    '[role="tab"],[role="menuitem"],[role="option"],[role="switch"],[role="textbox"]';
+
+  function controlLabel(el) {
+    const labelled = el.labels && el.labels[0] ? el.labels[0].innerText : '';
+    return agentText(el.getAttribute('aria-label') || el.innerText || labelled ||
+      el.getAttribute('placeholder') || el.getAttribute('title') || el.value || el.getAttribute('name')).slice(0, 60);
+  }
+
+  /**
+   * What the agent would see in the hover box: where it is, whether it is on
+   * screen, and the headings and controls inside it. Only shown elements count,
+   * matching what a capture keeps.
+   */
+  function summarizeAgentTargets(elements) {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const boxes = [];
+    const headings = [];
+    const controls = [];
+    let controlCount = 0;
+    let children = 0;
+    let descendants = 0;
+    let partlyOffscreen = false;
+    let hidden = false;
+
+    for (const el of elements) {
+      const r = el.getBoundingClientRect();
+      boxes.push({ x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) });
+      if (r.left < 0 || r.top < 0 || r.right > vw || r.bottom > vh) partlyOffscreen = true;
+      if (!isShown(el) || !r.width || !r.height) hidden = true;
+      children += el.children.length;
+      descendants += el.getElementsByTagName('*').length;
+
+      for (const h of el.querySelectorAll(AGENT_HEADINGS)) {
+        if (headings.length >= AGENT_LIST_LIMIT) break;
+        const text = agentText(h.innerText).slice(0, 80);
+        if (text && isShown(h)) headings.push(text);
+      }
+      for (const c of el.querySelectorAll(AGENT_CONTROLS)) {
+        if (!isShown(c)) continue;
+        controlCount += 1;
+        if (controls.length >= AGENT_LIST_LIMIT) continue;
+        const role = c.getAttribute('role');
+        const type = tagOf(c) === 'input' ? 'input:' + (c.getAttribute('type') || 'text') : tagOf(c);
+        controls.push({ kind: role || type, label: controlLabel(c) });
+      }
+    }
+
+    return {
+      boxes, hidden, partlyOffscreen, children, descendants, headings, controls, controlCount,
+      text: agentText(elements.map((el) => el.innerText).join(' ')).slice(0, 200)
+    };
+  }
+
+  function clearAgentPreview() {
+    clearTimeout(agentPreviewTimer);
+    agentPreviewTimer = null;
+    document.querySelectorAll('.' + PREFIX + 'agent-preview').forEach((n) => n.remove());
+  }
+
+  /** A dashed box per target, numbered, left up long enough for a screenshot. */
+  function showAgentPreview(elements, ms) {
+    clearAgentPreview();
+    const layer = document.createElement('div');
+    layer.className = PREFIX + 'agent-preview';
+    layer.setAttribute('data-domheist', '');
+    layer.setAttribute('aria-hidden', 'true');
+    layer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647';
+    elements.forEach((el, i) => {
+      const r = el.getBoundingClientRect();
+      const box = document.createElement('div');
+      box.style.cssText = 'position:fixed;box-sizing:border-box;border:2px dashed #FFB224;' +
+        'background:rgba(255,178,36,.08);left:' + r.left + 'px;top:' + r.top + 'px;width:' +
+        r.width + 'px;height:' + r.height + 'px';
+      const tag = document.createElement('div');
+      tag.textContent = (elements.length > 1 ? (i + 1) + ' · ' : '') + tagOf(el) + ' ' +
+        Math.round(r.width) + '×' + Math.round(r.height);
+      tag.style.cssText = 'position:absolute;left:-2px;top:-20px;padding:2px 6px;font:11px/14px ' +
+        'ui-monospace,Menlo,monospace;color:#1a1a1a;background:#FFB224;white-space:nowrap';
+      box.appendChild(tag);
+      layer.appendChild(box);
+    });
+    (document.body || document.documentElement).appendChild(layer);
+    agentPreviewTimer = setTimeout(clearAgentPreview, ms);
+  }
+
+  /** The text a capture actually kept (hidden nodes are already gone). */
+  function capturedTextOf(nodes) {
+    const parts = [];
+    const labels = [];
+    const walk = (node) => {
+      if (!node) return;
+      if (node.k === 't') { parts.push(node.v); return; }
+      const attrs = node.attrs || {};
+      // Kept apart from the text: a link's title between its words would break a
+      // label that runs across links ("1710 – Queen Anne's War").
+      for (const key of ['aria-label', 'alt', 'placeholder', 'value', 'title']) {
+        if (attrs[key]) labels.push(attrs[key]);
+      }
+      (node.ch || []).forEach(walk);
+    };
+    nodes.forEach(walk);
+    return agentText(parts.join(' ') + ' ' + labels.join(' '));
+  }
+
+  /** Tags, nesting and text, hashed (FNV-1a): equal when the capture is the same. */
+  function fingerprintOf(nodes) {
+    const parts = [];
+    const walk = (node) => {
+      if (!node) return;
+      if (node.k === 't') { parts.push('"' + agentText(node.v)); return; }
+      parts.push('<' + (node.tag || node.k));
+      (node.ch || []).forEach(walk);
+      parts.push('>');
+    };
+    nodes.forEach(walk);
+    const source = parts.join('');
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < source.length; i += 1) {
+      hash ^= source.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return ('0000000' + hash.toString(16)).slice(-8);
+  }
+
+  // Case-insensitive: CSS text-transform shows "Home" as "HOME", and an agent
+  // reading the screen asks for what it sees, while the capture keeps the source text.
+  // Whitespace is ignored: the capture joins text pieces with spaces ("War" + ": French"
+  // reads "War : French"), so a label split across elements matches as on the page.
+  const squash = (v) => String(v == null ? '' : v).replace(/\s+/g, '').toLowerCase();
+  function missingText(expect, haystack) {
+    const wanted = Array.isArray(expect) ? expect : (expect && Array.isArray(expect.text) ? expect.text : []);
+    const text = squash(haystack);
+    return wanted.filter((t) => typeof t === 'string' && squash(t) && text.indexOf(squash(t)) === -1);
+  }
+
+  async function runAgentCapture(req) {
+    const id = String(req.id || Date.now());
+    const report = (result) => {
+      const out = Object.assign({}, result, { id });
+      try { document.documentElement.setAttribute('data-domheist-result', JSON.stringify(out)); } catch (_) { /* noop */ }
+      window.postMessage(Object.assign({ [AGENT_KEY]: 'result' }, out), '*');
+    };
+
+    // Checked before anything is written: a site that is not allowed gets no
+    // reply at all, so it cannot tell that DOM Heist is installed.
+    const gate = await sendToWorker({ type: 'DOMHEIST_AGENT_ALLOWED', origin: location.origin });
+    if (!gate.value || !gate.value.ok) {
+      if (!(gate.value && gate.value.refused)) {
+        report({ status: 'error', reason: (gate.value && gate.value.reason) || gate.error || 'agent bridge refused' });
+      }
+      return;
+    }
+    if (agentBusy || state.capturing) { report({ status: 'error', reason: 'a capture is already running' }); return; }
+    const unknown = (Array.isArray(req.formats) ? req.formats : []).filter((f) => f !== 'toon' && f !== 'html');
+    if (unknown.length) { report({ status: 'error', reason: 'unknown format: ' + unknown.join(', ') }); return; }
+    agentBusy = true;
+    report({ status: 'pending' });
+    clearAgentPreview();
+
+    const wasActive = state.active;
+    // A manual selection in progress is set aside and put back afterwards.
+    const userSelections = state.selections;
+    let activated = false;
+    try {
+      if (req.hover != null) {
+        const point = agentHoverPoint(req.hover);
+        if (point.error) {
+          report(Object.assign({ status: 'error', reason: point.error }, point.missing ? { missing: point.missing } : {}));
+          return;
+        }
+        const moved = await sendToWorker({ type: 'DOMHEIST_AGENT_HOVER', x: point.x, y: point.y });
+        const value = moved.value || {};
+        if (moved.error || !value.ok) {
+          report({ status: 'error', reason: moved.error || value.reason || 'could not move the pointer' });
+          return;
+        }
+        // Long enough for a hover menu or tooltip to open.
+        const wait = Math.min(10000, Math.max(0, Number(req.hoverMs) >= 0 ? Number(req.hoverMs) : AGENT_HOVER_MS));
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+
+      const resolved = resolveAgentTargets(req);
+      if (resolved.error) {
+        report(Object.assign({ status: 'error', reason: resolved.error }, resolved.missing ? { missing: resolved.missing } : {}));
+        return;
+      }
+      const chosen = chooseAgentElements(resolved);
+      const targets = chosen.map(describeTarget);
+
+      if (req.preview) {
+        const summary = summarizeAgentTargets(chosen);
+        const ms = Math.min(30000, Math.max(500, Number(req.previewMs) || AGENT_PREVIEW_MS));
+        showAgentPreview(chosen, ms);
+        report({
+          status: 'preview', target: targets[0], targets, summary,
+          missing: missingText(req.expect, agentText(chosen.map((el) => el.innerText).join(' '))),
+          highlightMs: ms
+        });
+        return;
+      }
+
+      activate();
+      activated = true;
+      clearSelection(); // assigns a fresh list, so userSelections stays intact
+      for (let i = 0; i < chosen.length; i += 1) {
+        await addSelection(chosen[i], i === 0, { noAdopt: resolved.exact });
+      }
+      if (!state.selections.length) { report({ status: 'error', reason: 'selection was rejected' }); return; }
+
+      const captured = state.selections.map((sel) => sel.raw && sel.raw.node).filter(Boolean);
+      const fingerprint = fingerprintOf(captured);
+      const sameAsLast = fingerprint === agentLastFingerprint;
+      const missing = missingText(req.expect, capturedTextOf(captured));
+
+      const reply = await sendToWorker({
+        type: 'DOMHEIST_AGENT_EXPORT',
+        name: req.name,
+        formats: Array.isArray(req.formats) ? req.formats : null
+      }, 0, 180000);
+      const value = reply.value || {};
+      if (reply.error || !value.ok) {
+        report({ status: 'error', reason: reply.error || value.reason || 'export failed', target: targets[0], targets });
+        return;
+      }
+      agentLastFingerprint = fingerprint;
+      report(Object.assign({ status: 'done', target: targets[0], targets, fingerprint, sameAsLast, missing }, value));
+    } catch (error) {
+      report({ status: 'error', reason: (error && error.message) || String(error) });
+    } finally {
+      agentBusy = false;
+      if (activated) {
+        if (wasActive) {
+          state.selections = userSelections;
+          renderSelection();
+        } else {
+          deactivate();
+        }
+      }
+    }
+  }
+
   /**
    * Capture this whole document as a standalone payload, for a parent that cannot
    * read us. Runs through the ordinary selection machinery so fonts, faces and
@@ -2319,6 +2712,14 @@
 
     const own = entry.own || Object.create(null);
     const viaAncestor = [];
+    // Hover values come from the stylesheet as written, so they can still hold
+    // var(). The export carries no custom properties: resolve them from the
+    // element, as captured resting styles are, or drop the declaration.
+    const settle = (prop, value) => {
+      if (value.indexOf('var(--') === -1) return value;
+      const resolved = resolveCustomProperties(cs, value);
+      return resolved.indexOf('var(--') === -1 ? cleanValue(prop, resolved) || null : null;
+    };
 
     for (const rule of entry.ancestorRules) {
 
@@ -2340,7 +2741,8 @@
       const props = Object.create(null);
       for (const prop of Object.keys(rule.props)) {
         const cleaned = cleanValue(prop, rule.props[prop]);
-        if (cleaned) props[prop] = cleaned;
+        const value = cleaned && settle(prop, cleaned);
+        if (value) props[prop] = value;
       }
       if (Object.keys(props).length) viaAncestor.push({ up, props });
     }
@@ -2349,7 +2751,8 @@
     const diff = Object.create(null);
     for (const prop of Object.keys(own)) {
       const resting = cleanValue(prop, cs.getPropertyValue(prop));
-      if (own[prop] !== resting) diff[prop] = own[prop];
+      const value = settle(prop, own[prop]);
+      if (value && value !== resting) diff[prop] = value;
     }
 
     const hasOwn = Object.keys(diff).length > 0;
@@ -3077,8 +3480,21 @@
 
   function nextTick() {
     return new Promise((resolve) => {
-      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve());
-      else setTimeout(resolve, 0);
+      // A hidden page (background tab, minimised or covered window) never runs
+      // requestAnimationFrame, and its timers are throttled; a MessageChannel task is
+      // neither, so an agent-driven capture keeps moving while the window is out of view.
+      const viaTask = () => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => { channel.port1.close(); resolve(); };
+        channel.port2.postMessage(0);
+      };
+      if (document.hidden || typeof requestAnimationFrame !== 'function') { viaTask(); return; }
+      // A page can be visible and still get no frames (its window covered by
+      // another app's, or not being composited); requestAnimationFrame then waits
+      // until something repaints the tab. Fall back to a task after ~6 frames.
+      let fallback = 0;
+      const frame = requestAnimationFrame(() => { clearTimeout(fallback); resolve(); });
+      fallback = setTimeout(() => { cancelAnimationFrame(frame); viaTask(); }, 100);
     });
   }
 
@@ -5725,12 +6141,17 @@
    * message, a dead worker, or a value the structured clone cannot carry is
    * reported at all.
    */
-  function sendToWorker(message, attempt) {
+  function sendToWorker(message, attempt, timeoutMs) {
     const tries = attempt || 0;
     return new Promise((resolve) => {
       let done = false;
       const finish = (result) => { if (!done) { done = true; resolve(result); } };
 
+      // A reloaded extension leaves this script running with chrome.runtime gone.
+      if (!chrome.runtime || !chrome.runtime.id) {
+        finish({ error: 'Extension context invalidated. Reload this page.' });
+        return;
+      }
       try {
         chrome.runtime.sendMessage(message, (value) => {
           const lastError = chrome.runtime.lastError;
@@ -5739,17 +6160,18 @@
           const transient = /establish connection|message port closed|Receiving end does not exist/i
             .test(lastError.message || '');
           if (transient && tries === 0) {
-            setTimeout(() => { sendToWorker(message, 1).then(finish); }, 150);
+            setTimeout(() => { sendToWorker(message, 1, timeoutMs).then(finish); }, 150);
             return;
           }
           finish({ error: lastError.message || 'messaging failed' });
         });
       } catch (error) {
-        finish({ error: (error && error.message) || 'messaging threw' });
+        const text = (error && error.message) || 'messaging threw';
+        finish({ error: /context invalidated/i.test(text) ? text + ' Reload this page.' : text });
       }
 
       // A worker that never answers must not leave the caller hanging forever.
-      setTimeout(() => finish({ error: 'the extension worker did not respond (timed out)' }), 30000);
+      setTimeout(() => finish({ error: 'the extension worker did not respond (timed out)' }), timeoutMs || 30000);
     });
   }
 
@@ -5883,6 +6305,7 @@
   // Installed unconditionally: a frame must be able to answer its parent's handshake
   // whether or not selection mode was ever started in this frame.
   installRemoteHelloListener();
+  installAgentBridge();
 
   document.addEventListener('pointermove', onPointerMove, true);
   document.addEventListener('pointerdown', onPointerDown, { capture: true, passive: false });

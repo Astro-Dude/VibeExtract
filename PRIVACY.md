@@ -1,6 +1,6 @@
 # DOM Heist — Privacy Policy
 
-_Last updated: 21 August 2026_
+_Last updated: 13 October 2026_
 
 DOM Heist does not collect, transmit, sell, or share any user data.
 
@@ -19,16 +19,31 @@ sent to.
 
 ## Data stored on your device
 
-Two things are stored locally and never leave your machine:
+Three things are stored locally and never leave your machine:
 
 - **Your keyboard shortcuts**, in `chrome.storage.sync`, so your chosen keys persist across
   your signed-in Chrome profiles. This is synced by Chrome itself, to your own Google account.
+- **The sites you allowed for agent captures**, in `chrome.storage.local`, when you switch
+  on "Agent captures on this site" in the popup.
 - **Your 10 most recent captures**, in the browser's local IndexedDB, to power the "recent
   captures" list. Older entries are pruned automatically by count and by a 60 MB budget, and
   you can delete any entry, or all of them, from the export tab at any time. Removing the
   extension deletes this store.
 
 Files you choose to save go to your own downloads folder.
+
+## Agent bridge
+
+A coding agent running in a page you allowed can ask the extension to capture that page.
+The capture is saved to your own downloads folder (`Downloads/domheist/<site>/`) and
+nothing is sent anywhere. The page that asked receives only the saved file names relative
+to your downloads folder, sizes, and a short description of what was captured — never the
+file contents or your folder's full path. Local development hosts are allowed by default;
+every other site only after you switch it on.
+
+To capture a hover menu or hover colour, an agent can ask the extension to move the mouse
+pointer to a point on an allowed page. The extension does this through Chrome's debugger
+interface, for that one move only, and never clicks or types.
 
 ## Network requests
 

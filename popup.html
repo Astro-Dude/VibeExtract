@@ -72,6 +72,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
   border:1px solid var(--line);background:var(--s1);
 }
 .toggle:hover{color:var(--fg);background:var(--s2)}
+.toggle:disabled,.toggle:disabled:hover{cursor:default;color:var(--mut);background:var(--s1)}
 .toggle .caret{font-size:8.5px;color:var(--mut2);transition:transform .12s linear}
 .toggle.open .caret{transform:rotate(90deg)}
 
@@ -167,6 +168,11 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
   </div>
 
   <div class="sect">
+    <button class="toggle" id="agent-toggle" aria-pressed="false"
+      title="Let a coding agent running JavaScript in this page trigger captures (window.postMessage bridge)">
+      <span class="caret">◇</span><span id="agent-label">Agent captures on this site: off</span>
+    </button>
+    <div style="height:6px"></div>
     <button class="toggle" id="hist-toggle">
       <span class="caret">▶</span><span>Recent captures</span>
       <span class="hist-count" id="hist-count"></span>

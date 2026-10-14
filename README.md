@@ -105,6 +105,74 @@ one layer that accepts pointer events, so it hops to the other side rather than 
 whatever sits beneath it unhoverable. The badge turns blue in interact mode, because there a
 click is a real click.
 
+### Agent bridge — captures driven by a coding agent
+
+A coding agent that can run JavaScript in the page (Claude in Chrome, Playwright, a
+devtools console) can capture without touching the toolbar:
+
+```js
+window.postMessage({ __domheistAgent: 'capture', id: 'c1', name: 'checkout-card',
+  selector: '#checkout .card',   // or selectors:[…] | point:{x,y} | hovered:true | fullPage:true
+  exact: true,                   // false = the same smart expansion a click uses
+  expect: { text: ['Order summary', 'Place order'] },
+  formats: ['toon', 'html'] }, '*');
+// then poll:
+document.documentElement.getAttribute('data-domheist-result')
+// {"id":"c1","status":"done","paths":{"toon":"domheist/localhost-3000/checkout-card.toon",
+//  "html":"…"},"missing":[],"fingerprint":"9c1e04af","sameAsLast":false,
+//  "targets":[{"tag":"div","width":420,…}],"bytes":{…},"diagnostics":{…}}
+```
+
+The capture runs through the normal pipeline (all frames, fonts, pixel recovery). The export
+page opens in a background tab, saves `Downloads/domheist/<site>/<name>.toon` and `.html`
+(fonts inlined, overwriting a previous capture of the same name from the same site), reports
+the paths relative to Downloads, and closes.
+
+| Option | What it does |
+|---|---|
+| `selector` | One element. `exact:true` takes it as-is; otherwise it expands like a click. |
+| `selectors: [...]` | Several elements in one capture, exactly like Shift+Click (each as-is unless `exact:false`). One that matches nothing fails the request and is named in `missing`. |
+| `combine: 'ancestor'` | With `selectors`: capture their nearest common ancestor instead. |
+| `point`, `hovered`, `fullPage` | The element at a point, under the real pointer (keeps a hover menu open), or the whole page. |
+| `hover`, `hoverMs` | Before capturing, move the real pointer to `hover` (a selector, scrolled into view and aimed at its centre, or viewport `{x, y}`) and wait `hoverMs` (default 500) for a hover menu, tooltip or hover colour to appear. Then capture it with `hovered: true` or its own `selector`. Combine with `preview` to look without saving; `hover` on an empty spot moves the pointer away. |
+| `preview: true` | Resolve and highlight the target for `previewMs` (default 4000) and report what is inside it — box, hidden / off-screen, headings, controls with labels, text — without capturing or saving. The agent's version of seeing the hover box before clicking. |
+| `expect: { text: [...] }` | Text the capture must contain. `missing` lists what the capture did *not* keep, checked against the captured tree, so hidden text counts as missing. |
+
+Every saved capture reports a `fingerprint` of its structure and text, and `sameAsLast:
+true` when it equals the previous capture on the page: a menu that had already closed, or a
+page that had not updated yet. One request runs at a time; a second gets `a capture is
+already running`.
+
+The bridge only answers on allowed sites, because any script on a page can post that
+message, and a page could otherwise make the extension write into Downloads. Local
+development hosts (`localhost`, `127.0.0.1`, `[::1]`, `*.localhost`, any port) are allowed by
+default. Turn any other site on or off with **Agent captures on this site** in the popup; it
+allows that exact origin, port included. Only the popup can change the list, so a page cannot
+allow itself, and a site that is not allowed gets no reply at all. Saving per site means an
+allowed page cannot overwrite a capture taken on another site. Paths are relative so the page
+never learns the local account name.
+
+Before saving, the values of sensitive URL parameters in captured URLs are replaced with
+`REDACTED` (`token`, `access_token`, `session`, `sid`, `jsessionid`, `signature`, `api_key`,
+`x-amz-signature`, …), in the query, the fragment and URL-encoded links, so a capture of a
+signed-in page doesn't carry its session into a repo.
+Settings live in `chrome.storage.local`; stored keys replace the defaults:
+
+```js
+chrome.storage.local.set({ agentBridge: {
+  enabled: true,
+  origins: ['http://localhost', 'https://*.example.com'],
+  redactParams: ['token', 'sid', 'mysessionkey']
+} })
+```
+
+A `*.` pattern follows Chrome's match-pattern rules: `https://*.example.com` covers
+`example.com` and its subdomains, on any port. Sites switched on from the popup are stored
+as exact origins.
+
+See [docs/agent-bridge.md](docs/agent-bridge.md) for driving the bridge from an agent and
+[`scripts/agent-import.sh`](scripts/agent-import.sh) for moving captures into a project.
+
 ### Cross-origin iframes
 
 A cross-origin frame cannot be read by the page it sits in. The browser forbids it and no
@@ -652,9 +720,10 @@ the `.html` export when you need the pixels.
 |---|---|
 | `activeTab` | Act on the tab you have open when you click the toolbar icon. |
 | `webNavigation` | Enumerate a tab's frames (`getAllFrames`) so commands reach every frame and the export can come from whichever one holds a selection. |
-| `storage` | Persist your custom shortcuts (`storage.sync`) and stage the export payload for the export tab (`storage.session`). |
-| `downloads` | Save `preview.html`, `component.toon` and `preview-fonts.zip`, and read back the absolute path so it can be copied to your clipboard. |
+| `storage` | Persist your custom shortcuts (`storage.sync`), stage the export payload for the export tab (`storage.session`), and keep the agent bridge's allowed sites (`storage.local`). |
+| `downloads` | Save `preview.html`, `component.toon` and `preview-fonts.zip`, and read back the absolute path so it can be copied to your clipboard. Agent bridge captures go to `Downloads/domheist/<site>/`. |
 | `clipboardWrite` | Copy the saved file's path, and the HTML/TOON source from the copy button. |
+| `debugger` | Move the real pointer for an agent capture's `hover`. Only Chrome's own input sets `:hover` and fires the mouse events hover menus listen for, so a page script cannot do it. The debugger is attached to that tab for one mouse move, on an allowed site, and detached straight away; Chrome may briefly show its "started debugging this browser" bar. |
 | `<all_urls>` (host) | Capture works on any site you point it at, and lets the service worker fetch `@font-face` binaries from whatever host serves them. |
 
 No remote code execution, no analytics, and no network requests other than fetching font
@@ -678,6 +747,7 @@ lib/highlight.js         escape-first, single-pass syntax highlighter
 scripts/toon-to-html.js  Node CLI
 test/fixtures.html       every module type on one page
 test/run-fixtures.js     189 capture assertions
+scripts/agent-import.sh  move an agent capture from Downloads into a project
 test/dropdowns.html      twelve shapes of closed dropdown
 test/iframes.html        eleven iframe shapes, incl. two real cross-origin kinds
 test/run-iframes.js      71 iframe assertions
@@ -750,7 +820,6 @@ Nine suites:
   This one exists because a worker failure reaches the page as nothing but "Export failed":
   the worker has no console anyone watches, and a rejected promise in a message handler
   simply closes the port with no response at all.
-
 
 - **`test/run-dropdowns.js`** — 131 assertions over `test/dropdowns.html`, which holds fourteen
   shapes of **closed** dropdown: hidden by inline `display`, by `visibility`, by the `hidden`

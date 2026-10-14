@@ -26,6 +26,138 @@ const FONT_TIMEOUT_MS = 10000;
 
 let exportSeq = 0;
 
+/**
+ * Agent bridge (see installAgentBridge in contentScript.js). A page can only ask
+ * for a capture of itself, but that still writes into Downloads, so the bridge
+ * answers only on allowlisted origins: local development hosts by default, plus
+ * any site the user allows from the popup. Stored as
+ * chrome.storage.local { agentBridge: { enabled, origins, redactParams } };
+ * stored values replace the defaults key by key. Captures are saved under
+ * Downloads/domheist/<site>/, one folder per site, so a page on one allowed site
+ * cannot overwrite a capture taken on another.
+ */
+const AGENT_DEFAULTS = {
+  enabled: true,
+  origins: ['http://localhost', 'http://127.0.0.1', 'http://[::1]', 'http://*.localhost'],
+  // Query parameters whose values are replaced by REDACTED in saved files, so a
+  // capture of a signed-in page does not carry its session into a repo.
+  redactParams: [
+    'token', 'access_token', 'id_token', 'refresh_token', 'auth', 'session', 'sessionid',
+    'session_id', 'sid', 'jsessionid', 'phpsessid', 'sig', 'signature', 'api_key', 'apikey',
+    'password', 'secret', 'x-amz-signature', 'x-amz-credential', 'x-amz-security-token'
+  ]
+};
+const AGENT_TIMEOUT_MS = 170000;
+const AGENT_WAITERS = new Map(); // exportId -> resolve
+const AGENT_LOCAL_PATTERNS = new Set(AGENT_DEFAULTS.origins);
+
+function originMatches(origin, pattern) {
+  let o;
+  let p;
+  try { o = new URL(origin); p = new URL(pattern.replace('://*.', '://wildcard.')); } catch (_) { return false; }
+  if (o.protocol !== p.protocol) return false;
+  if (pattern.indexOf('://*.') !== -1) {
+    const suffix = p.hostname.replace(/^wildcard\./, '');
+    return o.hostname === suffix || o.hostname.endsWith('.' + suffix);
+  }
+  // The built-in local hosts match on any port (dev servers move between ports);
+  // a site allowed from the popup matches only its exact origin, port included.
+  if (AGENT_LOCAL_PATTERNS.has(pattern)) return o.hostname === p.hostname;
+  return o.origin === p.origin;
+}
+
+async function agentConfig() {
+  try {
+    const stored = await chrome.storage.local.get('agentBridge');
+    if (stored && stored.agentBridge) return Object.assign({}, AGENT_DEFAULTS, stored.agentBridge);
+  } catch (_) { /* defaults */ }
+  return Object.assign({}, AGENT_DEFAULTS);
+}
+
+function originAllowed(config, origin) {
+  return (config.origins || []).some((pattern) => originMatches(origin || '', pattern));
+}
+
+/** `refused` tells the content script to stay silent, so a site that is not
+ *  allowed cannot learn that DOM Heist is installed. */
+async function agentAllowed(origin) {
+  const config = await agentConfig();
+  if (!config.enabled) return { ok: false, refused: true, reason: 'agent bridge is disabled' };
+  return originAllowed(config, origin)
+    ? { ok: true }
+    : { ok: false, refused: true, reason: 'origin not in the agent bridge allowlist: ' + origin };
+}
+
+/** Adds or removes one exact origin (the popup's "Allow agent captures here"). */
+async function setAgentOrigin(origin, allow) {
+  let parsed;
+  try { parsed = new URL(origin); } catch (_) { return { ok: false, reason: 'not an origin: ' + origin }; }
+  if (!/^https?:$/.test(parsed.protocol)) return { ok: false, reason: 'only http(s) origins can be allowed' };
+  const exact = parsed.origin;
+  const config = await agentConfig();
+  const origins = (config.origins || []).filter((o) => o !== exact);
+  if (allow) origins.push(exact);
+  const stored = (await chrome.storage.local.get('agentBridge')).agentBridge || {};
+  await chrome.storage.local.set({ agentBridge: Object.assign({}, stored, { origins }) });
+  return { ok: true, allowed: originAllowed(Object.assign({}, config, { origins }), exact) };
+}
+
+/** `https://s1.example.com:8443` → `s1.example.com-8443`: a safe folder name. */
+function agentSite(origin) {
+  let host = '';
+  try { host = new URL(origin).host; } catch (_) { /* unknown */ }
+  const cleaned = host.toLowerCase().replace(/[^a-z0-9.-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+  return cleaned || 'unknown-site';
+}
+
+function agentName(raw) {
+  const cleaned = String(raw || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/\.{2,}/g, '.').replace(/^[-.]+|[-.]+$/g, '').slice(0, 80);
+  return cleaned || 'capture-' + Date.now().toString(36);
+}
+
+/**
+ * Moves the real pointer for an agent capture's `hover`. Only Chrome's own input
+ * pipeline sets :hover and fires trusted mouse events, so a page cannot fake it;
+ * the debugger is attached for this one event and detached straight away.
+ */
+async function agentHover(tabId, x, y) {
+  if (!isFinite(x) || !isFinite(y)) return { ok: false, reason: 'hover point is not a number' };
+  const target = { tabId };
+  try {
+    await chrome.debugger.attach(target, '1.3');
+  } catch (error) {
+    return { ok: false, reason: 'could not move the pointer: ' + describeError(error) };
+  }
+  try {
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    return { ok: true, x, y };
+  } catch (error) {
+    return { ok: false, reason: 'could not move the pointer: ' + describeError(error) };
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+function waitForAgent(id) {
+  return new Promise((resolve) => {
+    // The waiter lives only in this worker's memory, and Chrome stops an idle worker
+    // after 30 s; an extension API call every 20 s keeps it alive until the export
+    // page reports back.
+    const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20000);
+    const timer = setTimeout(() => {
+      clearInterval(keepAlive);
+      AGENT_WAITERS.delete(id);
+      resolve({ ok: false, reason: 'the export page did not report back (timed out)' });
+    }, AGENT_TIMEOUT_MS);
+    AGENT_WAITERS.set(id, (result) => { clearTimeout(timer); clearInterval(keepAlive); resolve(result); });
+  });
+}
+
+/** The origin of the tab a content script runs in, as Chrome reports it (never the page's word). */
+function senderOrigin(sender) {
+  try { return new URL(sender.tab.url).origin; } catch (_) { return sender.origin || ''; }
+}
+
 /* ========================================================================== *
  * SECTION: small utilities
  * ========================================================================== */
@@ -258,8 +390,9 @@ function guard(promise, label) {
   });
 }
 
-async function runExport(tabId, payloadFromSender) {
+async function runExport(tabId, payloadFromSender, options) {
   let payload = payloadFromSender;
+  const agent = options && options.agent;
 
   // Validate before touching it: `payload.fontFaces` on an undefined payload is a
   // TypeError, which used to disappear into the closed port described above.
@@ -268,7 +401,11 @@ async function runExport(tabId, payloadFromSender) {
   }
 
   if (!payload) {
-    const entries = await broadcast(tabId, { type: 'DOMHEIST_COLLECT' });
+    // An agent capture selects in the top frame only, so it collects from there:
+    // a selection left in another frame must not ride along in its files.
+    const entries = agent
+      ? [{ frameId: 0, reply: await sendToFrame(tabId, 0, { type: 'DOMHEIST_COLLECT' }) }].filter((e) => e.reply != null)
+      : await broadcast(tabId, { type: 'DOMHEIST_COLLECT' });
     if (!entries.length) {
       await broadcast(tabId, { type: 'DOMHEIST_TOAST', text: 'Nothing selected' });
       return { ok: false, reason: 'empty' };
@@ -298,15 +435,25 @@ async function runExport(tabId, payloadFromSender) {
     }
   } catch (_) { /* over quota — in-memory copy still serves the common path */ }
 
+  let url = chrome.runtime.getURL('export.html') + '?id=' + encodeURIComponent(id);
+  if (agent) {
+    url += '&agent=1&name=' + encodeURIComponent(agentName(agent.name)) +
+      '&site=' + encodeURIComponent(agent.site || 'unknown-site');
+    if (agent.formats && agent.formats.length) url += '&formats=' + encodeURIComponent(agent.formats.join(','));
+  }
+  const waiting = agent ? waitForAgent(id) : null;
+
   try {
-    await chrome.tabs.create({
-      url: chrome.runtime.getURL('export.html') + '?id=' + encodeURIComponent(id)
-    });
+    // An agent export runs in a background tab that closes itself once saved, so
+    // the page being captured keeps focus.
+    await chrome.tabs.create({ url, active: !agent });
   } catch (error) {
     PENDING.delete(id);
+    AGENT_WAITERS.delete(id);
     return { ok: false, reason: 'could not open the export tab: ' + describeError(error) };
   }
 
+  if (waiting) return Object.assign({ id }, await waiting);
   return { ok: true, id };
 }
 
@@ -528,14 +675,26 @@ async function deleteHistory(id) {
  * so the pixels are the only honest answer.
  *
  * captureVisibleTab needs the tab to be active and visible, and is rate-limited,
- * so it is called at most once per export.
+ * so it is called at most once per export. It also waits for a fresh frame, which
+ * a window covered by another app may never produce, so it gets a deadline: past
+ * it the capture keeps its placeholders instead of stalling.
  */
+const TAB_SHOT_TIMEOUT_MS = 5000;
+
 async function captureTab(tab) {
   if (!tab || tab.windowId == null) {
     return { ok: false, reason: 'no window to capture' };
   }
   try {
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    let timer = null;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('the tab produced no frame to screenshot (timed out)')),
+        TAB_SHOT_TIMEOUT_MS);
+    });
+    const dataUrl = await Promise.race([
+      chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }),
+      deadline
+    ]).finally(() => clearTimeout(timer));
     if (!dataUrl) return { ok: false, reason: 'screenshot came back empty' };
     return { ok: true, dataUrl };
   } catch (error) {
@@ -670,6 +829,87 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'DOMHEIST_EXPORT': {
       const tabId = sender.tab && sender.tab.id;
       guard(runExport(tabId, message.payload), 'export').then(sendResponse);
+      return true;
+    }
+
+    case 'DOMHEIST_AGENT_ALLOWED': {
+      guard(agentAllowed(senderOrigin(sender)), 'agent gate').then(sendResponse);
+      return true;
+    }
+
+    // Read by the popup (to show the allow toggle) and by the export page
+    // (redaction). `origin` is optional.
+    case 'DOMHEIST_AGENT_CONFIG': {
+      guard(agentConfig().then((config) => ({
+        ok: true,
+        enabled: !!config.enabled,
+        redactParams: Array.isArray(config.redactParams) ? config.redactParams : [],
+        allowed: message.origin ? originAllowed(config, message.origin) : null,
+        // Allowed by a pattern rather than an exact entry (the local-host
+        // defaults), so the popup cannot switch it off for this one site.
+        byPattern: message.origin
+          ? originAllowed(Object.assign({}, config, {
+            origins: (config.origins || []).filter((o) => o !== message.origin)
+          }), message.origin)
+          : null
+      })), 'agent config').then(sendResponse);
+      return true;
+    }
+
+    // Only an extension page (the popup) may change the allowlist; a content
+    // script always has sender.tab, so a page cannot allow itself.
+    case 'DOMHEIST_AGENT_SET_ORIGIN': {
+      if (sender.tab || sender.id !== chrome.runtime.id) {
+        sendResponse({ ok: false, reason: 'not allowed from a page' });
+        return true;
+      }
+      guard(setAgentOrigin(message.origin, !!message.allow), 'agent allowlist').then(sendResponse);
+      return true;
+    }
+
+    case 'DOMHEIST_AGENT_HOVER': {
+      const tabId = sender.tab && sender.tab.id;
+      if (!tabId || sender.frameId !== 0) { sendResponse({ ok: false, reason: 'hover is top-frame only' }); return true; }
+      guard(
+        agentAllowed(senderOrigin(sender)).then((gate) => (gate.ok
+          ? agentHover(tabId, Number(message.x), Number(message.y))
+          : gate)),
+        'agent hover'
+      ).then(sendResponse);
+      return true;
+    }
+
+    case 'DOMHEIST_AGENT_EXPORT': {
+      const tabId = sender.tab && sender.tab.id;
+      if (!tabId) { sendResponse({ ok: false, reason: 'no-tab' }); return true; }
+      const origin = senderOrigin(sender);
+      guard(
+        agentAllowed(origin).then((gate) => (gate.ok
+          ? runExport(tabId, null, {
+            agent: { name: message.name, formats: message.formats, site: agentSite(origin) }
+          })
+          : gate)),
+        'agent export'
+      ).then(sendResponse);
+      return true;
+    }
+
+    // The export page finished an agent save: hand the paths to whoever is
+    // waiting and close the background tab it ran in.
+    case 'DOMHEIST_AGENT_DONE': {
+      const resolve = AGENT_WAITERS.get(message.id);
+      AGENT_WAITERS.delete(message.id);
+      if (resolve) {
+        resolve({
+          ok: !!message.ok,
+          reason: message.reason || null,
+          paths: message.paths || {},
+          bytes: message.bytes || {},
+          diagnostics: message.diagnostics || {}
+        });
+      }
+      if (sender.tab && sender.tab.id) chrome.tabs.remove(sender.tab.id).catch(() => {});
+      sendResponse({ ok: true });
       return true;
     }
 

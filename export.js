@@ -73,8 +73,13 @@
 
   // Let the browser paint between stages, otherwise the bar jumps straight from
   // 0 to 100 and the whole exercise is pointless.
+  // An agent export runs in a background tab, where requestAnimationFrame never
+  // fires — waiting for a paint there would hang the save forever.
+  var AGENT_MODE = new URLSearchParams(location.search).get('agent') === '1';
+
   function paint() {
     return new Promise(function (resolve) {
+      if (AGENT_MODE || document.hidden) { setTimeout(resolve, 0); return; }
       requestAnimationFrame(function () { requestAnimationFrame(resolve); });
     });
   }
@@ -390,13 +395,15 @@
    * URLs from extension pages, and a blob keeps large exports off the stack.
    * The absolute path is then copied so it can be pasted straight into a prompt.
    */
-  function download(filename, content, mime) {
+  function download(filename, content, mime, conflictAction, agentTimeoutMs) {
     return new Promise(function (resolve) {
       var blob = content instanceof Uint8Array
         ? new Blob([content], { type: mime })
         : new Blob([content], { type: mime + ';charset=utf-8' });
       var url = URL.createObjectURL(blob);
-      chrome.downloads.download({ url: url, filename: filename, saveAs: false }, function (id) {
+      var options = { url: url, filename: filename, saveAs: false };
+      if (conflictAction) options.conflictAction = conflictAction;
+      chrome.downloads.download(options, function (id) {
         if (chrome.runtime.lastError || id == null) {
           URL.revokeObjectURL(url);
           toast('Download failed: ' + ((chrome.runtime.lastError || {}).message || 'unknown'), true);
@@ -419,7 +426,13 @@
             }
           });
         }, 120);
-        setTimeout(function () { clearInterval(poll); URL.revokeObjectURL(url); }, 8000);
+        setTimeout(function () {
+          clearInterval(poll);
+          // An agent save is reported failed at this point, so a late file must not appear.
+          if (agentTimeoutMs) chrome.downloads.cancel(id, function () { void chrome.runtime.lastError; });
+          URL.revokeObjectURL(url);
+          resolve(null);
+        }, agentTimeoutMs || 8000);
       });
     });
   }
@@ -671,6 +684,10 @@
     var response = await sendMessage({ type: 'DOMHEIST_GET_PAYLOAD', id: state.exportId });
     if (!response || !response.ok || !response.payload) {
       showEmpty('The capture payload has expired. Re-run the export from the page.');
+      if (params.get('agent') === '1') {
+        state.agentReported = true;
+        await sendMessage({ type: 'DOMHEIST_AGENT_DONE', id: state.exportId, ok: false, reason: 'payload expired' });
+      }
       return;
     }
     state.payload = response.payload;
@@ -698,6 +715,96 @@
         (fonts.primary && !fonts.primaryLoadable)) {
       el('diag').classList.add('open');
     }
+
+    if (params.get('agent') === '1') await agentSave(params);
+  }
+
+  /**
+   * Agent bridge save: no clicks, fixed paths. Files are overwritten so a re-run
+   * of the same capture name replaces the old one instead of piling up "(1)"
+   * copies. The HTML embeds its fonts so it renders on its own; the worker
+   * closes this tab once it has the paths.
+   *
+   * Paths are reported relative to the downloads folder: the result is posted
+   * back to the page, and an absolute path would tell it the user's account name.
+   */
+  async function agentSave(params) {
+    var name = (params.get('name') || 'capture').replace(/[^a-z0-9._-]+/gi, '-').replace(/\.{2,}/g, '.');
+    var formats = (params.get('formats') || 'toon,html').split(',').filter(function (f) {
+      return f === 'toon' || f === 'html';
+    });
+    var result = { type: 'DOMHEIST_AGENT_DONE', id: state.exportId, ok: true, paths: {}, bytes: {} };
+    var config = (await sendMessage({ type: 'DOMHEIST_AGENT_CONFIG' })) || {};
+    var site = (params.get('site') || '').toLowerCase().replace(/[^a-z0-9.-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+    var folder = 'domheist/' + (site || 'unknown-site');
+    var redact = redactor(config.redactParams || []);
+    try {
+      var files = [];
+      if (formats.indexOf('toon') !== -1) {
+        // A text/plain blob gets renamed to .txt by Chrome; an unregistered text type keeps .toon.
+        files.push({ format: 'toon', text: redact(state.toon), mime: 'text/x-toon' });
+      }
+      if (formats.indexOf('html') !== -1) {
+        files.push({ format: 'html', mime: 'text/html',
+          text: redact(HtmlWriter.build(state.payload, { fontMode: 'inline', surface: 'auto', interactive: false })) });
+      }
+      var saved = await Promise.all(files.map(function (f) {
+        return download(folder + '/' + name + '.' + f.format, f.text, f.mime, 'overwrite', AGENT_DOWNLOAD_MS);
+      }));
+      files.forEach(function (f, i) {
+        result.paths[f.format] = relativeTo(folder, saved[i]);
+        result.bytes[f.format] = byteLength(f.text);
+      });
+      var diag = state.payload.diagnostics || {};
+      result.diagnostics = {
+        nodes: diag.nodes || 0,
+        dropped: diag.dropped || 0,
+        fontsBundled: diag.fontsBundled || 0,
+        fontFailures: diag.fontFailures || 0,
+        primaryFont: (state.payload.fonts || {}).primary || null
+      };
+      var failed = files.filter(function (f) { return !result.paths[f.format]; })
+        .map(function (f) { return f.format; });
+      if (!files.length || failed.length) {
+        result.ok = false;
+        result.reason = 'downloads did not complete: ' + (failed.join(', ') || 'nothing to save');
+      }
+    } catch (error) {
+      result.ok = false;
+      result.reason = (error && error.message) || String(error);
+    }
+    state.agentReported = true;
+    await sendMessage(result);
+  }
+
+  /** `/Users/me/Downloads/domheist/site/a.toon` → `domheist/site/a.toon`, as saved. */
+  function relativeTo(folder, saved) {
+    if (!saved) return undefined;
+    var path = String(saved).replace(/\\/g, '/');
+    var at = path.lastIndexOf('/' + folder + '/');
+    return at === -1 ? folder + '/' + path.split('/').pop() : path.slice(at + 1);
+  }
+
+  // How long an agent save waits for each file before reporting it failed.
+  var AGENT_DOWNLOAD_MS = 15000;
+
+  /**
+   * Replaces the values of the listed query parameters with REDACTED wherever a
+   * URL carries them: in the query or fragment (`?token=…`, `&sid=…`,
+   * `#access_token=…`, HTML-escaped `&amp;sid=…`) and inside URL-encoded links
+   * (`%3Fsid%3D…`). Only parameter positions match, so text and CSS that mention
+   * the same words are left alone. Names match case-insensitively.
+   */
+  function redactor(names) {
+    var list = names.filter(function (n) { return typeof n === 'string' && /^[\w.-]{1,64}$/.test(n); })
+      .map(function (n) { return n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+    if (!list.length) return function (text) { return text; };
+    var keys = '(?:' + list.join('|') + ')';
+    var plain = new RegExp('([?&;#](?:amp;)?' + keys + '=)[^&#"\'\\s)<>]*', 'gi');
+    var encoded = new RegExp('((?:%3F|%26|%23)' + keys + '%3D)(?:(?!%26|%23)[^&#"\'\\s)<>])*', 'gi');
+    return function (text) {
+      return typeof text === 'string' ? text.replace(plain, '$1REDACTED').replace(encoded, '$1REDACTED') : text;
+    };
   }
 
   /* ------------------------------------------------------------------ wiring */
@@ -824,5 +931,14 @@
     if (state.tab === 'preview') fitFrame();
   });
 
-  boot();
+  boot().catch(function (error) {
+    var reason = (error && error.message) || String(error);
+    showEmpty('The export failed: ' + reason);
+    // An agent capture is waiting on this page: tell it now, or it waits out the full
+    // timeout and this background tab is never closed.
+    if (new URLSearchParams(location.search).get('agent') === '1' && state.exportId && !state.agentReported) {
+      state.agentReported = true;
+      sendMessage({ type: 'DOMHEIST_AGENT_DONE', id: state.exportId, ok: false, reason: 'export page failed: ' + reason });
+    }
+  });
 })();

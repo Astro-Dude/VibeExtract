@@ -212,6 +212,37 @@
     }).join('');
   }
 
+  /* ------------------------------------------------------------ agent bridge */
+
+  // Shows and flips whether this site may drive captures through the agent
+  // bridge. Local development hosts are allowed by default.
+  async function renderAgent() {
+    var origin = '';
+    try { origin = new URL(state.tab.url).origin; } catch (_) { return; }
+    var config = await sendToWorker({ type: 'DOMHEIST_AGENT_CONFIG', origin: origin });
+    var button = el('agent-toggle');
+    if (!config || !config.ok || !config.enabled) {
+      el('agent-label').textContent = 'Agent captures: disabled';
+      button.disabled = true;
+      return;
+    }
+    el('agent-label').textContent = 'Agent captures on this site: ' + (config.allowed ? 'on' : 'off') +
+      (config.byPattern ? ' (allowed by default)' : '');
+    button.setAttribute('aria-pressed', config.allowed ? 'true' : 'false');
+    button.disabled = !!config.byPattern;
+    if (config.byPattern) return;
+    button.onclick = async function () {
+      await sendToWorker({ type: 'DOMHEIST_AGENT_SET_ORIGIN', origin: origin, allow: !config.allowed });
+      // Opening the popup started the picker, but whoever came here to flip this
+      // switch did not come to pick: stop it, or it keeps swallowing page clicks.
+      if (!state.pickerWasActive) {
+        await sendToWorker({ type: 'DOMHEIST_CMD', cmd: 'clear', tabId: state.tab.id });
+        renderStatus(await sendToTab({ type: 'DOMHEIST_STATUS' }));
+      }
+      renderAgent();
+    };
+  }
+
   /* -------------------------------------------------------------------- boot */
 
   async function boot() {
@@ -246,6 +277,12 @@
     }
 
     renderNote();
+
+    // Whether the picker was already running before this popup opened, so the
+    // agent switch below only stops a picker this popup started.
+    var before = await sendToTab({ type: 'DOMHEIST_STATUS' });
+    state.pickerWasActive = !!(before && before.active);
+    renderAgent();
 
     // Opening the popup IS the start gesture.
     await sendToWorker({ type: 'DOMHEIST_CMD', cmd: 'start', tabId: state.tab.id });
